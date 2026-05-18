@@ -44,3 +44,13 @@ max_tunnels_per_token: 25
 #   device_code_url: https://app.example.com/api/device/code
 #   token_url:       https://app.example.com/api/device/token
 #   verification_uri: https://app.example.com/device
+
+# Hosted-deployment only: push per-slug usage deltas (bytes proxied,
+# active tunnels, request count) to a billing webhook on an interval.
+# OSS users leave this unset and scrape `/metrics` for the same data.
+#
+# usage_reporter:
+#   webhook_url:      https://app.example.com/api/internal/usage
+#   secret_env:       CONDUIT_USAGE_SECRET     # env var holding the bearer token
+#   interval_seconds: 60
+#   state_file:       /var/lib/conduit/usage-state.json  # default: <data_dir>/usage-state.json

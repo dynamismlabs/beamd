@@ -94,7 +94,7 @@ Goal: hardcoded one-app-on-one-port tunnel, HTTP-only, single TLS connection bet
 
 ### Test infra
 - [x] `test/dummy-app/main.go` — HTTP server echoing method + path
-- [x] `test/e2e/m1_test.go` — spins server + client + dummy app in-process, verifies two sequential requests and `/healthz` bypass
+- [x] `TestTunnel_SingleRegisteredAppServesPublicURL` (in `test/e2e/e2e_test.go`) — spins server + client + dummy app in-process, verifies two sequential requests and `/healthz` bypass
 
 **M1 done when:** `go test ./test/e2e -run M1` passes — full path edge→client→backend works.
 

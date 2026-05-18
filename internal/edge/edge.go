@@ -30,6 +30,7 @@ import (
 	"github.com/treyhuffine/conduit/internal/mux"
 	"github.com/treyhuffine/conduit/internal/naming"
 	"github.com/treyhuffine/conduit/internal/proto"
+	"github.com/treyhuffine/conduit/internal/usage"
 )
 
 const ALPNConduit = "conduit/1"
@@ -209,6 +210,34 @@ func (e *Edge) SessionCount() int {
 // session" rather than a stable count after a forced disconnect).
 func (e *Edge) SessionsCreatedTotal() int64 {
 	return e.metrics.sessionsCreatedTotal.Load()
+}
+
+// UsageSnapshot satisfies usage.Source — a point-in-time read of the
+// per-slug counters the usage reporter ships to your billing webhook.
+func (e *Edge) UsageSnapshot() usage.Snapshot {
+	e.metrics.mu.Lock()
+	bytes := make(map[string]int64, len(e.metrics.bytesBySlug))
+	for k, v := range e.metrics.bytesBySlug {
+		bytes[k] = v
+	}
+	var requests int64
+	for _, v := range e.metrics.requestsByStatus {
+		requests += v
+	}
+	e.metrics.mu.Unlock()
+
+	tunnels := make(map[string]int64)
+	e.mu.RLock()
+	for _, r := range e.routes {
+		tunnels[r.session.slug]++
+	}
+	e.mu.RUnlock()
+
+	return usage.Snapshot{
+		BytesBySlug:   bytes,
+		TunnelsBySlug: tunnels,
+		RequestsTotal: requests,
+	}
 }
 
 // CloseAllSessions ends every active client session by closing its

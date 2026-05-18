@@ -22,6 +22,7 @@ import (
 	"github.com/treyhuffine/conduit/internal/dns"
 	"github.com/treyhuffine/conduit/internal/edge"
 	"github.com/treyhuffine/conduit/internal/naming"
+	usagepkg "github.com/treyhuffine/conduit/internal/usage"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".
@@ -107,11 +108,17 @@ func serveCmd(args []string) {
 
 	e := edge.New(cfg, Version, tokens, certMgr)
 
+	// Optional usage reporter: pushes per-slug usage deltas to the
+	// configured webhook. Hosted-only; OSS leaves UsageReporter unset.
+	reporterCancel := startUsageReporter(cfg, e)
+	defer reporterCancel()
+
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		sig := <-sigs
 		slog.Info("shutdown signal received", "signal", sig.String())
+		reporterCancel() // triggers a final usage report before exit
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = e.Shutdown(ctx)
@@ -121,6 +128,40 @@ func serveCmd(args []string) {
 		slog.Error("serve failed", "err", err.Error())
 		os.Exit(1)
 	}
+}
+
+// startUsageReporter spins up the per-slug usage reporter if configured
+// and returns a cancel func. Returns a no-op cancel when WebhookURL is
+// empty, so the caller can `defer cancel()` unconditionally.
+func startUsageReporter(cfg *config.Server, src usagepkg.Source) context.CancelFunc {
+	if cfg.UsageReporter.WebhookURL == "" {
+		return func() {}
+	}
+	interval := time.Duration(cfg.UsageReporter.IntervalSeconds) * time.Second
+	stateFile := cfg.UsageReporter.StateFile
+	if stateFile == "" {
+		stateFile = filepath.Join(cfg.DataDir, "usage-state.json")
+	}
+	secret := ""
+	if cfg.UsageReporter.SecretEnv != "" {
+		secret = os.Getenv(cfg.UsageReporter.SecretEnv)
+	}
+
+	r, err := usagepkg.NewReporter(usagepkg.Config{
+		WebhookURL: cfg.UsageReporter.WebhookURL,
+		Secret:     secret,
+		Interval:   interval,
+		StateFile:  stateFile,
+	}, src)
+	if err != nil {
+		slog.Error("usage reporter init failed", "err", err.Error())
+		// Refuse to start: a hosted deployment that silently isn't
+		// billing customers is worse than failing loudly.
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go r.Run(ctx)
+	return cancel
 }
 
 func provisionDevCmd(args []string) {

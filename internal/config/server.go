@@ -34,6 +34,11 @@ type Server struct {
 	// requires --token); populated in hosted deployments so the client
 	// can do browser-based login against the web app.
 	AuthDiscovery AuthDiscovery `yaml:"auth_discovery"`
+
+	// UsageReporter, if WebhookURL is set, pushes per-slug usage
+	// deltas to that webhook on an interval. Hosted-only — the web
+	// app does billing on top of the events it receives.
+	UsageReporter UsageReporterConfig `yaml:"usage_reporter"`
 }
 
 // AuthDiscovery is the response body of /.well-known/conduit-auth.
@@ -42,6 +47,16 @@ type AuthDiscovery struct {
 	DeviceCodeURL   string `yaml:"device_code_url"   json:"device_code_url,omitempty"`
 	TokenURL        string `yaml:"token_url"         json:"token_url,omitempty"`
 	VerificationURI string `yaml:"verification_uri"  json:"verification_uri,omitempty"`
+}
+
+// UsageReporterConfig configures the per-slug usage reporter. Leave
+// WebhookURL empty to disable (OSS default — the same data is still
+// exposed at `/metrics`).
+type UsageReporterConfig struct {
+	WebhookURL      string `yaml:"webhook_url"`
+	SecretEnv       string `yaml:"secret_env"`
+	IntervalSeconds int    `yaml:"interval_seconds"`
+	StateFile       string `yaml:"state_file"`
 }
 
 func LoadServer(path string) (*Server, error) {
