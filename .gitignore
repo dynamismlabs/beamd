@@ -1,0 +1,10 @@
+bin/
+*.test
+*.out
+*.log
+*.swp
+.DS_Store
+tokens.json
+.conduit/
+.idea/
+.vscode/
