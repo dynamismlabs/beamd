@@ -1,0 +1,97 @@
+# GoReleaser config for cross-platform binary releases.
+# https://goreleaser.com
+#
+# Run locally:   goreleaser release --snapshot --clean
+# CI release:    triggered by `git tag v0.X.Y && git push --tags`
+
+version: 2
+
+project_name: conduit
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: conduitd
+    main: ./cmd/conduitd
+    binary: conduitd
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+  - id: conduit
+    main: ./cmd/conduit
+    binary: conduit
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+  - id: conduit-testapp
+    main: ./cmd/conduit-testapp
+    binary: conduit-testapp
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+
+archives:
+  - id: archives
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+      - example/conduitd.yaml
+      - scripts/smoke-test.sh
+      - docs/setup.md
+      - docs/post-manual-testing.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - merge conflict
+      - Merge pull request
+      - Merge branch
+
+dockers:
+  - id: conduitd-image
+    ids: [conduitd]
+    image_templates:
+      - "ghcr.io/treyhuffine/conduitd:{{ .Version }}"
+      - "ghcr.io/treyhuffine/conduitd:latest"
+    dockerfile: Dockerfile
+    use: buildx
+    build_flag_templates:
+      - --platform=linux/amd64
+      - --label=org.opencontainers.image.title=conduitd
+      - --label=org.opencontainers.image.description=Self-hostable instant-URL tunnel server
+      - --label=org.opencontainers.image.source=https://github.com/treyhuffine/conduit
+      - --label=org.opencontainers.image.licenses=Apache-2.0
+      - --label=org.opencontainers.image.version={{ .Version }}
+
+release:
+  draft: true
+  prerelease: auto
