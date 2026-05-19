@@ -1,4 +1,4 @@
-// Package e2e holds the end-to-end test suite for conduit. Tests are
+// Package e2e holds the end-to-end test suite for beam. Tests are
 // grouped by subject in the order they exercise the system:
 //
 //   - Tunnel routing — basic single/multi-tunnel + unknown-host
@@ -7,7 +7,7 @@
 //   - Daemon + MCP + reconnect — the client-side surface
 //   - Proxy correctness — headers, body limits, WebSocket
 //   - Observability — metrics, structured shutdown
-//   - Auth discovery — hosted-mode bootstrap (`/.well-known/conduit-auth`)
+//   - Auth discovery — hosted-mode bootstrap (`/.well-known/beam-auth`)
 //
 // Shared test infrastructure lives in helpers_test.go.
 package e2e
@@ -29,13 +29,13 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/treyhuffine/conduit/internal/auth"
-	"github.com/treyhuffine/conduit/internal/certs"
-	"github.com/treyhuffine/conduit/internal/client"
-	"github.com/treyhuffine/conduit/internal/config"
-	"github.com/treyhuffine/conduit/internal/dns"
-	"github.com/treyhuffine/conduit/internal/edge"
-	"github.com/treyhuffine/conduit/internal/mcp"
+	"github.com/treyhuffine/beamd/internal/auth"
+	"github.com/treyhuffine/beamd/internal/certs"
+	"github.com/treyhuffine/beamd/internal/client"
+	"github.com/treyhuffine/beamd/internal/config"
+	"github.com/treyhuffine/beamd/internal/dns"
+	"github.com/treyhuffine/beamd/internal/edge"
+	"github.com/treyhuffine/beamd/internal/mcp"
 )
 
 // ====================================================================
@@ -518,11 +518,11 @@ func TestProvisionDev_WritesApexAndWildcardARecords(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := dns.ProvisionSlug(ctx, p, "conduit.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
+	if err := dns.ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
 		t.Fatalf("ProvisionSlug: %v", err)
 	}
 
-	recs := p.Records("conduit.example.com")
+	recs := p.Records("beam.example.com")
 	if len(recs) != 4 {
 		t.Fatalf("got %d records, want 4", len(recs))
 	}
@@ -550,10 +550,10 @@ func TestProvisionDev_WritesApexAndWildcardARecords(t *testing.T) {
 	}
 
 	// Idempotent.
-	if err := dns.ProvisionSlug(ctx, p, "conduit.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
+	if err := dns.ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
 		t.Fatalf("ProvisionSlug rerun: %v", err)
 	}
-	if got := len(p.Records("conduit.example.com")); got != 4 {
+	if got := len(p.Records("beam.example.com")); got != 4 {
 		t.Errorf("after idempotent rerun, got %d records, want 4", got)
 	}
 }
@@ -680,7 +680,7 @@ func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
 		},
 	})
 
-	srv := mcp.New(lc, in, out, "conduit", "test")
+	srv := mcp.New(lc, in, out, "beam", "test")
 	if err := srv.Run(context.Background()); err != nil {
 		t.Fatalf("mcp run: %v", err)
 	}
@@ -698,10 +698,10 @@ func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
 		t.Fatalf("got %d responses, want 3:\n%s", len(resps), out.String())
 	}
 
-	// initialize: serverInfo.name = "conduit"
+	// initialize: serverInfo.name = "beam"
 	init := resps[0]["result"].(map[string]any)
-	if server, _ := init["serverInfo"].(map[string]any); server["name"] != "conduit" {
-		t.Errorf("serverInfo.name = %v, want conduit", server["name"])
+	if server, _ := init["serverInfo"].(map[string]any); server["name"] != "beam" {
+		t.Errorf("serverInfo.name = %v, want beam", server["name"])
 	}
 
 	// tools/list: 3 tools
@@ -947,14 +947,14 @@ func TestMetrics_ExposesExpectedCounters(t *testing.T) {
 	got := string(body)
 
 	for _, want := range []string{
-		"conduit_active_sessions",
-		"conduit_active_tunnels",
-		"conduit_cert_issuance_total",
-		"conduit_requests_total",
-		"conduit_bytes_proxied_total",
-		`conduit_active_sessions 1`,
-		`conduit_active_tunnels 1`,
-		`conduit_bytes_proxied_total{slug="trey"}`,
+		"beam_active_sessions",
+		"beam_active_tunnels",
+		"beam_cert_issuance_total",
+		"beam_requests_total",
+		"beam_bytes_proxied_total",
+		`beam_active_sessions 1`,
+		`beam_active_tunnels 1`,
+		`beam_bytes_proxied_total{slug="trey"}`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("metrics output missing %q\nfull body:\n%s", want, got)
@@ -982,7 +982,7 @@ func TestMetrics_BandwidthCounterReflectsResponseBytes(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	out := string(body)
 
-	want := `conduit_bytes_proxied_total{slug="trey"}`
+	want := `beam_bytes_proxied_total{slug="trey"}`
 	idx := strings.Index(out, want)
 	if idx < 0 {
 		t.Fatalf("missing %q in metrics:\n%s", want, out)
@@ -1056,7 +1056,7 @@ func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 		_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
 
 		resp, err := publicHTTPSClient(edgeAddr, testBaseDomain).Get(
-			"https://" + testBaseDomain + "/.well-known/conduit-auth")
+			"https://" + testBaseDomain + "/.well-known/beam-auth")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1097,7 +1097,7 @@ func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 		waitForTCP(t, edgeAddr, 2*time.Second)
 
 		resp, err := publicHTTPSClient(edgeAddr, testBaseDomain).Get(
-			"https://" + testBaseDomain + "/.well-known/conduit-auth")
+			"https://" + testBaseDomain + "/.well-known/beam-auth")
 		if err != nil {
 			t.Fatal(err)
 		}

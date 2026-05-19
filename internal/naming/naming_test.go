@@ -28,7 +28,7 @@ func TestLabelFromPort(t *testing.T) {
 }
 
 func TestHostname(t *testing.T) {
-	if got := Hostname("api", "trey", "conduit.example.com"); got != "api.trey.conduit.example.com" {
+	if got := Hostname("api", "trey", "beam.example.com"); got != "api.trey.beam.example.com" {
 		t.Errorf("Hostname = %q", got)
 	}
 }

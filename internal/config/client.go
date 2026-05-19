@@ -19,7 +19,7 @@ func DefaultClientPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".conduit", "config"), nil
+	return filepath.Join(home, ".beam", "config"), nil
 }
 
 func DefaultDaemonSocket() (string, error) {
@@ -27,11 +27,11 @@ func DefaultDaemonSocket() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".conduit", "daemon.sock"), nil
+	return filepath.Join(home, ".beam", "daemon.sock"), nil
 }
 
 // SaveClient writes c to disk as YAML with 0600 perms, creating the
-// parent directory if needed. Used by `conduit login`.
+// parent directory if needed. Used by `beam login`.
 func SaveClient(c *Client, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir %q: %w", filepath.Dir(path), err)

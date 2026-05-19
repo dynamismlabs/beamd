@@ -6,9 +6,9 @@ LDFLAGS := -X main.Version=$(VERSION)
 
 build:
 	@mkdir -p $(BIN_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/conduitd        ./cmd/conduitd
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/conduit         ./cmd/conduit
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/conduit-testapp ./cmd/conduit-testapp
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/beamd        ./cmd/beamd
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/beam         ./cmd/beam
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/beam-testapp ./cmd/beam-testapp
 
 smoke-test: build
 	@PATH="$(PWD)/$(BIN_DIR):$$PATH" ./scripts/smoke-test.sh
@@ -17,7 +17,7 @@ test:
 	go test ./...
 
 run-server: build
-	$(BIN_DIR)/conduitd serve --config example/conduitd.yaml
+	$(BIN_DIR)/beamd serve --config example/beamd.yaml
 
 tidy:
 	go mod tidy

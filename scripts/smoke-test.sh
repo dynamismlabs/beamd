@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# smoke-test.sh — exercise a real conduit deployment end-to-end.
+# smoke-test.sh — exercise a real beam deployment end-to-end.
 #
 # Prerequisites:
-#   - `conduit` and `conduit-testapp` are on PATH (`make build && export PATH=$PWD/bin:$PATH`)
-#   - You've already run `conduit login --server <yours> --token <yours>`
+#   - `beam` and `beam-testapp` are on PATH (`make build && export PATH=$PWD/bin:$PATH`)
+#   - You've already run `beam login --server <yours> --token <yours>`
 #
 # What it does:
-#   1. Starts conduit-testapp on a local port.
-#   2. Runs `conduit expose <port> --as smoketest`.
+#   1. Starts beam-testapp on a local port.
+#   2. Runs `beam expose <port> --as smoketest`.
 #   3. Curls a handful of routes through the resulting public URL.
 #   4. Prints pass/fail per check.
 #
@@ -24,23 +24,23 @@ green() { printf "\033[32m%s\033[0m" "$*"; }
 
 # --- Precheck ----------------------------------------------------------------
 
-for bin in conduit conduit-testapp curl; do
+for bin in beam beam-testapp curl; do
     if ! command -v "$bin" >/dev/null 2>&1; then
         echo "missing prerequisite: $bin not on PATH"
         exit 1
     fi
 done
 
-if ! conduit list >/dev/null 2>&1; then
-    echo "couldn't reach the conduit daemon. Have you run 'conduit login' yet?"
+if ! beam list >/dev/null 2>&1; then
+    echo "couldn't reach the beam daemon. Have you run 'beam login' yet?"
     exit 1
 fi
 
 # --- Spin up the test app ----------------------------------------------------
 
-LOG=$(mktemp -t conduit-smoke-app.XXXXXX)
-echo "starting conduit-testapp on :$PORT (log: $LOG)"
-conduit-testapp --port "$PORT" >"$LOG" 2>&1 &
+LOG=$(mktemp -t beam-smoke-app.XXXXXX)
+echo "starting beam-testapp on :$PORT (log: $LOG)"
+beam-testapp --port "$PORT" >"$LOG" 2>&1 &
 APP_PID=$!
 
 cleanup() {
@@ -48,9 +48,9 @@ cleanup() {
     echo "cleanup:"
     if kill -0 "$APP_PID" 2>/dev/null; then
         kill "$APP_PID" 2>/dev/null || true
-        echo "  stopped conduit-testapp (pid $APP_PID)"
+        echo "  stopped beam-testapp (pid $APP_PID)"
     fi
-    conduit unexpose "$NAME" >/dev/null 2>&1 || true
+    beam unexpose "$NAME" >/dev/null 2>&1 || true
     echo "  unexposed tunnel '$NAME'"
 }
 trap cleanup EXIT
@@ -63,14 +63,14 @@ for _ in $(seq 1 20); do
     sleep 0.2
 done
 if ! curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
-    echo "conduit-testapp didn't come up — see $LOG"
+    echo "beam-testapp didn't come up — see $LOG"
     exit 1
 fi
 
 # --- Expose ------------------------------------------------------------------
 
 echo "exposing :$PORT as '$NAME' …"
-URL=$(conduit expose "$PORT" --as "$NAME")
+URL=$(beam expose "$PORT" --as "$NAME")
 echo "tunnel URL: $URL"
 echo
 
@@ -93,7 +93,7 @@ echo "checks:"
 
 # 1) Basic GET — proves routing + TLS + the backend hop.
 out=$(curl -sf "$URL/" 2>&1 || echo "<curl failed>")
-check "GET / serves the test app banner"               "$out" "conduit-testapp"
+check "GET / serves the test app banner"               "$out" "beam-testapp"
 
 # 2) X-Forwarded-For is set by the edge.
 out=$(curl -sf "$URL/headers" 2>&1 || echo "<curl failed>")
@@ -102,7 +102,7 @@ check "X-Forwarded-Proto is 'https'"                   "$out" '"X-Forwarded-Prot
 check "X-Forwarded-Host matches the tunnel hostname"   "$out" "X-Forwarded-Host"
 
 # 3) POST body round-trips byte-for-byte.
-body="hello-conduit-$(date +%s)"
+body="hello-beam-$(date +%s)"
 out=$(curl -sf -X POST -d "$body" "$URL/echo" 2>&1 || echo "<curl failed>")
 check "POST /echo returns the body verbatim"           "$out" "$body"
 
@@ -125,11 +125,11 @@ check "GET /sleep?ms=1000 succeeds"                    "$out" "slept 1000 ms"
 
 echo
 if [[ "$fails" -eq 0 ]]; then
-    echo "$(green '🎉 all smoke checks passed.') your conduit deployment is healthy."
+    echo "$(green '🎉 all smoke checks passed.') your beam deployment is healthy."
     echo
     echo "tunnel URL was: $URL"
     echo "(it'll be unexposed once this script exits)"
 else
-    echo "$(red "❌ $fails check(s) failed.") see output above; the daemon log is at ~/.conduit/daemon.log"
+    echo "$(red "❌ $fails check(s) failed.") see output above; the daemon log is at ~/.beam/daemon.log"
     exit 1
 fi

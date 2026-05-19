@@ -18,8 +18,8 @@ const (
 )
 
 // HTTPStore validates bearer tokens by POSTing to a remote verify
-// endpoint. Used by the hosted conduitd so token lifecycle (creation,
-// revocation, billing-gating) lives in the web app while conduitd
+// endpoint. Used by the hosted beamd so token lifecycle (creation,
+// revocation, billing-gating) lives in the web app while beamd
 // stays a stateless validator.
 //
 // Wire contract for the remote endpoint:
@@ -27,14 +27,14 @@ const (
 //	POST <url>
 //	Authorization: Bearer <shared secret>   (if non-empty)
 //	Content-Type: application/json
-//	Body:  {"token": "<the conduit bearer token>"}
+//	Body:  {"token": "<the beam bearer token>"}
 //
 //	200 OK     {"slug": "trey"}      → valid, allow
 //	200 OK     {"slug": ""}          → unknown, reject
 //	404        (any body)            → unknown, reject
 //	401        (any body)            → unknown, reject (also: maybe the
 //	                                   shared secret was wrong; the
-//	                                   conduitd operator should fix it)
+//	                                   beamd operator should fix it)
 //
 // Anything else is treated as a transient error: the result is NOT
 // cached and the validation fails (deny by default).

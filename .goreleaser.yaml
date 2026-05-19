@@ -6,16 +6,16 @@
 
 version: 2
 
-project_name: conduit
+project_name: beam
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: conduitd
-    main: ./cmd/conduitd
-    binary: conduitd
+  - id: beamd
+    main: ./cmd/beamd
+    binary: beamd
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin]
@@ -24,9 +24,9 @@ builds:
     ldflags:
       - -s -w -X main.Version={{.Version}}
 
-  - id: conduit
-    main: ./cmd/conduit
-    binary: conduit
+  - id: beam
+    main: ./cmd/beam
+    binary: beam
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin]
@@ -35,9 +35,9 @@ builds:
     ldflags:
       - -s -w -X main.Version={{.Version}}
 
-  - id: conduit-testapp
-    main: ./cmd/conduit-testapp
-    binary: conduit-testapp
+  - id: beam-testapp
+    main: ./cmd/beam-testapp
+    binary: beam-testapp
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin]
@@ -54,7 +54,7 @@ archives:
     files:
       - README.md
       - LICENSE
-      - example/conduitd.yaml
+      - example/beamd.yaml
       - scripts/smoke-test.sh
       - docs/setup.md
       - docs/post-manual-testing.md
@@ -77,18 +77,18 @@ changelog:
       - Merge branch
 
 dockers:
-  - id: conduitd-image
-    ids: [conduitd]
+  - id: beamd-image
+    ids: [beamd]
     image_templates:
-      - "ghcr.io/treyhuffine/conduitd:{{ .Version }}"
-      - "ghcr.io/treyhuffine/conduitd:latest"
+      - "ghcr.io/treyhuffine/beamd:{{ .Version }}"
+      - "ghcr.io/treyhuffine/beamd:latest"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
       - --platform=linux/amd64
-      - --label=org.opencontainers.image.title=conduitd
+      - --label=org.opencontainers.image.title=beamd
       - --label=org.opencontainers.image.description=Self-hostable instant-URL tunnel server
-      - --label=org.opencontainers.image.source=https://github.com/treyhuffine/conduit
+      - --label=org.opencontainers.image.source=https://github.com/treyhuffine/beamd
       - --label=org.opencontainers.image.licenses=Apache-2.0
       - --label=org.opencontainers.image.version={{ .Version }}
 

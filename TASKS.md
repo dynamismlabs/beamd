@@ -1,4 +1,4 @@
-# Conduit — Implementation Tasks
+# Beamd — Implementation Tasks
 
 Working checklist mapping PRD §14 milestones to discrete tasks. Check items off as completed. Each item should be small enough to land in one commit. Source of truth for "what's done"; PRD is source of truth for "what we're building."
 
@@ -10,8 +10,8 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 
 ### Reclaimed
 
-- [x] **`certs.MagicManager`** — certmagic + ACME DNS-01 via libdns. Same `Manager` interface as `SelfSignedManager`; conduitd picks one based on `acme_ca` (blank/URL → real ACME, `off`/`self_signed` → self-signed). **Wired but not exercised against a real ACME server in CI** — operator should validate locally against LE staging (`acme_ca: https://acme-staging-v02.api.letsencrypt.org/directory`) before pointing production traffic. Unit tests cover construction + fallback-SNI behavior.
-- [x] **Local FS cert storage** — `certmagic.FileStorage` at `<data_dir>/certs/`. `data_dir` is a server-config field (default `/var/lib/conduit`).
+- [x] **`certs.MagicManager`** — certmagic + ACME DNS-01 via libdns. Same `Manager` interface as `SelfSignedManager`; beamd picks one based on `acme_ca` (blank/URL → real ACME, `off`/`self_signed` → self-signed). **Wired but not exercised against a real ACME server in CI** — operator should validate locally against LE staging (`acme_ca: https://acme-staging-v02.api.letsencrypt.org/directory`) before pointing production traffic. Unit tests cover construction + fallback-SNI behavior.
+- [x] **Local FS cert storage** — `certmagic.FileStorage` at `<data_dir>/certs/`. `data_dir` is a server-config field (default `/var/lib/beamd`).
 - [x] **README operator walkthrough** — full Cloudflare + Let's Encrypt setup story, config reference, developer quickstart, MCP server doc.
 - [x] **Dockerfile** — multi-stage build, distroless final image, runs as non-root, exposes :443.
 - [x] **GoReleaser config** — cross-platform binaries (linux/darwin × amd64/arm64) + container image pushed to GHCR on tag.
@@ -21,8 +21,8 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 ### Still deferred (non-blocking for OSS v1)
 
 - [ ] **Additional libdns providers compiled in** — Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi. Today only `cloudflare` + `stub` are wired in `internal/dns/dns.go`'s `Open()`. Each is one import + one `case`. Operators on other DNS hosts can vendor it themselves until we land more.
-- [x] **Device-code login flow — CLI side** — `conduit login` without `--token` now does the device-code dance against whatever web app the operator advertises via `auth_discovery` in conduitd.yaml. Discovery endpoint at `/.well-known/conduit-auth`. `internal/devicecode` package implements the polling. The *server* side (the `/api/device/code` + `/api/device/token` endpoints + the browser-based approval page) lives in the hosted web app, not in this repo.
-- [x] **`auth.HTTPStore`** — hosted conduitd's `auth.Store` impl. POSTs to a verify endpoint with shared-secret auth, caches 60s positive / 5s negative. `token_store: http(s)://...` in conduitd.yaml, secret via `CONDUIT_AUTH_VERIFY_SECRET` env var.
+- [x] **Device-code login flow — CLI side** — `beam login` without `--token` now does the device-code dance against whatever web app the operator advertises via `auth_discovery` in beamd.yaml. Discovery endpoint at `/.well-known/beam-auth`. `internal/devicecode` package implements the polling. The *server* side (the `/api/device/code` + `/api/device/token` endpoints + the browser-based approval page) lives in the hosted web app, not in this repo.
+- [x] **`auth.HTTPStore`** — hosted beamd's `auth.Store` impl. POSTs to a verify endpoint with shared-secret auth, caches 60s positive / 5s negative. `token_store: http(s)://...` in beamd.yaml, secret via `BEAMD_AUTH_VERIFY_SECRET` env var.
 - [ ] **Windows daemon transport** — Unix socket only today. Named-pipe equivalent (with ACL) per PRD §17.
 - [ ] **`token_store: file:<path>` YAML quoting** — Already documented in README + example config. Keep pinned until we've watched a few operators not trip over it.
 
@@ -33,29 +33,29 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 Goal: both binaries build, both load config, both print version, server serves `/healthz`. No tunnel logic yet.
 
 ### Foundation
-- [x] `go.mod` initialized at `github.com/treyhuffine/conduit` (rename if needed) on Go 1.22
+- [x] `go.mod` initialized at `github.com/treyhuffine/beamd` (rename if needed) on Go 1.22
 - [x] Repo directory layout per PRD §7 created (M0 subset: `cmd/`, `internal/config/`, `example/` — other `internal/*` dirs land with their milestones)
 - [x] `LICENSE` — Apache 2.0
 - [x] `.gitignore` — standard Go ignores + local dev artifacts
 - [x] `README.md` — install/build/run stub
 - [x] `Makefile` — `build`, `test`, `run-server`, `clean` targets
-- [x] `example/conduitd.yaml` — sample server config
+- [x] `example/beamd.yaml` — sample server config
 
-### Server binary (`cmd/conduitd`)
+### Server binary (`cmd/beamd`)
 - [x] `main.go` with subcommands: `serve` (default), `provision-dev`, `issue-token`, `version`
-- [x] `--config <path>` flag on `serve`; default `/etc/conduit/conduitd.yaml`
+- [x] `--config <path>` flag on `serve`; default `/etc/beamd/beamd.yaml`
 - [x] `--version` prints semver from build-time `var Version`
 - [x] slog initialized with JSON handler
 - [x] On `serve`: loads config, logs "ready" with parsed values, serves `/healthz`
 
-### Client binary (`cmd/conduit`)
+### Client binary (`cmd/beam`)
 - [x] `main.go` with subcommands: `login`, `expose`, `list`, `unexpose`, `daemon`, `mcp`, `version`
 - [x] `--version` prints semver
 - [x] slog initialized
 - [x] All M5 subcommands stubbed to print "not implemented (M5)" and exit nonzero
 
 ### Config (`internal/config`)
-- [x] `server.go` — Server struct + YAML loader + env override (`CONDUIT_*`)
+- [x] `server.go` — Server struct + YAML loader + env override (`BEAMD_*`)
 - [x] Server fields: `base_domain`, `edge_ipv4`, `edge_ipv6`, `listen_https`, `acme_email`, `acme_ca`, `dns_provider`, `dns_provider_creds`, `token_store`, `max_tunnels_per_token`
 - [x] `client.go` — Client struct + YAML loader; tolerates missing file
 - [x] Client fields: `server`, `token`, `daemon_socket`
@@ -63,14 +63,14 @@ Goal: both binaries build, both load config, both print version, server serves `
 - [x] Unit tests: valid load, invalid (missing required) fails, env override, default daemon socket path
 
 ### Health
-- [x] `conduitd serve` exposes `GET /healthz` returning `{"status":"ok","version":"..."}`
+- [x] `beamd serve` exposes `GET /healthz` returning `{"status":"ok","version":"..."}`
 
 ### Build/Test
-- [x] `make build` produces `bin/conduitd` and `bin/conduit`
+- [x] `make build` produces `bin/beamd` and `bin/beam`
 - [x] `make test` runs `go test ./...` and passes
 - [x] Both binaries pass `--version`
 
-**M0 done when:** `make build && bin/conduitd serve --config example/conduitd.yaml` logs `ready` with parsed config, `curl localhost:8443/healthz` returns ok JSON, and `make test` is green.
+**M0 done when:** `make build && bin/beamd serve --config example/beamd.yaml` logs `ready` with parsed config, `curl localhost:8443/healthz` returns ok JSON, and `make test` is green.
 
 **Verified 2026-05-17:** built clean, tests green, `{"status":"ok","version":"dev"}` returned from `/healthz`.
 
@@ -82,14 +82,14 @@ Goal: hardcoded one-app-on-one-port tunnel, HTTP-only, single TLS connection bet
 
 ### Edge
 - [x] TLS listener on `listen_https` with self-signed cert for `hardcoded.host` (generated at startup, valid 24h, includes 127.0.0.1 in SANs)
-- [x] ALPN demux: `conduit/1` → client control conn; anything else → public HTTP path (this is PRD §5 landing earlier than originally planned, since we needed it to distinguish the two conn flavors)
+- [x] ALPN demux: `beam/1` → client control conn; anything else → public HTTP path (this is PRD §5 landing earlier than originally planned, since we needed it to distinguish the two conn flavors)
 - [x] Hardcoded routing: any incoming Host → the one connected client
-- [x] Public request → write raw HTTP to the client conn, read response, return to public visitor. Serialized via `reqMu` (M1 only; yamux removes the constraint in M2). Decision: did NOT use `httputil.ReverseProxy` for the conduit-side hop because `http.Server` exits early on non-default ALPNs and we need the same bidirectional conn for many requests.
+- [x] Public request → write raw HTTP to the client conn, read response, return to public visitor. Serialized via `reqMu` (M1 only; yamux removes the constraint in M2). Decision: did NOT use `httputil.ReverseProxy` for the beam-side hop because `http.Server` exits early on non-default ALPNs and we need the same bidirectional conn for many requests.
 - [x] Backend conn obtained from a server-side state struct (single client allowed for now)
 
 ### Client
 - [x] Dial server on `listen_https`, complete TLS handshake (with `InsecureSkipVerify` for the M1 self-signed cert; real verification in M4)
-- [x] Read HTTP requests off the conn with a raw `bufio.Reader` + `http.ReadRequest`. Did NOT use `http.Server` here: it sees the `conduit/1` ALPN, returns from `c.serve` without running the handler, closes the conn — found this the hard way during M1 (see debug notes in m1.go).
+- [x] Read HTTP requests off the conn with a raw `bufio.Reader` + `http.ReadRequest`. Did NOT use `http.Server` here: it sees the `beam/1` ALPN, returns from `c.serve` without running the handler, closes the conn — found this the hard way during M1 (see debug notes in m1.go).
 - [x] For each request: dial backend on `127.0.0.1:<hardcoded port>`, forward request, read response, write back to edge.
 
 ### Test infra
@@ -208,7 +208,7 @@ Goal: per-slug wildcard cert lifecycle (one cert per slug, reused), pluggable DN
 - [x] `ProvisionSlug(ctx, provider, base, slug, v4, v6)` upserts apex + wildcard A/AAAA records
 - [ ] **Deferred:** compile in Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi (one-import-one-case per provider per PRD §5)
 
-### Admin command (`conduitd provision-dev`)
+### Admin command (`beamd provision-dev`)
 - [x] `--slug` flag (required), `--config` flag
 - [x] Loads server config, opens DNS provider, calls `ProvisionSlug`
 - [x] Pre-warms cert via the configured cert manager
@@ -221,7 +221,7 @@ Goal: per-slug wildcard cert lifecycle (one cert per slug, reused), pluggable DN
 - [x] `TestM4_DistinctSlugsGetDistinctCerts` — second slug → second issuance
 - [x] `TestM4_ProvisionSlugWritesDNSRecords` — DNS provider receives expected A/AAAA records, idempotent rerun
 - [x] `TestM4_TwoTokensSameSlugShareCert` — two tokens mapping to the same slug share the cert
-- [x] Manual smoke: `bin/conduitd provision-dev --slug trey --config example/conduitd.yaml` against stub provider succeeds
+- [x] Manual smoke: `bin/beamd provision-dev --slug trey --config example/beamd.yaml` against stub provider succeeds
 
 **M4 architecture done; ACME issuance deferred.** The cert-cache + SNI-selection + DNS provision flow is in place and tested. Real certmagic/ACME issuance plugs in behind `Manager` without touching the rest of the codebase.
 
@@ -234,15 +234,15 @@ Goal: per-slug wildcard cert lifecycle (one cert per slug, reused), pluggable DN
 Goal: full client UX with reconnect-with-replay, daemon, CLI, MCP. Device-code login is the lone deferred piece (tracked in the top-of-file Deferred section).
 
 ### Daemon (`internal/daemon`)
-- [x] Daemon process; unix socket listener at `~/.conduit/daemon.sock` (0600)
+- [x] Daemon process; unix socket listener at `~/.beam/daemon.sock` (0600)
 - [ ] **Deferred:** Windows named pipe equivalent
 - [x] HTTP API on socket: `POST /expose`, `POST /unexpose`, `GET /list`, `GET /healthz`
 - [x] `/expose` blocks until tunnel registered (via client.Register's wait-for-session loop)
 - [x] Daemon owns the yamux conn to edge via a wrapped `*client.Client`
 
 ### Auto-start (`internal/daemon.EnsureRunning`)
-- [x] CLI probes the socket; if absent, spawns `conduit daemon --socket <path>` detached (`setsid`)
-- [x] Daemon log file at `~/.conduit/daemon.log` (opened append, 0600)
+- [x] CLI probes the socket; if absent, spawns `beam daemon --socket <path>` detached (`setsid`)
+- [x] Daemon log file at `~/.beam/daemon.log` (opened append, 0600)
 - [x] Subsequent CLI calls reuse the running daemon (probe succeeds → no respawn)
 
 ### Reconnect (`internal/client.Client`)
@@ -252,19 +252,19 @@ Goal: full client UX with reconnect-with-replay, daemon, CLI, MCP. Device-code l
 - [x] While disconnected: `Register` blocks up to `RegisterTimeout` waiting for a session; `/list` reports `Healthy: false`
 - [x] Server-side: identical (slug, name) re-register from the same session is idempotent (PRD §8) — same logic that was added in M3 now exercised by the replay path
 
-### CLI (`cmd/conduit`)
-- [x] `conduit login --server <url> --token <t>` — copy-paste flow; writes `~/.conduit/config`
-- [ ] **Deferred:** `conduit login --server <url>` (no token) — device-code flow
-- [x] `conduit expose <port> [--as <name>]` — prints URL on stdout (and only the URL)
-- [x] `conduit list` — name / port / health / URL table
-- [x] `conduit unexpose <name>`
-- [x] `conduit daemon --socket <path>` — internal entry point used by EnsureRunning
+### CLI (`cmd/beam`)
+- [x] `beam login --server <url> --token <t>` — copy-paste flow; writes `~/.beam/config`
+- [ ] **Deferred:** `beam login --server <url>` (no token) — device-code flow
+- [x] `beam expose <port> [--as <name>]` — prints URL on stdout (and only the URL)
+- [x] `beam list` — name / port / health / URL table
+- [x] `beam unexpose <name>`
+- [x] `beam daemon --socket <path>` — internal entry point used by EnsureRunning
 
 ### Device-code flow
-- [ ] **Deferred (whole subsection):** server `/v1/device/code` + `/v1/device/token`, client polling loop, `Confirmer` interface, OSS `conduitd issue-token` confirmer. See top-of-file Deferred section.
+- [ ] **Deferred (whole subsection):** server `/v1/device/code` + `/v1/device/token`, client polling loop, `Confirmer` interface, OSS `beamd issue-token` confirmer. See top-of-file Deferred section.
 
-### MCP server (`internal/mcp`, `conduit mcp`)
-- [x] `conduit mcp` subcommand runs the stdio JSON-RPC 2.0 server
+### MCP server (`internal/mcp`, `beam mcp`)
+- [x] `beam mcp` subcommand runs the stdio JSON-RPC 2.0 server
 - [x] Methods: `initialize`, `notifications/initialized`, `tools/list`, `tools/call`, `ping`
 - [x] Tool `expose_port(port: int, name?: string) → { content: [{text: <url>}] }`
 - [x] Tool `unexpose(name: string) → { content: [{text: "ok"}] }`
@@ -311,14 +311,14 @@ Goal: auth boundaries enforced, metrics + logs populated, graceful shutdown, edg
 
 ### Metrics + logs
 - [x] `/metrics` path-bypass (alongside `/healthz`) on the edge
-- [x] Counters: `conduit_active_sessions`, `conduit_active_tunnels`, `conduit_cert_issuance_total`, `conduit_requests_total{status}`, `conduit_bytes_proxied_total{slug}`
+- [x] Counters: `beam_active_sessions`, `beam_active_tunnels`, `beam_cert_issuance_total`, `beam_requests_total{status}`, `beam_bytes_proxied_total{slug}`
 - [x] slog structured logs for: session lifecycle, register/unregister/reclaim, cert issuance, per-request, shutdown
 - [x] No paths or arbitrary request headers in logs by default (host/method/status only)
 - [x] `TestM6_MetricsEndpointExposesCounters` — `/metrics` exposes all expected counters in valid Prometheus format
 
 ### Graceful shutdown
 - [x] `Edge.Shutdown(ctx)` stops accepting new conns, sends `error{code:"shutdown"}` to every session, drains every per-public-conn `http.Server` via `Shutdown(ctx)` concurrently, then force-closes yamux
-- [x] `conduitd serve` handles SIGTERM/SIGINT → `Shutdown(ctx with 10s timeout)`
+- [x] `beamd serve` handles SIGTERM/SIGINT → `Shutdown(ctx with 10s timeout)`
 - [x] Client: on `error{code:"shutdown"}`, sets `skipBackoff` atomic; the next reconnect attempt fires immediately (no 500ms sleep)
 - [x] `TestM6_GracefulShutdownNotifiesClients` — after `Shutdown()`, client flips unhealthy within 1s
 
@@ -336,7 +336,7 @@ Goal: auth boundaries enforced, metrics + logs populated, graceful shutdown, edg
 - [x] README: install (binary + Docker), quickstart (operator + developer), config reference, DNS provider matrix
 - [x] Example operator setup walkthrough (Cloudflare DNS) — folded into README
 - [x] GoReleaser config for cross-platform binaries (`linux/darwin × amd64/arm64` + GHCR image)
-- [x] Dockerfile for `conduitd`
+- [x] Dockerfile for `beamd`
 - [ ] CONTRIBUTING.md
 - [ ] CHANGELOG.md
 - [ ] Tag v0.1.0 — gated on a real-ACME smoke test against LE staging

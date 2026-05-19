@@ -1,4 +1,4 @@
-# Tier 1 setup — running Conduit for yourself or your team
+# Tier 1 setup — running Beamd for yourself or your team
 
 End-to-end walkthrough. Follow it top-to-bottom; each step has a way to
 verify it worked before moving on.
@@ -17,8 +17,8 @@ them in a scratch file:
 
 | Placeholder | Meaning | Example |
 |---|---|---|
-| `YOUR_DOMAIN` | A domain dedicated to Conduit. Buy a fresh cheap one — don't reuse an existing one. | `mytunnel.dev` |
-| `YOUR_SERVER_IP` | Public IPv4 of the VM you'll run conduitd on | `203.0.113.42` |
+| `YOUR_DOMAIN` | A domain dedicated to Beamd. Buy a fresh cheap one — don't reuse an existing one. | `mytunnel.dev` |
+| `YOUR_SERVER_IP` | Public IPv4 of the VM you'll run beamd on | `203.0.113.42` |
 | `YOUR_EMAIL` | Contact email for Let's Encrypt registration | `you@example.com` |
 | `YOUR_SLUG` | Short label for your own developer identity (lowercase, alphanumeric, hyphens — RFC 1123 label) | `trey` |
 | `YOUR_TOKEN` | A long random secret you'll generate in step 7 | `4f2c…` (64 hex chars) |
@@ -28,7 +28,7 @@ them in a scratch file:
 
 ## Step 1 — Buy a domain
 
-Get a fresh domain dedicated to Conduit. Cheapest options:
+Get a fresh domain dedicated to Beamd. Cheapest options:
 
 - [Porkbun] (~$10–12/year for `.dev`/`.com`)
 - [Namecheap], [Cloudflare Registrar], whoever you already trust
@@ -37,7 +37,7 @@ Get a fresh domain dedicated to Conduit. Cheapest options:
 [Namecheap]: https://namecheap.com
 [Cloudflare Registrar]: https://www.cloudflare.com/products/registrar/
 
-**Why a fresh domain?** You'll point its *entire* DNS at the conduitd
+**Why a fresh domain?** You'll point its *entire* DNS at the beamd
 server. If you reuse a domain you already use for email/website, you'll
 have to coexist with existing records — doable but more error-prone.
 
@@ -48,7 +48,7 @@ list.
 
 ## Step 2 — Point the domain at Cloudflare
 
-We're using Cloudflare as the DNS host because Conduit's libdns/Cloudflare
+We're using Cloudflare as the DNS host because Beamd's libdns/Cloudflare
 adapter is the most mature.
 
 1. Sign up at [cloudflare.com] (free).
@@ -79,7 +79,7 @@ Once that returns the Cloudflare nameservers, you're good.
 
 ## Step 3 — Create a Cloudflare API token
 
-This is the credential Conduit uses to manage DNS on your behalf.
+This is the credential Beamd uses to manage DNS on your behalf.
 
 1. In Cloudflare dashboard, click your profile picture (top right) →
    **My Profile**.
@@ -179,32 +179,32 @@ docker --version
 
 ---
 
-## Step 7 — Generate the config (`conduitd init`)
+## Step 7 — Generate the config (`beamd init`)
 
-Conduit has a one-shot interactive setup command. From inside the
+Beamd has a one-shot interactive setup command. From inside the
 running image — or after building the binary on the server (see
 [Appendix A](#appendix-a--building-from-source) for the binary path) —
 run:
 
 ```
 docker run --rm -it \
-  -v /etc/conduit:/etc/conduit \
-  -v /var/lib/conduit:/var/lib/conduit \
-  ghcr.io/treyhuffine/conduitd:latest init
+  -v /etc/beamd:/etc/beamd \
+  -v /var/lib/beamd:/var/lib/beamd \
+  ghcr.io/treyhuffine/beamd:latest init
 ```
 
 It prompts for `base_domain`, `edge_ipv4`, `acme_email`, etc. (defaults
 in brackets — just hit Enter to accept). It writes:
 
-- `/etc/conduit/conduitd.yaml`
-- `/etc/conduit/tokens.json` (empty `{}` to start)
-- `/var/lib/conduit/` (data dir for the cert cache)
+- `/etc/beamd/beamd.yaml`
+- `/etc/beamd/tokens.json` (empty `{}` to start)
+- `/var/lib/beamd/` (data dir for the cert cache)
 
 > If you'd rather not be interactive, pass the values as flags and add
 > `--non-interactive`:
 >
 > ```
-> conduitd init --non-interactive \
+> beamd init --non-interactive \
 >   --base-domain YOUR_DOMAIN \
 >   --edge-ipv4 YOUR_SERVER_IP \
 >   --acme-email YOUR_EMAIL
@@ -213,53 +213,53 @@ in brackets — just hit Enter to accept). It writes:
 Verify the files exist:
 
 ```
-ls -la /etc/conduit
-cat /etc/conduit/conduitd.yaml
+ls -la /etc/beamd
+cat /etc/beamd/beamd.yaml
 ```
 
 ---
 
-## Step 8 — Run Conduit
+## Step 8 — Run Beamd
 
 > **Image availability:** the Docker image
-> `ghcr.io/treyhuffine/conduitd:latest` is published by GoReleaser when
+> `ghcr.io/treyhuffine/beamd:latest` is published by GoReleaser when
 > we tag a release. Until v0.1.0 is tagged, you'll need to either build
 > the binary on the server (see [Appendix A](#appendix-a--building-from-source))
 > or build the image locally + push it yourself.
 
-Copy the bundled compose file + env template to `/etc/conduit/`:
+Copy the bundled compose file + env template to `/etc/beamd/`:
 
 ```
-sudo curl -L -o /etc/conduit/docker-compose.yml \
-  https://raw.githubusercontent.com/treyhuffine/conduit/main/example/docker-compose.yml
-sudo curl -L -o /etc/conduit/.env \
-  https://raw.githubusercontent.com/treyhuffine/conduit/main/example/.env.example
+sudo curl -L -o /etc/beamd/docker-compose.yml \
+  https://raw.githubusercontent.com/treyhuffine/beam/main/example/docker-compose.yml
+sudo curl -L -o /etc/beamd/.env \
+  https://raw.githubusercontent.com/treyhuffine/beam/main/example/.env.example
 ```
 
-Edit `/etc/conduit/.env` and paste in your Cloudflare API token from
+Edit `/etc/beamd/.env` and paste in your Cloudflare API token from
 step 3:
 
 ```
-CONDUIT_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
+BEAMD_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
 ```
 
 Lock it down (the file holds your CF token — keep it private):
 
 ```
-sudo chmod 600 /etc/conduit/.env
+sudo chmod 600 /etc/beamd/.env
 ```
 
 Start the service:
 
 ```
-cd /etc/conduit
+cd /etc/beamd
 sudo docker compose up -d
 ```
 
 **Verify:**
 
 ```
-sudo docker compose logs conduitd
+sudo docker compose logs beamd
 ```
 
 You should see:
@@ -280,7 +280,7 @@ Returns `{"status":"ok","version":"…"}`.
 
 ---
 
-## Step 9 — Add yourself as a developer (`conduitd add-developer`)
+## Step 9 — Add yourself as a developer (`beamd add-developer`)
 
 One command does everything: generates a token, appends it to
 `tokens.json`, writes the DNS A records (`YOUR_SLUG.YOUR_DOMAIN` and
@@ -288,8 +288,8 @@ One command does everything: generates a token, appends it to
 Let's Encrypt.
 
 ```
-sudo docker compose exec conduitd \
-  conduitd add-developer --slug YOUR_SLUG --config /etc/conduit/conduitd.yaml
+sudo docker compose exec beamd \
+  beamd add-developer --slug YOUR_SLUG --config /etc/beamd/beamd.yaml
 ```
 
 It prints something like:
@@ -299,23 +299,23 @@ developer added:
   slug:   trey
   token:  4f2c8b7d1e09…  (64 hex chars)
 
-Restart conduitd to pick up the new token (the file is read at startup):
-  docker restart conduitd        # if running under Docker
-  systemctl restart conduitd     # if running as a systemd unit
+Restart beamd to pick up the new token (the file is read at startup):
+  docker restart beamd        # if running under Docker
+  systemctl restart beamd     # if running as a systemd unit
 
 Developer setup (their laptop):
-  conduit login --server YOUR_DOMAIN:443 --token <token above>
-  conduit expose 3001 --as api
+  beam login --server YOUR_DOMAIN:443 --token <token above>
+  beam expose 3001 --as api
 ```
 
 **Copy the token to your password manager now.** It's only printed
-once. (You can always look it up in `/etc/conduit/tokens.json` later,
+once. (You can always look it up in `/etc/beamd/tokens.json` later,
 but the password-manager habit is better.)
 
-Restart conduitd so it picks up the new token:
+Restart beamd so it picks up the new token:
 
 ```
-sudo docker compose restart conduitd
+sudo docker compose restart beamd
 ```
 
 You should see in the logs:
@@ -359,7 +359,7 @@ subject=CN=*.YOUR_SLUG.YOUR_DOMAIN
 Today, the easiest path is `go install`:
 
 ```
-go install github.com/treyhuffine/conduit/cmd/conduit@latest
+go install github.com/treyhuffine/beamd/cmd/beam@latest
 ```
 
 Once v0.1.0 is tagged, you'll also be able to download a binary from the
@@ -368,7 +368,7 @@ releases page or `brew install` (TBD).
 **Verify:**
 
 ```
-conduit version
+beam version
 ```
 
 ---
@@ -376,10 +376,10 @@ conduit version
 ## Step 11 — Log in from your laptop
 
 ```
-conduit login --server YOUR_DOMAIN:443 --token YOUR_TOKEN
+beam login --server YOUR_DOMAIN:443 --token YOUR_TOKEN
 ```
 
-Should print `logged in`. This saves to `~/.conduit/config`.
+Should print `logged in`. This saves to `~/.beam/config`.
 
 ---
 
@@ -394,7 +394,7 @@ python3 -m http.server 3001
 In another terminal:
 
 ```
-conduit expose 3001 --as hello
+beam expose 3001 --as hello
 ```
 
 It prints one line:
@@ -413,12 +413,12 @@ That's Tier 1 working end-to-end. 🎉
 
 For a more thorough sanity check, this repo ships:
 
-- **`conduit-testapp`** — a small test backend with routes that exercise
+- **`beam-testapp`** — a small test backend with routes that exercise
   header forwarding, POST bodies, response sizes, and slow responses.
-- **`scripts/smoke-test.sh`** — drives `conduit-testapp` through your
+- **`scripts/smoke-test.sh`** — drives `beam-testapp` through your
   real tunnel and reports pass/fail per check.
 
-From the repo root, with `bin/conduit` already logged in:
+From the repo root, with `bin/beam` already logged in:
 
 ```
 make smoke-test
@@ -427,7 +427,7 @@ make smoke-test
 Expected output:
 
 ```
-starting conduit-testapp on :8765 ...
+starting beam-testapp on :8765 ...
 exposing :8765 as 'smoketest' …
 tunnel URL: https://smoketest.YOUR_SLUG.YOUR_DOMAIN
 
@@ -440,7 +440,7 @@ checks:
   ✓ GET /size?bytes=8192 returns 8192 bytes
   ✓ GET /sleep?ms=1000 succeeds
 
-🎉 all smoke checks passed. your conduit deployment is healthy.
+🎉 all smoke checks passed. your beam deployment is healthy.
 ```
 
 If any check fails, see [docs/post-manual-testing.md](post-manual-testing.md)
@@ -453,26 +453,26 @@ for what to do next.
 One command does everything — token + tokens.json + DNS + cert pre-warm:
 
 ```
-sudo docker compose exec conduitd \
-  conduitd add-developer --slug alex --config /etc/conduit/conduitd.yaml
+sudo docker compose exec beamd \
+  beamd add-developer --slug alex --config /etc/beamd/beamd.yaml
 ```
 
 It prints `alex`'s token. Send it to them via Slack/Signal (private
-channels). Restart conduitd so the new token is loaded:
+channels). Restart beamd so the new token is loaded:
 
 ```
-sudo docker compose restart conduitd
+sudo docker compose restart beamd
 ```
 
 Then your teammate runs on their laptop:
 
 ```
-conduit login --server YOUR_DOMAIN:443 --token <theirs>
-conduit expose 3001 --as api
+beam login --server YOUR_DOMAIN:443 --token <theirs>
+beam expose 3001 --as api
 # → https://api.alex.YOUR_DOMAIN
 ```
 
-Restarting conduitd briefly drops all clients, but they auto-reconnect
+Restarting beamd briefly drops all clients, but they auto-reconnect
 and re-register their tunnels — URLs stay stable.
 
 ---
@@ -486,34 +486,34 @@ in step 3.
 
 **ACME issuance fails with `DNS lookup`-style errors**
 DNS hasn't propagated yet. Wait a few minutes and retry
-`docker exec conduitd conduitd provision-dev ...`.
+`docker exec beamd beamd provision-dev ...`.
 
 **Browser shows "Your connection is not private" / NET::ERR_CERT_AUTHORITY_INVALID**
 Either:
-- Cert isn't issued yet (re-run `provision-dev`, watch `docker logs conduitd`).
+- Cert isn't issued yet (re-run `provision-dev`, watch `docker logs beamd`).
 - The SNI you're hitting doesn't match the wildcard. The cert covers
   `*.YOUR_SLUG.YOUR_DOMAIN` (one DNS label deep). So
   `api.YOUR_SLUG.YOUR_DOMAIN` works; `deep.nested.YOUR_SLUG.YOUR_DOMAIN`
   doesn't.
 
-**`conduit expose` hangs / "no client connected"**
-Check `~/.conduit/daemon.log` on your laptop. The daemon is what holds
-the conduit→edge connection; if it can't reach the edge, expose blocks.
+**`beam expose` hangs / "no client connected"**
+Check `~/.beam/daemon.log` on your laptop. The daemon is what holds
+the beam→edge connection; if it can't reach the edge, expose blocks.
 
 **`Error: no route for host …`**
 You're hitting an app/slug combination that hasn't been registered.
-Run `conduit list` to see what's currently exposed.
+Run `beam list` to see what's currently exposed.
 
 **Need to revoke a developer**
-Delete their entry from `tokens.json`, restart conduitd. Their active
+Delete their entry from `tokens.json`, restart beamd. Their active
 sessions are dropped immediately; they can't reconnect.
 
 **Where are the logs?**
 
 | What | Where |
 |---|---|
-| Edge server | `docker logs conduitd` |
-| Developer daemon | `~/.conduit/daemon.log` |
+| Edge server | `docker logs beamd` |
+| Developer daemon | `~/.beam/daemon.log` |
 
 ---
 
@@ -526,25 +526,25 @@ Until v0.1.0 is tagged + image published, build on the server:
 sudo apt update && sudo apt install -y golang-go git
 
 # Clone and build.
-git clone https://github.com/treyhuffine/conduit /opt/conduit
-cd /opt/conduit
+git clone https://github.com/treyhuffine/beamd /opt/beam
+cd /opt/beam
 make build
 
 # Install binaries.
-sudo cp bin/conduitd /usr/local/bin/
-sudo setcap cap_net_bind_service=+ep /usr/local/bin/conduitd
+sudo cp bin/beamd /usr/local/bin/
+sudo setcap cap_net_bind_service=+ep /usr/local/bin/beamd
 
 # Create a systemd unit.
-sudo tee /etc/systemd/system/conduitd.service >/dev/null <<EOF
+sudo tee /etc/systemd/system/beamd.service >/dev/null <<EOF
 [Unit]
-Description=Conduit edge server
+Description=Beamd edge server
 After=network.target
 
 [Service]
 Type=simple
 User=root
-Environment=CONDUIT_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
-ExecStart=/usr/local/bin/conduitd serve --config /etc/conduit/conduitd.yaml
+Environment=BEAMD_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
+ExecStart=/usr/local/bin/beamd serve --config /etc/beamd/beamd.yaml
 Restart=on-failure
 RestartSec=2s
 
@@ -553,20 +553,20 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now conduitd
-sudo systemctl status conduitd
+sudo systemctl enable --now beamd
+sudo systemctl status beamd
 ```
 
 `provision-dev` invocation in the binary path becomes:
 
 ```
-conduitd provision-dev --slug YOUR_SLUG --config /etc/conduit/conduitd.yaml
+beamd provision-dev --slug YOUR_SLUG --config /etc/beamd/beamd.yaml
 ```
 
 Logs:
 
 ```
-journalctl -u conduitd -f
+journalctl -u beamd -f
 ```
 
 ---
@@ -574,7 +574,7 @@ journalctl -u conduitd -f
 ## What's missing from this setup
 
 - **Strangers can't sign themselves up.** To onboard someone, you generate
-  their token + restart conduitd. Self-serve signup requires the
+  their token + restart beamd. Self-serve signup requires the
   device-code login flow (see `TASKS.md` deferred section).
 - **No automatic certificate-renewal monitoring.** certmagic renews certs
   before they expire; if it fails for some reason you won't be paged.
@@ -582,6 +582,6 @@ journalctl -u conduitd -f
 - **No abuse rate-limiting.** Body size is capped (32 MiB default), but
   there's no per-IP request rate limit. Put Cloudflare's free WAF rules
   in front, or a small fronting proxy (Caddy/nginx) with rate limits.
-- **One conduitd process.** No HA. If the VM dies, all tunnels drop until
+- **One beamd process.** No HA. If the VM dies, all tunnels drop until
   it's back. For personal use this is fine; for a team you may want a
   second VM + DNS failover.

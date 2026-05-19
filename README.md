@@ -1,4 +1,4 @@
-# Conduit
+# Beamd
 
 Self-hostable, instant-URL tunnel for multi-app dev. One command turns a
 locally-running app into a stable HTTPS URL on your own domain, with a
@@ -9,8 +9,8 @@ gets back a working URL.
 > Working name. Rename freely before v1.
 
 ```
-$ conduit expose 3001 --as api
-https://api.trey.conduit.example.com
+$ beam expose 3001 --as api
+https://api.trey.beam.example.com
 ```
 
 ## Status
@@ -24,26 +24,26 @@ for the implementation checklist + open deferred work.
 [ Internet ]
      │
      ▼  :443 (TLS)
-[ conduitd ]  ─── ACME DNS-01 ──▶  [ DNS provider (e.g. Cloudflare) ]
+[ beamd ]  ─── ACME DNS-01 ──▶  [ DNS provider (e.g. Cloudflare) ]
      ▲
      │  one TLS conn per developer
-     │  (ALPN "conduit/1", yamux-multiplexed)
+     │  (ALPN "beam/1", yamux-multiplexed)
      ▼
-[ conduit client/daemon ]
+[ beam client/daemon ]
      │
      │  loopback
      ▼
 [ developer's local apps :3001, :3002, ... ]
 ```
 
-- You run **one** `conduitd` process on a server with a public IP.
-- You point a domain (e.g. `conduit.example.com`) at it.
+- You run **one** `beamd` process on a server with a public IP.
+- You point a domain (e.g. `beam.example.com`) at it.
 - You give each developer a token. The token maps to a slug (`trey`,
   `alex`, …).
-- The developer runs `conduit expose 3001 --as api` on their laptop.
-  Conduitd issues `*.trey.conduit.example.com` from Let's Encrypt
+- The developer runs `beam expose 3001 --as api` on their laptop.
+  Beamd issues `*.trey.beam.example.com` from Let's Encrypt
   (via DNS-01 against your DNS provider), routes
-  `api.trey.conduit.example.com` to their laptop's port 3001.
+  `api.trey.beam.example.com` to their laptop's port 3001.
 
 ## Quickstart (operator)
 
@@ -63,46 +63,46 @@ same way (PRs welcome — see `internal/dns/dns.go`).
 
 In Cloudflare:
 
-1. Add the zone you'll use (e.g. `conduit.example.com`).
+1. Add the zone you'll use (e.g. `beam.example.com`).
 2. Create an **API Token** with permission `Zone → DNS → Edit` scoped
    to that zone. Copy the token.
 3. Create one A record at the apex:
-   `conduit.example.com  A  <your conduitd server IP>`.
+   `beam.example.com  A  <your beamd server IP>`.
 
-Per-developer DNS (`*.trey.conduit.example.com` + `trey.conduit.example.com`)
-is created automatically by `conduitd provision-dev`.
+Per-developer DNS (`*.trey.beam.example.com` + `trey.beam.example.com`)
+is created automatically by `beamd provision-dev`.
 
 ### 2. Install
 
 Either:
 
 - Download a binary from the [releases page] (once tagged).
-- Or pull the Docker image: `docker pull ghcr.io/treyhuffine/conduitd:latest`.
+- Or pull the Docker image: `docker pull ghcr.io/treyhuffine/beamd:latest`.
 - Or build from source: `make build`.
 
-[releases page]: https://github.com/treyhuffine/conduit/releases
+[releases page]: https://github.com/treyhuffine/beamd/releases
 
 ### 3. Configure
 
-Copy [`example/conduitd.yaml`](example/conduitd.yaml) to
-`/etc/conduit/conduitd.yaml` and edit:
+Copy [`example/beamd.yaml`](example/beamd.yaml) to
+`/etc/beamd/beamd.yaml` and edit:
 
 ```yaml
-base_domain: conduit.example.com
+base_domain: beam.example.com
 edge_ipv4: 203.0.113.10         # this server's public IPv4
 listen_https: ":443"
 acme_email: ops@example.com
 dns_provider: cloudflare
 dns_provider_creds: ""          # better: leave blank, set via env var
-token_store: "file:/etc/conduit/tokens.json"
-data_dir: /var/lib/conduit
+token_store: "file:/etc/beamd/tokens.json"
+data_dir: /var/lib/beamd
 ```
 
 Set the Cloudflare token in the environment instead of writing it to
 disk in the YAML:
 
 ```
-CONDUIT_DNS_PROVIDER_CREDS=<your-Cloudflare-API-token>
+BEAMD_DNS_PROVIDER_CREDS=<your-Cloudflare-API-token>
 ```
 
 Create `tokens.json` with one entry per developer:
@@ -117,25 +117,25 @@ Create `tokens.json` with one entry per developer:
 ### 4. Run
 
 ```
-sudo conduitd serve --config /etc/conduit/conduitd.yaml
+sudo beamd serve --config /etc/beamd/beamd.yaml
 ```
 
 `:443` needs root or `CAP_NET_BIND_SERVICE`. For a non-root install use
-`setcap cap_net_bind_service=+ep /usr/local/bin/conduitd`.
+`setcap cap_net_bind_service=+ep /usr/local/bin/beamd`.
 
 ### 5. Onboard a developer
 
 For each developer slug:
 
 ```
-conduitd provision-dev --slug trey --config /etc/conduit/conduitd.yaml
+beamd provision-dev --slug trey --config /etc/beamd/beamd.yaml
 ```
 
 This:
 
-- Writes `trey.conduit.example.com  A  203.0.113.10` and
-  `*.trey.conduit.example.com  A  203.0.113.10` to your DNS provider.
-- Pre-warms the `*.trey.conduit.example.com` certificate (issues from
+- Writes `trey.beam.example.com  A  203.0.113.10` and
+  `*.trey.beam.example.com  A  203.0.113.10` to your DNS provider.
+- Pre-warms the `*.trey.beam.example.com` certificate (issues from
   Let's Encrypt via DNS-01).
 
 Hand the developer their token (the long random string from
@@ -144,9 +144,9 @@ Hand the developer their token (the long random string from
 ## Quickstart (developer)
 
 ```
-conduit login --server conduit.example.com:443 --token <token-from-operator>
-conduit expose 3001 --as api
-# → https://api.trey.conduit.example.com
+beam login --server beam.example.com:443 --token <token-from-operator>
+beam expose 3001 --as api
+# → https://api.trey.beam.example.com
 ```
 
 The daemon stays running in the background; subsequent `expose` /
@@ -158,7 +158,7 @@ the client reconnects automatically and replays your registrations.
 The same daemon also exposes an MCP server over stdio:
 
 ```
-conduit mcp
+beam mcp
 ```
 
 Wire that into your MCP-aware agent (Claude Code, Cursor, etc.) and
@@ -170,13 +170,13 @@ the agent gets three tools:
 
 ## Configuration reference
 
-Every field in `conduitd.yaml` can be overridden by the matching
-`CONDUIT_<UPPER_SNAKE_CASE>` env var (e.g. `CONDUIT_DNS_PROVIDER_CREDS`).
+Every field in `beamd.yaml` can be overridden by the matching
+`BEAMD_<UPPER_SNAKE_CASE>` env var (e.g. `BEAMD_DNS_PROVIDER_CREDS`).
 
 | Field | Required | Notes |
 |---|---|---|
-| `base_domain` | yes | e.g. `conduit.example.com` |
-| `edge_ipv4` | yes for `provision-dev` | Public IPv4 this conduitd is reachable at |
+| `base_domain` | yes | e.g. `beam.example.com` |
+| `edge_ipv4` | yes for `provision-dev` | Public IPv4 this beamd is reachable at |
 | `edge_ipv6` | no | Optional IPv6 target |
 | `listen_https` | yes | Public ingress + ALPN-demuxed client control. `:443` in prod, `:8443` in dev |
 | `acme_email` | yes | Contact address registered with Let's Encrypt |
@@ -184,7 +184,7 @@ Every field in `conduitd.yaml` can be overridden by the matching
 | `dns_provider` | yes | One of: `cloudflare`, `stub` (more on the way) |
 | `dns_provider_creds` | provider-specific | Cloudflare: `Zone:DNS:Edit` API token |
 | `token_store` | yes | `file:<path>` (JSON `{token: slug}` map), or `memory:` for tests |
-| `data_dir` | defaults to `/var/lib/conduit` | Where cert cache + ACME account state live |
+| `data_dir` | defaults to `/var/lib/beamd` | Where cert cache + ACME account state live |
 | `max_tunnels_per_token` | defaults to 25 | Cap on concurrent tunnels per developer |
 
 ## DNS providers
@@ -203,10 +203,10 @@ import + one switch case in `internal/dns/dns.go` — PRs welcome.
 ## Build / develop
 
 ```
-make build         # produces bin/conduitd, bin/conduit, bin/conduit-testapp
+make build         # produces bin/beamd, bin/beam, bin/beam-testapp
 make test          # runs all unit + e2e tests
-make run-server    # runs conduitd against example/conduitd.yaml
-make smoke-test    # spins up conduit-testapp + drives it through your tunnel
+make run-server    # runs beamd against example/beamd.yaml
+make smoke-test    # spins up beam-testapp + drives it through your tunnel
 ```
 
 ## Smoke-testing a real deployment

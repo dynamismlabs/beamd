@@ -19,7 +19,7 @@ type Server struct {
 	TokenStore         string `yaml:"token_store"`
 	MaxTunnelsPerToken int    `yaml:"max_tunnels_per_token"`
 
-	// DataDir is where conduitd persists state (cert cache, ACME
+	// DataDir is where beamd persists state (cert cache, ACME
 	// account, etc.). Created if missing.
 	DataDir string `yaml:"data_dir"`
 
@@ -30,7 +30,7 @@ type Server struct {
 	MaxRequestBodyBytes int64 `yaml:"max_request_body_bytes"`
 
 	// AuthDiscovery describes the device-code endpoints to advertise at
-	// /.well-known/conduit-auth. Empty in OSS deployments (CLI then
+	// /.well-known/beam-auth. Empty in OSS deployments (CLI then
 	// requires --token); populated in hosted deployments so the client
 	// can do browser-based login against the web app.
 	AuthDiscovery AuthDiscovery `yaml:"auth_discovery"`
@@ -41,7 +41,7 @@ type Server struct {
 	UsageReporter UsageReporterConfig `yaml:"usage_reporter"`
 }
 
-// AuthDiscovery is the response body of /.well-known/conduit-auth.
+// AuthDiscovery is the response body of /.well-known/beam-auth.
 // All fields empty → device-code login is not offered.
 type AuthDiscovery struct {
 	DeviceCodeURL   string `yaml:"device_code_url"   json:"device_code_url,omitempty"`
@@ -95,7 +95,7 @@ func (s *Server) Validate() error {
 		s.MaxTunnelsPerToken = 25
 	}
 	if s.DataDir == "" {
-		s.DataDir = "/var/lib/conduit"
+		s.DataDir = "/var/lib/beamd"
 	}
 	if s.MaxRequestBodyBytes == 0 {
 		s.MaxRequestBodyBytes = 32 << 20 // 32 MiB default
@@ -105,16 +105,16 @@ func (s *Server) Validate() error {
 
 func applyServerEnvOverrides(s *Server) {
 	envs := map[string]*string{
-		"CONDUIT_BASE_DOMAIN":        &s.BaseDomain,
-		"CONDUIT_EDGE_IPV4":          &s.EdgeIPv4,
-		"CONDUIT_EDGE_IPV6":          &s.EdgeIPv6,
-		"CONDUIT_LISTEN_HTTPS":       &s.ListenHTTPS,
-		"CONDUIT_ACME_EMAIL":         &s.ACMEEmail,
-		"CONDUIT_ACME_CA":            &s.ACMECA,
-		"CONDUIT_DNS_PROVIDER":       &s.DNSProvider,
-		"CONDUIT_DNS_PROVIDER_CREDS": &s.DNSProviderCreds,
-		"CONDUIT_TOKEN_STORE":        &s.TokenStore,
-		"CONDUIT_DATA_DIR":           &s.DataDir,
+		"BEAMD_BASE_DOMAIN":        &s.BaseDomain,
+		"BEAMD_EDGE_IPV4":          &s.EdgeIPv4,
+		"BEAMD_EDGE_IPV6":          &s.EdgeIPv6,
+		"BEAMD_LISTEN_HTTPS":       &s.ListenHTTPS,
+		"BEAMD_ACME_EMAIL":         &s.ACMEEmail,
+		"BEAMD_ACME_CA":            &s.ACMECA,
+		"BEAMD_DNS_PROVIDER":       &s.DNSProvider,
+		"BEAMD_DNS_PROVIDER_CREDS": &s.DNSProviderCreds,
+		"BEAMD_TOKEN_STORE":        &s.TokenStore,
+		"BEAMD_DATA_DIR":           &s.DataDir,
 	}
 	for k, dst := range envs {
 		if v := os.Getenv(k); v != "" {

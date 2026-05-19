@@ -1,6 +1,6 @@
-# PRD — Conduit (working name): self-hostable instant-URL tunnel for multi-app dev
+# PRD — Beamd (working name): self-hostable instant-URL tunnel for multi-app dev
 
-> Working name "Conduit" — rename freely. This document is the build spec. It is written to be executed directly by Claude Code. Read the whole thing before writing code. Where a decision is already made, do not relitigate it; where something is marked OPEN, make a reasonable call and note it.
+> Working name "Beamd" — rename freely. This document is the build spec. It is written to be executed directly by Claude Code. Read the whole thing before writing code. Where a decision is already made, do not relitigate it; where something is marked OPEN, make a reasonable call and note it.
 
 ---
 
@@ -11,10 +11,10 @@ Give a developer one command that turns any locally-running app into a stable, p
 Target structure:
 
 ```
-<app>.<dev>.conduit.example.com
-e.g.  api.trey.conduit.example.com
-      web.trey.conduit.example.com
-      3001.trey.conduit.example.com   (default when no name given)
+<app>.<dev>.beam.example.com
+e.g.  api.trey.beam.example.com
+      web.trey.beam.example.com
+      3001.trey.beam.example.com   (default when no name given)
 ```
 
 The developer (or an AI agent acting for them) runs a server on a port, runs one command, and synchronously gets back a URL that already works. The client may run on an always-on remote box **or a flaky laptop** — reconnection must be transparent and URLs must be stable across network blips.
@@ -25,7 +25,7 @@ The server is open source and self-hostable. A hosted version is the eventual bu
 
 The painful loop today: developers (increasingly, AI coding agents) run many short-lived apps on a dev box and need to test them over a real URL — for webhooks, mobile testing, sharing, or agent self-verification. Existing tools make you register tunnels one at a time, route multiple apps under awkward path prefixes, or enroll a machine into a VPN/identity mesh. None give a developer a clean *subdomain-per-app namespace under their own brand* with zero per-app ceremony.
 
-The wedge is the AI-agent workflow: agent writes code → runs `npm run dev` on a port → calls one command → gets `https://api.trey.conduit.example.com` → tests it. The platforms that solve this (Replit, v0, Cursor background agents, E2B/Daytona) solve it *internally and proprietarily*. There is no unbundled, self-hostable, bring-your-own-box version of that preview-URL primitive. That is what we build.
+The wedge is the AI-agent workflow: agent writes code → runs `npm run dev` on a port → calls one command → gets `https://api.trey.beam.example.com` → tests it. The platforms that solve this (Replit, v0, Cursor background agents, E2B/Daytona) solve it *internally and proprietarily*. There is no unbundled, self-hostable, bring-your-own-box version of that preview-URL primitive. That is what we build.
 
 ## 3. Why it's unique (and where it is NOT)
 
@@ -54,17 +54,17 @@ Explicitly out of scope for v1. Do not build these; do not architect around them
 - **Edge HTTP proxy:** stdlib `net/http` + `net/http/httputil.ReverseProxy` with a custom `Transport.DialContext` that returns a yamux stream instead of a TCP socket.
 - **Certificates:** `github.com/caddyserver/certmagic` for on-demand issuance + storage + renewal. Wildcard certs require ACME **DNS-01**, so a DNS provider integration is mandatory. The provider sits behind the `libdns` interface; the OSS binary compiles in a handful of common providers (Cloudflare, Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi to start — actual list lives in the README and is expected to grow). Operator picks via `dns_provider:` config. Cloudflare is the reference/test target because its libdns module is the most mature — anything broken there is broken everywhere. Adding a new provider is one import + one `switch` case; downstream operators can fork to add private providers without touching the rest of the code.
 - **Control protocol:** newline-delimited JSON messages over a dedicated yamux stream (stream 0). Simple, debuggable, sufficient.
-- **Control transport:** the client↔server tunnel terminates on the edge's public **:443** listener, demuxed by ALPN (`conduit/1`). No separate control port. This keeps clients reachable from locked-down networks (corp/hotel/CI runners) where only :443 egress is permitted. The edge inspects ALPN on the incoming TLS handshake and routes `conduit/1` to the yamux handler; `h2`/`http/1.1` go to the public reverse-proxy path. Both paths share the same per-slug wildcard cert selection.
+- **Control transport:** the client↔server tunnel terminates on the edge's public **:443** listener, demuxed by ALPN (`beam/1`). No separate control port. This keeps clients reachable from locked-down networks (corp/hotel/CI runners) where only :443 egress is permitted. The edge inspects ALPN on the incoming TLS handshake and routes `beam/1` to the yamux handler; `h2`/`http/1.1` go to the public reverse-proxy path. Both paths share the same per-slug wildcard cert selection.
 - **Auth:** opaque bearer token per developer. Token maps to a developer **slug** server-side. The slug, not the client, determines the wildcard zone — a client can never register outside its own `*.<slug>.domain`.
 
 ### 5.1 The cert/DNS model — read carefully, this is the subtle part
 
-TLS wildcard certs match **exactly one label**: `*.trey.conduit.example.com` covers `api.trey...` but not deeper. This is fine for our scheme because the structure is exactly two dynamic levels: `<app>.<slug>`.
+TLS wildcard certs match **exactly one label**: `*.trey.beam.example.com` covers `api.trey...` but not deeper. This is fine for our scheme because the structure is exactly two dynamic levels: `<app>.<slug>`.
 
 Therefore:
 
-- Issue **one** wildcard cert `*.<slug>.conduit.example.com` **per developer**, lazily on that developer's first tunnel, via certmagic + DNS-01. Every app that developer ever exposes **reuses that one cert**. No per-app cert work, nothing on the hot path.
-- DNS has the same one-label rule. `*.conduit.example.com` will NOT resolve `api.trey.conduit.example.com`. The operator must run authoritative DNS for the apex (or use a provider with a true nested catch-all), so any depth resolves to the edge IP. Document this as an operator requirement. For MVP, the acceptance path is: operator points `*.<slug>.conduit.example.com` and `<slug>.conduit.example.com` at the edge via the DNS provider API at developer-onboarding time (a `provision-dev` admin command), OR runs a wildcard authoritative zone. Implement the provider-API path; document the authoritative-DNS alternative.
+- Issue **one** wildcard cert `*.<slug>.beam.example.com` **per developer**, lazily on that developer's first tunnel, via certmagic + DNS-01. Every app that developer ever exposes **reuses that one cert**. No per-app cert work, nothing on the hot path.
+- DNS has the same one-label rule. `*.beam.example.com` will NOT resolve `api.trey.beam.example.com`. The operator must run authoritative DNS for the apex (or use a provider with a true nested catch-all), so any depth resolves to the edge IP. Document this as an operator requirement. For MVP, the acceptance path is: operator points `*.<slug>.beam.example.com` and `<slug>.beam.example.com` at the edge via the DNS provider API at developer-onboarding time (a `provision-dev` admin command), OR runs a wildcard authoritative zone. Implement the provider-API path; document the authoritative-DNS alternative.
 
 ## 6. Architecture
 
@@ -72,7 +72,7 @@ Therefore:
 [ local app :3001 ]
         ▲
         │ loopback
-[ conduit client/daemon ]  ──(:443, ALPN "conduit/1", yamux)──▶  [ conduit edge server ]
+[ beam client/daemon ]  ──(:443, ALPN "beam/1", yamux)──▶  [ beamd edge server ]
    - local control API                                   - :443 public ingress
    - CLI wraps it                                         - TLS term (certmagic)
    - reconnect + re-register                              - host-based routing table
@@ -89,8 +89,8 @@ Therefore:
 
 ```
 /cmd
-  /conduit          # client CLI + daemon (single binary, subcommands)
-  /conduitd         # edge server binary
+  /beam          # client CLI + daemon (single binary, subcommands)
+  /beamd         # edge server binary
 /internal
   /proto            # control message types + (de)serialization
   /mux              # yamux setup/helpers (client + server side)
@@ -117,8 +117,8 @@ Client → Server:
 - `heartbeat` `{ "type":"heartbeat" }` (every 20s)
 
 Server → Client:
-- `hello_ok` `{ "type":"hello_ok", "slug":"trey", "base_domain":"conduit.example.com" }`
-- `registered` `{ "type":"registered", "name":"api", "url":"https://api.trey.conduit.example.com" }`
+- `hello_ok` `{ "type":"hello_ok", "slug":"trey", "base_domain":"beam.example.com" }`
+- `registered` `{ "type":"registered", "name":"api", "url":"https://api.trey.beam.example.com" }`
 - `error` `{ "type":"error", "code":"...", "message":"..." }` (codes: `bad_token`, `name_taken`, `invalid_name`, `over_limit`, `internal`)
 
 Rules:
@@ -135,10 +135,10 @@ Rules:
 
 ## 10. Client daemon + CLI
 
-The client runs a background daemon exposing an HTTP API over a **unix domain socket** (default `~/.conduit/daemon.sock`, mode `0600`; named pipe `\\.\pipe\conduit-daemon-<user>` on Windows). The CLI is a thin wrapper so an agent can use either the CLI, raw HTTP-over-socket, or the MCP server below. File-system permissions enforce single-user access — no in-band auth needed.
+The client runs a background daemon exposing an HTTP API over a **unix domain socket** (default `~/.beam/daemon.sock`, mode `0600`; named pipe `\\.\pipe\beam-daemon-<user>` on Windows). The CLI is a thin wrapper so an agent can use either the CLI, raw HTTP-over-socket, or the MCP server below. File-system permissions enforce single-user access — no in-band auth needed.
 
 Local API:
-- `POST /expose` `{ "port":3001, "name":"api" }` → `200 { "url":"https://api.trey.conduit.example.com" }` — **blocks until the URL is live (registered + control conn healthy), then returns.** This synchronous return is the core UX; do not make it fire-and-forget.
+- `POST /expose` `{ "port":3001, "name":"api" }` → `200 { "url":"https://api.trey.beam.example.com" }` — **blocks until the URL is live (registered + control conn healthy), then returns.** This synchronous return is the core UX; do not make it fire-and-forget.
 - `POST /unexpose` `{ "name":"api" }` → `200`
 - `GET /list` → `[ { "name":"api","port":3001,"url":"...","healthy":true } ]`
 - `GET /healthz`
@@ -152,20 +152,20 @@ Local API:
 This is the primary integration surface for AI agents — they get a discoverable, typed tool list instead of constructing CLI invocations or HTTP calls. The MCP tools are thin wrappers over the local API; both stay in sync by construction. Discoverability via the MCP tool schema is the point: the agent learns "I have an `expose_port` tool" the same way it learns about file_edit or bash.
 
 CLI:
-- `conduit login --server conduitd.example.com --token <t>` (writes `~/.conduit/config`)
-- `conduit expose 3001 [--as api]` → prints URL on success (exit 0), error on stderr (exit nonzero). One line of stdout = the URL, nothing else, so agents can capture it.
-- `conduit list`
-- `conduit unexpose api`
+- `beam login --server beam.example.com --token <t>` (writes `~/.beam/config`)
+- `beam expose 3001 [--as api]` → prints URL on success (exit 0), error on stderr (exit nonzero). One line of stdout = the URL, nothing else, so agents can capture it.
+- `beam list`
+- `beam unexpose api`
 - The first `expose` auto-starts the daemon if not running.
 
 Reconnect: exponential backoff (e.g., 0.5s → max 30s, jittered). While disconnected, `/list` marks entries `healthy:false`; on reconnect, replay registrations, flip back to healthy. Never drop a mapping due to a transient disconnect.
 
 ## 11. Server config
 
-`conduitd` config (file + env override):
+`beamd` config (file + env override):
 
 ```
-base_domain:        conduit.example.com
+base_domain:        beam.example.com
 edge_ipv4:          1.2.3.4            # A target written by `provision-dev`
 edge_ipv6:          2001:db8::1        # AAAA target (optional)
 listen_https:       :443               # public ingress AND client control (ALPN-demuxed)
@@ -173,11 +173,11 @@ acme_email:         ops@example.com
 acme_ca:            (default LE prod; allow staging for tests)
 dns_provider:       cloudflare              # any compiled-in libdns provider; see README for list
 dns_provider_creds: <from env/secret>      # provider-specific (e.g. CLOUDFLARE_API_TOKEN with Zone:DNS:Edit)
-token_store:        file:/etc/conduit/tokens.json   # {token: slug} for MVP
+token_store:        file:/etc/beamd/tokens.json   # {token: slug} for MVP
 max_tunnels_per_token: 25
 ```
 
-Admin command: `conduitd provision-dev --slug trey` → ensures DNS records (`*.trey.<base>` and `trey.<base>` → edge IP) exist via the provider, and pre-warms the cert. Idempotent.
+Admin command: `beamd provision-dev --slug trey` → ensures DNS records (`*.trey.<base>` and `trey.<base>` → edge IP) exist via the provider, and pre-warms the cert. Idempotent.
 
 ## 12. Security & abuse (MVP-level only)
 
@@ -198,7 +198,7 @@ Admin command: `conduitd provision-dev --slug trey` → ensures DNS records (`*.
 
 Build in this order. Each milestone has a concrete, testable "done."
 
-**M0 — Skeleton.** Repo layout, both binaries compile and run, config loads. *Done:* `conduitd` and `conduit` start and print version/health.
+**M0 — Skeleton.** Repo layout, both binaries compile and run, config loads. *Done:* `beamd` and `beam` start and print version/health.
 
 **M1 — End-to-end single tunnel, hardcoded.** One client, one app, HTTP only, one hardcoded hostname, ACME staging or self-signed. No mux yet (single connection = single tunnel is fine here). *Done:* `curl https://hardcoded.host` returns content served by a local `:3001` dummy app, through the system.
 
@@ -208,13 +208,13 @@ Build in this order. Each milestone has a concrete, testable "done."
 
 **M4 — Real certs, per-dev wildcard via DNS-01.** certmagic + DNS provider; one wildcard cert per slug, reused across that slug's apps; `provision-dev` admin command. *Done:* fresh slug, first `expose` triggers issuance of `*.<slug>.<base>`, second app under same slug serves over TLS with **no new issuance** (assert issuance count == 1).
 
-**M5 — Client daemon, local API, MCP server, CLI, reconnect.** Synchronous `/expose`, MCP stdio server exposing `expose_port`/`unexpose`/`list_tunnels`, CLI wrapping, auto-start daemon, exponential-backoff reconnect with registration replay. *Done:* `conduit expose 3001 --as api` prints a working URL and exits 0; an MCP client invoking `expose_port(3001, "api")` returns the same URL for the same inputs; killing the edge for 10s then restoring it restores all tunnels with unchanged URLs and no client restart.
+**M5 — Client daemon, local API, MCP server, CLI, reconnect.** Synchronous `/expose`, MCP stdio server exposing `expose_port`/`unexpose`/`list_tunnels`, CLI wrapping, auto-start daemon, exponential-backoff reconnect with registration replay. *Done:* `beam expose 3001 --as api` prints a working URL and exits 0; an MCP client invoking `expose_port(3001, "api")` returns the same URL for the same inputs; killing the edge for 10s then restoring it restores all tunnels with unchanged URLs and no client restart.
 
 **M6 — Hardening.** Token/slug auth enforcement, per-token cap, bandwidth counters, metrics, structured logs, graceful shutdown. *Done:* auth boundary cannot be bypassed by a forged slug; metrics and byte counters populate; clean shutdown drains and triggers client reconnect.
 
 ## 15. Definition of done (v1)
 
-A developer self-hosts `conduitd` against their domain and DNS provider, runs `conduitd provision-dev --slug trey` once, then on their laptop (which can drop network) runs `conduit expose 3001 --as api` and immediately gets `https://api.trey.conduit.example.com` serving their local app over valid TLS. They can `expose` several more apps instantly with no extra setup, each on its own subdomain, all over one connection, all surviving a network blip. An AI agent can do the identical thing by calling `expose_port` on the daemon's MCP server (or the local HTTP API) and reading the returned URL.
+A developer self-hosts `beamd` against their domain and DNS provider, runs `beamd provision-dev --slug trey` once, then on their laptop (which can drop network) runs `beam expose 3001 --as api` and immediately gets `https://api.trey.beam.example.com` serving their local app over valid TLS. They can `expose` several more apps instantly with no extra setup, each on its own subdomain, all over one connection, all surviving a network blip. An AI agent can do the identical thing by calling `expose_port` on the daemon's MCP server (or the local HTTP API) and reading the returned URL.
 
 ## 16. Reference implementations to study (do not copy licenses blindly; study architecture)
 
@@ -228,10 +228,10 @@ A developer self-hosts `conduitd` against their domain and DNS provider, runs `c
 **Resolved:**
 
 - **DNS provider abstraction:** the `libdns` interface, with multiple providers compiled into the OSS binary. Cloudflare is the reference/test target because its libdns module is the most mature, but the binary ships with several (Cloudflare, Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi to start; README has the live list). Operators pick via `dns_provider:` config; adding a new provider is a single PR.
-- **Daemon transport:** unix socket with mode `0600` at `~/.conduit/daemon.sock` (named pipe with equivalent ACL on Windows). FS permissions enforce single-user access; no in-band auth.
-- **Control transport:** TLS on :443 with ALPN demux (`conduit/1`), not a separate port — see §5. Eliminates the "client behind locked-down network" failure mode.
+- **Daemon transport:** unix socket with mode `0600` at `~/.beam/daemon.sock` (named pipe with equivalent ACL on Windows). FS permissions enforce single-user access; no in-band auth.
+- **Control transport:** TLS on :443 with ALPN demux (`beam/1`), not a separate port — see §5. Eliminates the "client behind locked-down network" failure mode.
 
-- **Token issuance: both flows ship in v1.** *Copy-paste* (`conduit login --server <url> --token <t>`) is the default for self-hosted OSS — operator edits `tokens.json`, hands the developer the token over Slack/email, developer pastes. *Device-code* (`conduit login --server <url>` → CLI prints URL + short code → developer confirms in a browser → CLI polls and writes the token) ships alongside, optional. The device-code wire endpoints (`/v1/device/code`, `/v1/device/token`) live in conduitd; the *confirmer backend* (who can approve which slug and how they sign in) is pluggable — OSS ships a basic operator-approves-from-terminal confirmer, hosted swaps in OIDC/magic-link.
+- **Token issuance: both flows ship in v1.** *Copy-paste* (`beam login --server <url> --token <t>`) is the default for self-hosted OSS — operator edits `tokens.json`, hands the developer the token over Slack/email, developer pastes. *Device-code* (`beam login --server <url>` → CLI prints URL + short code → developer confirms in a browser → CLI polls and writes the token) ships alongside, optional. The device-code wire endpoints (`/v1/device/code`, `/v1/device/token`) live in beamd; the *confirmer backend* (who can approve which slug and how they sign in) is pluggable — OSS ships a basic operator-approves-from-terminal confirmer, hosted swaps in OIDC/magic-link.
 
 **Deferred:**
 

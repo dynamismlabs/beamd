@@ -58,7 +58,7 @@ func NewFileStore(path string) (*FileStore, error) {
 //   - "memory:"         — empty in-memory store (mostly for tests)
 //   - "http(s)://..."   — call out to a remote verify endpoint (hosted).
 //                         The shared secret must be set in the
-//                         `CONDUIT_AUTH_VERIFY_SECRET` env var.
+//                         `BEAMD_AUTH_VERIFY_SECRET` env var.
 func Open(spec string) (Store, error) {
 	switch {
 	case strings.HasPrefix(spec, "file:"):
@@ -66,9 +66,9 @@ func Open(spec string) (Store, error) {
 	case spec == "memory:":
 		return NewMemoryStore(nil), nil
 	case strings.HasPrefix(spec, "http://"), strings.HasPrefix(spec, "https://"):
-		secret := os.Getenv("CONDUIT_AUTH_VERIFY_SECRET")
+		secret := os.Getenv("BEAMD_AUTH_VERIFY_SECRET")
 		if secret == "" {
-			return nil, fmt.Errorf("http token_store requires CONDUIT_AUTH_VERIFY_SECRET env var")
+			return nil, fmt.Errorf("http token_store requires BEAMD_AUTH_VERIFY_SECRET env var")
 		}
 		return NewHTTPStore(spec, secret), nil
 	default:

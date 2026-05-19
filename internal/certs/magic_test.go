@@ -24,7 +24,7 @@ func (stubProvider) DeleteRecords(ctx context.Context, zone string, recs []libdn
 func TestNewMagicManager_Construction(t *testing.T) {
 	dir := t.TempDir()
 	m, err := NewMagicManager(MagicConfig{
-		BaseDomain:  "conduit.example.com",
+		BaseDomain:  "beam.example.com",
 		ACMEEmail:   "ops@example.com",
 		ACMECA:      "https://acme-staging-v02.api.letsencrypt.org/directory",
 		DNSProvider: stubProvider{},

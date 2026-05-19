@@ -1,13 +1,13 @@
-// conduit-testapp is a small HTTP server you run locally to verify
-// your conduit deployment. Expose it through a tunnel and curl its
+// beam-testapp is a small HTTP server you run locally to verify
+// your beam deployment. Expose it through a tunnel and curl its
 // routes to confirm the proxy is healthy end-to-end.
 //
 // Usage:
 //
-//	conduit-testapp                # listen on :8765
-//	conduit-testapp --port 3001    # custom port
+//	beam-testapp                # listen on :8765
+//	beam-testapp --port 3001    # custom port
 //
-// Pair with `conduit expose 8765 --as test` and curl the resulting URL.
+// Pair with `beam expose 8765 --as test` and curl the resulting URL.
 package main
 
 import (
@@ -38,8 +38,8 @@ func main() {
 	mux.HandleFunc("/sse", handleSSE)
 
 	addr := fmt.Sprintf(":%d", *port)
-	log.Printf("conduit-testapp listening on %s", addr)
-	log.Printf("expose with:  conduit expose %d --as test", *port)
+	log.Printf("beam-testapp listening on %s", addr)
+	log.Printf("expose with:  beam expose %d --as test", *port)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	host, _ := os.Hostname()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, `conduit-testapp
+	fmt.Fprintf(w, `beam-testapp
 ===============
 
 backend hostname:      %s

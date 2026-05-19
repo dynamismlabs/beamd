@@ -1,8 +1,8 @@
 # Hosted mode — building the web app side
 
-Conduitd has hooks for "hosted mode": a web app issues and revokes
+Beamd has hooks for "hosted mode": a web app issues and revokes
 tokens, owns the customer dashboard, runs the device-code login flow,
-and receives usage events for billing. Conduitd itself stays stateless
+and receives usage events for billing. Beamd itself stays stateless
 — it just validates tokens against your web app on each connection.
 
 This doc specifies **what your web app has to expose** for those hooks
@@ -20,8 +20,8 @@ the OSS happy path from [`setup.md`](setup.md).
 
 ```
                                   ┌──────────────────────────────┐
-[ developer's CLI ] ── :443 ──▶  │         conduitd             │
-   `conduit expose 3001`         │  (one or more droplets)      │
+[ developer's CLI ] ── :443 ──▶  │         beamd             │
+   `beam expose 3001`         │  (one or more droplets)      │
                                   │                              │
                                   │  - terminates TLS            │
                                   │  - routes by Host header     │
@@ -50,21 +50,21 @@ the OSS happy path from [`setup.md`](setup.md).
                                   └──────────────────────────────┘
 ```
 
-Authoritative source of state is **your web app's Postgres**. Conduitd
+Authoritative source of state is **your web app's Postgres**. Beamd
 caches token lookups for ~60s and otherwise holds no user data.
 
 ---
 
 ## 2. Endpoints your web app must expose
 
-Four HTTP endpoints, all called by conduitd. None are user-facing.
+Four HTTP endpoints, all called by beamd. None are user-facing.
 
 | Endpoint | Caller | Purpose |
 |---|---|---|
-| `POST /api/internal/verify-token` | conduitd, per session | Resolve a bearer token to a slug |
-| `POST /api/device/code` | conduit CLI, once per login | Issue a device + user code |
-| `POST /api/device/token` | conduit CLI, polling | Return the token once the user approves |
-| `POST /api/internal/usage` | conduitd, every 60s | Receive per-slug byte/tunnel deltas for billing |
+| `POST /api/internal/verify-token` | beamd, per session | Resolve a bearer token to a slug |
+| `POST /api/device/code` | beam CLI, once per login | Issue a device + user code |
+| `POST /api/device/token` | beam CLI, polling | Return the token once the user approves |
+| `POST /api/internal/usage` | beamd, every 60s | Receive per-slug byte/tunnel deltas for billing |
 
 Plus one user-facing page:
 
@@ -72,9 +72,9 @@ Plus one user-facing page:
 |---|---|---|
 | `GET /device` | developer's browser | Enter the user code + sign in + approve |
 
-Conduitd is configured to call these via `auth_discovery:` and
-`usage_reporter:` in `conduitd.yaml`. See
-[`example/conduitd.yaml`](../example/conduitd.yaml) for the full
+Beamd is configured to call these via `auth_discovery:` and
+`usage_reporter:` in `beamd.yaml`. See
+[`example/beamd.yaml`](../example/beamd.yaml) for the full
 shape.
 
 ---
@@ -82,7 +82,7 @@ shape.
 ### 2.1 `POST /api/internal/verify-token`
 
 Wire contract is defined in [`internal/auth/http_store.go`](../internal/auth/http_store.go).
-This is the **hot path** — called by conduitd whenever a client
+This is the **hot path** — called by beamd whenever a client
 connects (or its 60s cache misses). Keep it cheap: a single indexed
 query on a hashed token column.
 
@@ -93,7 +93,7 @@ POST /api/internal/verify-token
 Authorization: Bearer <shared secret>
 Content-Type: application/json
 
-{"token": "<the conduit bearer token>"}
+{"token": "<the beam bearer token>"}
 ```
 
 **Response (valid token):**
@@ -110,7 +110,7 @@ Content-Type: application/json
 {"slug": ""}
 ```
 
-(Or `404` — conduitd treats both as "reject".)
+(Or `404` — beamd treats both as "reject".)
 
 **Response (bad shared secret or transient error):**
 
@@ -118,16 +118,16 @@ Content-Type: application/json
 401 / 500 / network error
 ```
 
-Conduitd treats anything non-2xx as a transient failure: the result is
+Beamd treats anything non-2xx as a transient failure: the result is
 **not** cached, and validation fails closed (deny). So make sure your
 endpoint is genuinely healthy when it's healthy — don't 500 on benign
 errors.
 
-**Shared secret.** Set `CONDUIT_AUTH_VERIFY_SECRET=<long random>` on
-conduitd and the same value on your web app. Reject calls without
+**Shared secret.** Set `BEAMD_AUTH_VERIFY_SECRET=<long random>` on
+beamd and the same value on your web app. Reject calls without
 matching `Authorization: Bearer ...`.
 
-**Cache implications.** Conduitd caches positive results for 60s,
+**Cache implications.** Beamd caches positive results for 60s,
 negatives for 5s. A revoked token may keep working for up to ~60s
 after revocation. Tune `defaultHTTPStoreTTL` if you need tighter
 revocation latency.
@@ -247,7 +247,7 @@ UX:
    types `ABCD-1234`.
 3. Look up the `device_codes` row by `user_code`. If missing,
    expired, or already-consumed, show an error.
-4. Show a confirm screen: "Approve **conduit** to act as your
+4. Show a confirm screen: "Approve **beam** to act as your
    workspace **trey**? (Click confirm.)" Include device fingerprint
    if you have it, IP, geolocation hint — same shape as GitHub's
    device-code flow.
@@ -271,7 +271,7 @@ token mapped to a slug whose DNS doesn't exist yet, and their first
 
 ### 2.5 `POST /api/internal/usage`
 
-Receives per-slug deltas from conduitd on a configurable interval
+Receives per-slug deltas from beamd on a configurable interval
 (default 60s). Shape from
 [`internal/usage/reporter.go`](../internal/usage/reporter.go).
 
@@ -301,17 +301,17 @@ Content-Type: application/json
   cumulative total. Insert it into a `usage_events` table directly;
   rollups are your job.
 - `active_tunnels` is a sample at `period_end`, not a delta.
-- Conduitd persists last-reported state to disk, so deltas remain
-  correct across conduitd restarts.
+- Beamd persists last-reported state to disk, so deltas remain
+  correct across beamd restarts.
 
 **Response:** `200 OK` (body ignored).
 
-**Idempotency.** Conduitd does not retry. If your endpoint returns
+**Idempotency.** Beamd does not retry. If your endpoint returns
 non-2xx the delta is **lost**. If billing accuracy matters, accept
 the request, write to a durable queue, and process asynchronously.
 
 **Shared secret.** Same model as the verify endpoint:
-`CONDUIT_USAGE_SECRET` on conduitd, matched on the receiver.
+`BEAMD_USAGE_SECRET` on beamd, matched on the receiver.
 
 ---
 
@@ -328,7 +328,7 @@ function newToken(): string {
 ```
 
 128 chars is long but the CLI never has to retype it — copy-paste
-once into `~/.conduit/config`, then it lives there. 512 bits of
+once into `~/.beam/config`, then it lives there. 512 bits of
 entropy means the search space is permanent-future-proof.
 
 **Storage:** never store raw tokens. Store SHA-256 hashes, look up by
@@ -356,11 +356,11 @@ the standard "personal access token" pattern (GitHub, Stripe, etc.).
 
 **Revocation:** set `revoked_at`. Verify queries already filter on
 `isNull(revoked_at)`. Effective propagation time: up to ~60s
-(conduitd's positive cache TTL).
+(beamd's positive cache TTL).
 
 **Rotation:** users hit "regenerate" in the dashboard → revoke old,
 mint new. UI should warn that active CLIs will lose connection
-within 60s and need `conduit login` again.
+within 60s and need `beam login` again.
 
 ---
 
@@ -372,7 +372,7 @@ issuing them a token:
 ### 4.1 Validate the slug
 
 - Lowercase ASCII, RFC 1123 label rules: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`.
-  This is enforced again server-side in conduitd
+  This is enforced again server-side in beamd
   ([`internal/naming/`](../internal/naming/)) — match it in your web
   app so users see "invalid name" client-side, not after their first
   `expose`.
@@ -387,8 +387,8 @@ issuing them a token:
 For each new slug, write two A records (and AAAA if you serve IPv6):
 
 ```
-acme.conduit.example.com       A  <edge ip>
-*.acme.conduit.example.com     A  <edge ip>
+acme.beam.example.com       A  <edge ip>
+*.acme.beam.example.com     A  <edge ip>
 ```
 
 Both are required. The wildcard alone won't cover the apex
@@ -428,17 +428,17 @@ success. Cloudflare returns code `81057` for duplicates.
 
 ### 4.3 Pre-warm the certificate (optional)
 
-Conduitd will lazily issue `*.acme.conduit.example.com` on the
+Beamd will lazily issue `*.acme.beam.example.com` on the
 workspace's first connection. The first `expose` then takes ~10s
 while ACME completes — visible to the user.
 
 To eliminate that delay, hit a hosted-mode admin endpoint on
-conduitd that triggers issuance immediately. **That endpoint does
+beamd that triggers issuance immediately. **That endpoint does
 not exist today** — see §6 "Open work."
 
 Workaround until then: have new users tolerate the first-expose
-delay, or shell out to `conduitd add-developer --slug acme` from
-your signup handler if your web app and a conduitd droplet share
+delay, or shell out to `beamd add-developer --slug acme` from
+your signup handler if your web app and a beamd droplet share
 a host (most won't).
 
 ### 4.4 Insert into Postgres
@@ -459,13 +459,13 @@ token in §3.
 
 ## 5. Multi-droplet placement
 
-The OSS deployment runs one conduitd droplet. Hosted will eventually
+The OSS deployment runs one beamd droplet. Hosted will eventually
 need more, sharded by slug.
 
 The sharding is **per-slug at provision time**: each new slug is
 permanently assigned to one droplet, and that droplet's IP is what
 goes into the slug's DNS records. The client connects to
-`<slug>.conduit.example.com:443` — which resolves to its droplet,
+`<slug>.beam.example.com:443` — which resolves to its droplet,
 where the wildcard cert lives.
 
 Placement strategy:
@@ -487,13 +487,13 @@ developer's region. Don't build this until you have customers asking.
 
 ---
 
-## 6. Open work — gaps in conduitd that hosted mode wants closed
+## 6. Open work — gaps in beamd that hosted mode wants closed
 
-These are conduitd-side changes that would make the hosted web app
+These are beamd-side changes that would make the hosted web app
 simpler. None are blockers; all are nice-to-have.
 
-- **Admin endpoint for slug provisioning.** Today `conduitd
-  add-developer --slug X` only works as a CLI on the conduitd host.
+- **Admin endpoint for slug provisioning.** Today `beamd
+  add-developer --slug X` only works as a CLI on the beamd host.
   An HTTP endpoint (`POST /admin/provision-slug`, shared-secret
   auth) would let the web app trigger DNS + cert pre-warm remotely.
   ~30 lines.
@@ -502,17 +502,17 @@ simpler. None are blockers; all are nice-to-have.
   delete the workspace, re-provision. Low priority.
 - **Multi-droplet certmagic storage.** If you ever want two droplets
   to serve the same slug for HA, certmagic needs shared storage
-  (S3-compatible). The library supports it; conduitd doesn't expose
+  (S3-compatible). The library supports it; beamd doesn't expose
   the config knob yet.
 - **Tighter token revocation latency.** Currently 60s cache. A
-  conduitd-side "token revoked" pubsub (Redis?) would drop this to
+  beamd-side "token revoked" pubsub (Redis?) would drop this to
   near-instant. Probably overkill until a customer asks.
 
 ---
 
-## 7. Configuration on the conduitd side
+## 7. Configuration on the beamd side
 
-Set these in `conduitd.yaml` on each droplet:
+Set these in `beamd.yaml` on each droplet:
 
 ```yaml
 token_store: "https://app.example.com/api/internal/verify-token"
@@ -524,22 +524,22 @@ auth_discovery:
 
 usage_reporter:
   webhook_url:      https://app.example.com/api/internal/usage
-  secret_env:       CONDUIT_USAGE_SECRET
+  secret_env:       BEAMD_USAGE_SECRET
   interval_seconds: 60
-  state_file:       /var/lib/conduit/usage-state.json
+  state_file:       /var/lib/beamd/usage-state.json
 ```
 
 And these as env vars:
 
 ```
-CONDUIT_AUTH_VERIFY_SECRET=<shared secret matching your web app>
-CONDUIT_USAGE_SECRET=<another shared secret>
-CONDUIT_DNS_PROVIDER_CREDS=<Cloudflare token, if conduitd still
+BEAMD_AUTH_VERIFY_SECRET=<shared secret matching your web app>
+BEAMD_USAGE_SECRET=<another shared secret>
+BEAMD_DNS_PROVIDER_CREDS=<Cloudflare token, if beamd still
                             writes DNS; in pure hosted mode the web
-                            app writes DNS and conduitd doesn't need it>
+                            app writes DNS and beamd doesn't need it>
 ```
 
-The CLI fetches `/.well-known/conduit-auth` on `conduit login` (no
+The CLI fetches `/.well-known/beam-auth` on `beam login` (no
 `--token`) to discover the device-code endpoints. That's handled by
 [`internal/edge/edge.go:610`](../internal/edge/edge.go) — nothing
 to wire on your end beyond setting the YAML.
@@ -622,22 +622,22 @@ working tunnel:
    - Writes Cloudflare A records.
    - Inserts `workspaces` row.
 3. Web app mints a token, stores hash, shows raw token to user once.
-4. User installs CLI, runs `conduit login --server conduit.example.com:443 --token <token>`. CLI writes config.
-5. User runs `conduit expose 3001 --as api`.
-6. Daemon dials conduitd at `:443`, ALPN `conduit/1`, sends `hello`
+4. User installs CLI, runs `beam login --server beam.example.com:443 --token <token>`. CLI writes config.
+5. User runs `beam expose 3001 --as api`.
+6. Daemon dials beamd at `:443`, ALPN `beam/1`, sends `hello`
    with the token.
-7. Conduitd POSTs `/api/internal/verify-token` → web app returns
+7. Beamd POSTs `/api/internal/verify-token` → web app returns
    `{"slug":"acme"}`. Cached 60s.
-8. Conduitd registers `api.acme.conduit.example.com` → routes to
+8. Beamd registers `api.acme.beam.example.com` → routes to
    this session.
-9. First request to that URL: conduitd issues
-   `*.acme.conduit.example.com` from Let's Encrypt via DNS-01 (~10s,
+9. First request to that URL: beamd issues
+   `*.acme.beam.example.com` from Let's Encrypt via DNS-01 (~10s,
    one-time). Subsequent connects are instant.
-10. Every 60s, conduitd POSTs `/api/internal/usage` with byte
+10. Every 60s, beamd POSTs `/api/internal/usage` with byte
     deltas. Web app inserts into `usage_events`.
 
 If you want the device-code path instead of copy-paste tokens, swap
-step 4 for `conduit login --server conduit.example.com:443` (no
-token), which fetches `/.well-known/conduit-auth`, walks the
+step 4 for `beam login --server beam.example.com:443` (no
+token), which fetches `/.well-known/beam-auth`, walks the
 device-code dance against `/api/device/code` + `/api/device/token`,
 and writes the token after browser approval.

@@ -1,4 +1,4 @@
-// Package naming validates and assembles conduit hostnames per PRD §9.
+// Package naming validates and assembles beam hostnames per PRD §9.
 package naming
 
 import (

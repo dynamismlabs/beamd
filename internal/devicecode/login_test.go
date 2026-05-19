@@ -14,7 +14,7 @@ import (
 
 func TestDiscover_OSSReturnsEmptyDiscovery(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/conduit-auth", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/.well-known/beam-auth", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("{}"))
 	})
 	srv := httptest.NewServer(mux)
@@ -31,7 +31,7 @@ func TestDiscover_OSSReturnsEmptyDiscovery(t *testing.T) {
 
 func TestDiscover_HostedReturnsURLs(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/conduit-auth", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/.well-known/beam-auth", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(Discovery{
 			DeviceCodeURL:   "https://app.example.com/api/device/code",
 			TokenURL:        "https://app.example.com/api/device/token",
@@ -140,10 +140,10 @@ func TestLogin_AccessDeniedFailsImmediately(t *testing.T) {
 
 func TestNormalizeDiscoveryURL(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"tunnel.example.com:443", "https://tunnel.example.com:443/.well-known/conduit-auth"},
-		{"tunnel.example.com", "https://tunnel.example.com:443/.well-known/conduit-auth"},
-		{"https://tunnel.example.com", "https://tunnel.example.com/.well-known/conduit-auth"},
-		{"http://localhost:8443", "http://localhost:8443/.well-known/conduit-auth"},
+		{"tunnel.example.com:443", "https://tunnel.example.com:443/.well-known/beam-auth"},
+		{"tunnel.example.com", "https://tunnel.example.com:443/.well-known/beam-auth"},
+		{"https://tunnel.example.com", "https://tunnel.example.com/.well-known/beam-auth"},
+		{"http://localhost:8443", "http://localhost:8443/.well-known/beam-auth"},
 	}
 	for _, c := range cases {
 		if got := normalizeDiscoveryURL(c.in); got != c.want {

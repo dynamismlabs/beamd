@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/treyhuffine/conduit/internal/client"
+	"github.com/treyhuffine/beamd/internal/client"
 )
 
 // Daemon wraps a long-lived *client.Client behind a loopback HTTP API

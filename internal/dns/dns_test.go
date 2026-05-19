@@ -26,11 +26,11 @@ func TestProvisionSlug_StubWritesExpectedRecords(t *testing.T) {
 	p := NewStubProvider()
 	ctx := context.Background()
 
-	if err := ProvisionSlug(ctx, p, "conduit.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
+	if err := ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
 		t.Fatalf("ProvisionSlug: %v", err)
 	}
 
-	got := p.Records("conduit.example.com")
+	got := p.Records("beam.example.com")
 	if len(got) != 4 {
 		t.Fatalf("got %d records, want 4 (apex + wildcard for v4 + v6)", len(got))
 	}
@@ -62,14 +62,14 @@ func TestProvisionSlug_Idempotent(t *testing.T) {
 	p := NewStubProvider()
 	ctx := context.Background()
 
-	if err := ProvisionSlug(ctx, p, "conduit.example.com", "trey", "1.2.3.4", ""); err != nil {
+	if err := ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", ""); err != nil {
 		t.Fatal(err)
 	}
-	first := len(p.Records("conduit.example.com"))
-	if err := ProvisionSlug(ctx, p, "conduit.example.com", "trey", "1.2.3.4", ""); err != nil {
+	first := len(p.Records("beam.example.com"))
+	if err := ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", ""); err != nil {
 		t.Fatal(err)
 	}
-	second := len(p.Records("conduit.example.com"))
+	second := len(p.Records("beam.example.com"))
 	if first != second {
 		t.Errorf("idempotent provision changed record count: %d → %d", first, second)
 	}
@@ -80,16 +80,16 @@ func TestStubProvider_AppendThenDelete(t *testing.T) {
 	ctx := context.Background()
 
 	a := libdns.TXT{Name: "_acme-challenge.trey", Text: "challenge-1"}
-	if _, err := p.AppendRecords(ctx, "conduit.example.com", []libdns.Record{a}); err != nil {
+	if _, err := p.AppendRecords(ctx, "beam.example.com", []libdns.Record{a}); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(p.Records("conduit.example.com")); got != 1 {
+	if got := len(p.Records("beam.example.com")); got != 1 {
 		t.Fatalf("after append got %d records", got)
 	}
-	if _, err := p.DeleteRecords(ctx, "conduit.example.com", []libdns.Record{a}); err != nil {
+	if _, err := p.DeleteRecords(ctx, "beam.example.com", []libdns.Record{a}); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(p.Records("conduit.example.com")); got != 0 {
+	if got := len(p.Records("beam.example.com")); got != 0 {
 		t.Fatalf("after delete got %d records", got)
 	}
 }

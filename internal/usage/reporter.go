@@ -1,10 +1,10 @@
 // Package usage pushes per-slug usage deltas (bytes proxied, requests,
 // active tunnels) to a configurable webhook on an interval. The hosted
-// conduitd wires this at the web app's billing endpoint; OSS leaves
+// beamd wires this at the web app's billing endpoint; OSS leaves
 // it unset and exposes the same data at `/metrics` for Prometheus.
 //
 // The reporter sends DELTAS rather than cumulative totals so a
-// conduitd restart doesn't double-count, and persists the
+// beamd restart doesn't double-count, and persists the
 // "last reported" state to disk so deltas are correct across restarts.
 package usage
 

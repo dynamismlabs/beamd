@@ -1,4 +1,4 @@
-module github.com/treyhuffine/conduit
+module github.com/treyhuffine/beamd
 
 go 1.25.0
 

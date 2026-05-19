@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/treyhuffine/conduit/internal/client"
-	"github.com/treyhuffine/conduit/internal/config"
-	"github.com/treyhuffine/conduit/internal/daemon"
-	"github.com/treyhuffine/conduit/internal/devicecode"
+	"github.com/treyhuffine/beamd/internal/client"
+	"github.com/treyhuffine/beamd/internal/config"
+	"github.com/treyhuffine/beamd/internal/daemon"
+	"github.com/treyhuffine/beamd/internal/devicecode"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".
@@ -54,10 +54,10 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: conduit <command> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: beam <command> [flags]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  login           authenticate against a conduitd server")
+	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd server")
 	fmt.Fprintln(os.Stderr, "  expose          expose a local port as a public URL")
 	fmt.Fprintln(os.Stderr, "  list            list active tunnels")
 	fmt.Fprintln(os.Stderr, "  unexpose        remove a tunnel")
@@ -81,7 +81,7 @@ func defaultConfigPath() string {
 
 func loginCmd(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	server := fs.String("server", "", "conduit edge address, e.g. conduitd.example.com:443")
+	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com:443")
 	token := fs.String("token", "", "bearer token (copy-paste flow); omit for device-code login")
 	insecure := fs.Bool("insecure", false, "skip TLS verification for the discovery + device-code calls (dev/self-signed setups)")
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
@@ -115,7 +115,7 @@ func loginCmd(args []string) {
 	fmt.Println("logged in")
 }
 
-// deviceCodeLogin runs the no-token login flow: ask conduitd for its
+// deviceCodeLogin runs the no-token login flow: ask beamd for its
 // discovery payload, then do the device-code dance against whatever
 // web app the operator pointed it at. Returns the issued token.
 func deviceCodeLogin(server string, insecure bool) (string, error) {
@@ -137,7 +137,7 @@ func deviceCodeLogin(server string, insecure bool) (string, error) {
 	}
 	if disc == nil {
 		return "", fmt.Errorf(
-			"this server does not advertise device-code login.\n  → pass --token <T> instead (your operator can issue one with `conduitd add-developer`)",
+			"this server does not advertise device-code login.\n  → pass --token <T> instead (your operator can issue one with `beamd add-developer`)",
 		)
 	}
 	return devicecode.Login(ctx, hc, disc, os.Stderr)
@@ -150,7 +150,7 @@ func exposeCmd(args []string) {
 	_ = fs.Parse(args)
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: conduit expose <port> [--as name]")
+		fmt.Fprintln(os.Stderr, "usage: beam expose <port> [--as name]")
 		os.Exit(2)
 	}
 	port, err := strconv.Atoi(fs.Arg(0))
@@ -208,7 +208,7 @@ func unexposeCmd(args []string) {
 	_ = fs.Parse(args)
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: conduit unexpose <name>")
+		fmt.Fprintln(os.Stderr, "usage: beam unexpose <name>")
 		os.Exit(2)
 	}
 	name := fs.Arg(0)
@@ -232,7 +232,7 @@ func mustLoadConfig(path string) *config.Client {
 		os.Exit(1)
 	}
 	if cfg.Server == "" || cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "missing server or token — run `conduit login` first")
+		fmt.Fprintln(os.Stderr, "missing server or token — run `beam login` first")
 		os.Exit(2)
 	}
 	return cfg
@@ -247,7 +247,7 @@ func ensureDaemon(cfg *config.Client, configPath string) *daemon.LocalClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := daemon.EnsureRunning(ctx, exe, cfg.DaemonSocket, []string{
-		"CONDUIT_CONFIG=" + configPath,
+		"BEAMD_CONFIG=" + configPath,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "daemon not available:", err)
 		os.Exit(1)
@@ -258,7 +258,7 @@ func ensureDaemon(cfg *config.Client, configPath string) *daemon.LocalClient {
 func daemonCmd(args []string) {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	socket := fs.String("socket", "", "unix socket path")
-	configPath := fs.String("config", os.Getenv("CONDUIT_CONFIG"), "client config path")
+	configPath := fs.String("config", os.Getenv("BEAMD_CONFIG"), "client config path")
 	_ = fs.Parse(args)
 
 	if *configPath == "" {
@@ -278,7 +278,7 @@ func daemonCmd(args []string) {
 		os.Exit(1)
 	}
 	if cfg.Server == "" || cfg.Token == "" {
-		slog.Error("missing server or token; run `conduit login` first")
+		slog.Error("missing server or token; run `beam login` first")
 		os.Exit(1)
 	}
 	if *socket == "" {
@@ -315,5 +315,5 @@ func defaultDaemonLogPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".conduit", "daemon.log"), nil
+	return filepath.Join(home, ".beam", "daemon.log"), nil
 }

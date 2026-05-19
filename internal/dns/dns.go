@@ -17,7 +17,7 @@ import (
 	"github.com/libdns/libdns"
 )
 
-// Provider is the abstraction every conduit DNS adapter implements.
+// Provider is the abstraction every beam DNS adapter implements.
 // We deliberately use libdns's existing interfaces — provider authors
 // only need to satisfy libdns to plug in.
 type Provider interface {

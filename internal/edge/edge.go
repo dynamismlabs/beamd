@@ -1,4 +1,4 @@
-// Package edge implements the public ingress for conduitd.
+// Package edge implements the public ingress for beamd.
 //
 // M3: TLS listener with ALPN demux. Client control connections speak
 // the NDJSON protocol from PRD §8 on a dedicated yamux stream (the
@@ -24,16 +24,16 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/treyhuffine/conduit/internal/auth"
-	"github.com/treyhuffine/conduit/internal/certs"
-	"github.com/treyhuffine/conduit/internal/config"
-	"github.com/treyhuffine/conduit/internal/mux"
-	"github.com/treyhuffine/conduit/internal/naming"
-	"github.com/treyhuffine/conduit/internal/proto"
-	"github.com/treyhuffine/conduit/internal/usage"
+	"github.com/treyhuffine/beamd/internal/auth"
+	"github.com/treyhuffine/beamd/internal/certs"
+	"github.com/treyhuffine/beamd/internal/config"
+	"github.com/treyhuffine/beamd/internal/mux"
+	"github.com/treyhuffine/beamd/internal/naming"
+	"github.com/treyhuffine/beamd/internal/proto"
+	"github.com/treyhuffine/beamd/internal/usage"
 )
 
-const ALPNConduit = "conduit/1"
+const ALPNBeam = "beam/1"
 
 type Edge struct {
 	cfg     *config.Server
@@ -102,7 +102,7 @@ func (e *Edge) SetHeartbeatTimeout(d time.Duration) {
 func (e *Edge) Serve() error {
 	tlsCfg := &tls.Config{
 		GetCertificate: e.certs.GetCertificate,
-		NextProtos:     []string{ALPNConduit, "h2", "http/1.1"},
+		NextProtos:     []string{ALPNBeam, "h2", "http/1.1"},
 	}
 
 	ln, err := tls.Listen("tcp", e.cfg.ListenHTTPS, tlsCfg)
@@ -268,7 +268,7 @@ func (e *Edge) handle(c net.Conn) {
 	}
 
 	switch tlsConn.ConnectionState().NegotiatedProtocol {
-	case ALPNConduit:
+	case ALPNBeam:
 		e.handleClient(c)
 	default:
 		e.handlePublic(c)
@@ -557,7 +557,7 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	case "/metrics":
 		e.handleMetrics(w, r)
 		return
-	case "/.well-known/conduit-auth":
+	case "/.well-known/beam-auth":
 		e.handleAuthDiscovery(w, r)
 		return
 	}
@@ -604,7 +604,7 @@ func (e *Edge) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuthDiscovery returns the device-code endpoints the hosted
-// web app exposes, so `conduit login` (no-token mode) knows where to
+// web app exposes, so `beam login` (no-token mode) knows where to
 // run the browser-based flow. In OSS deployments these fields are
 // empty and the CLI falls back to requiring --token.
 func (e *Edge) handleAuthDiscovery(w http.ResponseWriter, r *http.Request) {

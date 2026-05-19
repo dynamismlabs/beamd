@@ -1,5 +1,5 @@
 // Package mcp implements a Model Context Protocol stdio server that
-// wraps the conduit daemon's local HTTP API. Tools exposed:
+// wraps the beam daemon's local HTTP API. Tools exposed:
 //   - expose_port(port, name?)
 //   - unexpose(name)
 //   - list_tunnels()
@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/treyhuffine/conduit/internal/daemon"
+	"github.com/treyhuffine/beamd/internal/daemon"
 )
 
 const ProtocolVersion = "2024-11-05"
@@ -112,7 +112,7 @@ func tools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        "expose_port",
-			"description": "Expose a locally-running app on the given port as a public HTTPS URL via Conduit. Returns the URL synchronously.",
+			"description": "Expose a locally-running app on the given port as a public HTTPS URL via Beamd. Returns the URL synchronously.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

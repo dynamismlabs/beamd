@@ -48,17 +48,17 @@ func (m *metrics) recordRequest(status int, bytes int64, slug string) {
 // writeText emits the Prometheus text exposition format. certIssuance
 // is passed in because it lives on certs.Manager.
 func (m *metrics) writeText(w io.Writer, certIssuance int64) {
-	fmt.Fprintln(w, "# HELP conduit_active_sessions Number of currently connected client sessions.")
-	fmt.Fprintln(w, "# TYPE conduit_active_sessions gauge")
-	fmt.Fprintf(w, "conduit_active_sessions %d\n", m.activeSessions.Load())
+	fmt.Fprintln(w, "# HELP beam_active_sessions Number of currently connected client sessions.")
+	fmt.Fprintln(w, "# TYPE beam_active_sessions gauge")
+	fmt.Fprintf(w, "beam_active_sessions %d\n", m.activeSessions.Load())
 
-	fmt.Fprintln(w, "# HELP conduit_active_tunnels Number of currently registered tunnels.")
-	fmt.Fprintln(w, "# TYPE conduit_active_tunnels gauge")
-	fmt.Fprintf(w, "conduit_active_tunnels %d\n", m.activeTunnels.Load())
+	fmt.Fprintln(w, "# HELP beam_active_tunnels Number of currently registered tunnels.")
+	fmt.Fprintln(w, "# TYPE beam_active_tunnels gauge")
+	fmt.Fprintf(w, "beam_active_tunnels %d\n", m.activeTunnels.Load())
 
-	fmt.Fprintln(w, "# HELP conduit_cert_issuance_total Total certs ever issued by the cert manager.")
-	fmt.Fprintln(w, "# TYPE conduit_cert_issuance_total counter")
-	fmt.Fprintf(w, "conduit_cert_issuance_total %d\n", certIssuance)
+	fmt.Fprintln(w, "# HELP beam_cert_issuance_total Total certs ever issued by the cert manager.")
+	fmt.Fprintln(w, "# TYPE beam_cert_issuance_total counter")
+	fmt.Fprintf(w, "beam_cert_issuance_total %d\n", certIssuance)
 
 	m.mu.Lock()
 	statuses := make([]int, 0, len(m.requestsByStatus))
@@ -82,16 +82,16 @@ func (m *metrics) writeText(w io.Writer, certIssuance int64) {
 	}
 	m.mu.Unlock()
 
-	fmt.Fprintln(w, "# HELP conduit_requests_total Total public requests served, by status code.")
-	fmt.Fprintln(w, "# TYPE conduit_requests_total counter")
+	fmt.Fprintln(w, "# HELP beam_requests_total Total public requests served, by status code.")
+	fmt.Fprintln(w, "# TYPE beam_requests_total counter")
 	for _, s := range statuses {
-		fmt.Fprintf(w, "conduit_requests_total{status=\"%d\"} %d\n", s, statusCounts[s])
+		fmt.Fprintf(w, "beam_requests_total{status=\"%d\"} %d\n", s, statusCounts[s])
 	}
 
-	fmt.Fprintln(w, "# HELP conduit_bytes_proxied_total Total response bytes proxied, by slug.")
-	fmt.Fprintln(w, "# TYPE conduit_bytes_proxied_total counter")
+	fmt.Fprintln(w, "# HELP beam_bytes_proxied_total Total response bytes proxied, by slug.")
+	fmt.Fprintln(w, "# TYPE beam_bytes_proxied_total counter")
 	for _, s := range slugs {
-		fmt.Fprintf(w, "conduit_bytes_proxied_total{slug=\"%s\"} %d\n", s, bytesCounts[s])
+		fmt.Fprintf(w, "beam_bytes_proxied_total{slug=\"%s\"} %d\n", s, bytesCounts[s])
 	}
 }
 

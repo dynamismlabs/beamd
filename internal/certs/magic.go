@@ -40,7 +40,7 @@ type MagicConfig struct {
 
 	// EagerNames are managed (and issued if needed) at construction
 	// time. Typically the operator's apex (`base_domain`) so the edge
-	// can serve `/healthz`, `/metrics`, and `/.well-known/conduit-auth`
+	// can serve `/healthz`, `/metrics`, and `/.well-known/beam-auth`
 	// with a real cert — the per-slug wildcard doesn't cover the apex.
 	EagerNames []string
 }

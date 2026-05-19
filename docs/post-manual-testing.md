@@ -5,7 +5,7 @@ in your browser. This doc is the playbook for everything after that:
 catch bugs, tag a release, plug remaining test gaps, decide what's next.
 
 Pick steps in order. Stop wherever feels right; nothing past Step 2 is
-required to use Conduit yourself.
+required to use Beamd yourself.
 
 ---
 
@@ -32,7 +32,7 @@ thorough."
 ## 1. Run the bundled smoke test
 
 `scripts/smoke-test.sh` exercises the proxy hop with the test backend
-this repo ships (`cmd/conduit-testapp`). It hits routes that cover the
+this repo ships (`cmd/beam-testapp`). It hits routes that cover the
 proxy's interesting paths:
 
 | Check | What it proves |
@@ -45,7 +45,7 @@ proxy's interesting paths:
 | `GET /size?bytes=8192` returns 8192 bytes | Larger responses don't truncate |
 | `GET /sleep?ms=1000` succeeds | Latency-tolerant; proxy doesn't time out short backends |
 
-Run it from the repo root after every conduitd change:
+Run it from the repo root after every beamd change:
 
 ```
 make smoke-test
@@ -77,17 +77,17 @@ git push origin v0.1.0
 GoReleaser (`.goreleaser.yaml`) will then:
 
 - Build cross-platform binaries (linux/darwin × amd64/arm64) for
-  `conduitd`, `conduit`, and `conduit-testapp`.
-- Bundle them with `README.md`, `LICENSE`, `example/conduitd.yaml`,
+  `beamd`, `beam`, and `beam-testapp`.
+- Bundle them with `README.md`, `LICENSE`, `example/beamd.yaml`,
   `scripts/smoke-test.sh`, and the two docs.
-- Push `ghcr.io/treyhuffine/conduitd:{v0.1.0,latest}` to GHCR.
+- Push `ghcr.io/treyhuffine/beamd:{v0.1.0,latest}` to GHCR.
 - Create a draft GitHub release.
 
 After the release lands:
 
 - Edit `README.md` and `docs/setup.md` to remove the "until v0.1.0 is
   tagged" caveats.
-- Test the published image: `docker pull ghcr.io/treyhuffine/conduitd:v0.1.0`.
+- Test the published image: `docker pull ghcr.io/treyhuffine/beamd:v0.1.0`.
 
 ### CHANGELOG.md template
 
@@ -106,7 +106,7 @@ First usable release.
   unregister, heartbeat, error).
 - Per-developer wildcard certs via Let's Encrypt (DNS-01 over the libdns
   Cloudflare provider).
-- `conduit` CLI: login (copy-paste), expose, list, unexpose.
+- `beam` CLI: login (copy-paste), expose, list, unexpose.
 - Local daemon over unix socket with auto-start.
 - MCP stdio server exposing `expose_port`, `unexpose`, `list_tunnels`
   to AI agents.
@@ -170,7 +170,7 @@ break if the proxy buffers the whole response before forwarding (which
 our test suite would NOT catch — current tests only check small bodies).
 
 **Plan:** new test in `test/e2e/` that opens an HTTP response to
-`conduit-testapp`'s `/sse` route through the tunnel and asserts:
+`beam-testapp`'s `/sse` route through the tunnel and asserts:
 
 - First event arrives in &lt;1s.
 - All 5 events arrive within ~3s with sub-second gaps.
@@ -229,7 +229,7 @@ Lowest-effort path (cumulative, ~1 weekend):
    [`docs/setup.md`'s Step 14](setup.md#step-14--onboard-a-teammate)
    and email the user their token + link to their tunnel.
 4. Track usage via the edge's `/metrics`. If a single slug's
-   `conduit_bytes_proxied_total` spikes, investigate.
+   `beam_bytes_proxied_total` spikes, investigate.
 
 **Ceiling:** ~30 customers before you're spending a noticeable chunk
 of every day onboarding. That's actually a great milestone — you've

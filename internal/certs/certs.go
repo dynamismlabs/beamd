@@ -3,7 +3,7 @@
 // PRD §5.1: one wildcard cert per slug (`*.<slug>.<base_domain>`),
 // reused across all of that slug's apps. Issuance happens lazily on
 // first TLS handshake for the slug, or eagerly via PreWarm (used by
-// `conduitd provision-dev`).
+// `beamd provision-dev`).
 //
 // M4 ships `SelfSignedManager`, which is sufficient for tests and
 // dev-without-DNS. The production `MagicManager` (certmagic + ACME
@@ -148,7 +148,7 @@ func generateSelfSignedCert(hosts ...string) (tls.Certificate, error) {
 	}
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "conduit-self-signed"},
+		Subject:      pkix.Name{CommonName: "beam-self-signed"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(30 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

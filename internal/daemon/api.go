@@ -1,4 +1,4 @@
-// Package daemon implements the local HTTP API the conduit client
+// Package daemon implements the local HTTP API the beam client
 // daemon exposes over a unix domain socket (PRD §10).
 package daemon
 

@@ -1,10 +1,10 @@
-// Package devicecode implements the conduit client's device-code login
+// Package devicecode implements the beam client's device-code login
 // dance against a hosted web app. RFC 8628-shaped: the CLI requests a
 // device + user code, prints instructions, polls until the user
 // approves it via the browser, then returns the issued bearer token.
 //
 // The web app is the canonical source of truth for device-code state;
-// conduit's role here is purely client-side. Server-side endpoints live
+// beam's role here is purely client-side. Server-side endpoints live
 // in the operator's Next.js/whatever app, not in this repo.
 package devicecode
 
@@ -19,8 +19,8 @@ import (
 	"time"
 )
 
-// Discovery is the response body of `/.well-known/conduit-auth` on the
-// conduit edge. Empty fields → device-code login is not offered (OSS).
+// Discovery is the response body of `/.well-known/beam-auth` on the
+// beamd edge. Empty fields → device-code login is not offered (OSS).
 type Discovery struct {
 	DeviceCodeURL   string `json:"device_code_url,omitempty"`
 	TokenURL        string `json:"token_url,omitempty"`
@@ -45,7 +45,7 @@ type TokenResponse struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// Discover fetches `/.well-known/conduit-auth` on the conduit server.
+// Discover fetches `/.well-known/beam-auth` on the beamd server.
 // Returns (nil, nil) when the server doesn't advertise device-code
 // endpoints (i.e. OSS deployments where the CLI should require --token).
 func Discover(ctx context.Context, hc *http.Client, serverAddr string) (*Discovery, error) {
@@ -187,10 +187,10 @@ func pollToken(ctx context.Context, hc *http.Client, url, deviceCode string) (*T
 // returns the full discovery URL.
 func normalizeDiscoveryURL(serverAddr string) string {
 	if strings.HasPrefix(serverAddr, "http://") || strings.HasPrefix(serverAddr, "https://") {
-		return strings.TrimRight(serverAddr, "/") + "/.well-known/conduit-auth"
+		return strings.TrimRight(serverAddr, "/") + "/.well-known/beam-auth"
 	}
 	if !strings.Contains(serverAddr, ":") {
 		serverAddr = serverAddr + ":443"
 	}
-	return "https://" + serverAddr + "/.well-known/conduit-auth"
+	return "https://" + serverAddr + "/.well-known/beam-auth"
 }

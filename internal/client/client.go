@@ -1,4 +1,4 @@
-// Package client implements the conduit client side.
+// Package client implements the beam client side.
 //
 // M5: a long-lived client that maintains a TLS+yamux session to the
 // edge across network blips. `Connect` opens the first session
@@ -29,11 +29,11 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/treyhuffine/conduit/internal/mux"
-	"github.com/treyhuffine/conduit/internal/proto"
+	"github.com/treyhuffine/beamd/internal/mux"
+	"github.com/treyhuffine/beamd/internal/proto"
 )
 
-const ALPNConduit = "conduit/1"
+const ALPNBeam = "beam/1"
 
 const (
 	DefaultHeartbeatInterval = 20 * time.Second
@@ -279,14 +279,14 @@ func (c *Client) Intended() map[string]int {
 func (c *Client) connectOnce(ctx context.Context, first bool) error {
 	conn, err := tls.Dial("tcp", c.serverAddr, &tls.Config{
 		InsecureSkipVerify: true, // M5: self-signed; MagicManager flips this off
-		NextProtos:         []string{ALPNConduit},
+		NextProtos:         []string{ALPNBeam},
 	})
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", c.serverAddr, err)
 	}
-	if got := conn.ConnectionState().NegotiatedProtocol; got != ALPNConduit {
+	if got := conn.ConnectionState().NegotiatedProtocol; got != ALPNBeam {
 		_ = conn.Close()
-		return fmt.Errorf("server did not negotiate %q (got %q)", ALPNConduit, got)
+		return fmt.Errorf("server did not negotiate %q (got %q)", ALPNBeam, got)
 	}
 
 	yamuxSess, err := mux.Client(conn)

@@ -162,7 +162,7 @@ func TestReporter_RestartTreatsResetAsNonNegative(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate conduitd restart: source returns 0 (fresh counters), but
+	// Simulate beamd restart: source returns 0 (fresh counters), but
 	// state file still says we last reported 1000.
 	source.set(Snapshot{
 		BytesBySlug:   map[string]int64{"trey": 200},

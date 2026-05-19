@@ -8,7 +8,7 @@ import (
 )
 
 // StubProvider is an in-memory libdns provider used by tests and
-// `conduitd` invocations against `dns_provider: stub`. It records every
+// `beamd` invocations against `dns_provider: stub`. It records every
 // write so tests can assert the right A/TXT records were produced.
 type StubProvider struct {
 	mu      sync.Mutex

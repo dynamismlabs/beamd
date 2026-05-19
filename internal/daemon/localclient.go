@@ -116,7 +116,7 @@ func decodeErr(resp *http.Response) error {
 // loads its server / token settings from the client config the CLI
 // passes through env.
 //
-// `extraEnv` lets the caller pass through `CONDUIT_SERVER` etc. so the
+// `extraEnv` lets the caller pass through `BEAMD_SERVER` etc. so the
 // daemon picks up the same config the CLI saw.
 func EnsureRunning(ctx context.Context, executable, socketPath string, extraEnv []string) error {
 	if ok, _ := probe(socketPath, 200*time.Millisecond); ok {

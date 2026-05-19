@@ -5,6 +5,6 @@ bin/
 *.swp
 .DS_Store
 tokens.json
-.conduit/
+.beam/
 .idea/
 .vscode/

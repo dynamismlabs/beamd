@@ -1,10 +1,10 @@
-# Conduit server example config.
-# Every field can be overridden via CONDUIT_<UPPER_SNAKE_CASE> env vars
-# (e.g. CONDUIT_BASE_DOMAIN, CONDUIT_DNS_PROVIDER_CREDS).
+# Beamd server example config.
+# Every field can be overridden via BEAMD_<UPPER_SNAKE_CASE> env vars
+# (e.g. BEAMD_BASE_DOMAIN, BEAMD_DNS_PROVIDER_CREDS).
 
-base_domain: conduit.example.com
+base_domain: beam.example.com
 
-# Public IPs the edge listens on — written into DNS by `conduitd provision-dev`.
+# Public IPs the edge listens on — written into DNS by `beamd provision-dev`.
 edge_ipv4: 127.0.0.1
 edge_ipv6: ""
 
@@ -28,14 +28,14 @@ dns_provider_creds: ""         # provider-specific (Cloudflare: API token)
 # Quote scheme-style strings to keep YAML from parsing the colon as a key.
 token_store: "file:./tokens.json"
 
-# Where conduitd persists state (cert cache, ACME account, ...).
-# Production: /var/lib/conduit.
+# Where beamd persists state (cert cache, ACME account, ...).
+# Production: /var/lib/beamd.
 data_dir: ./data
 
 max_tunnels_per_token: 25
 
 # Hosted-deployment only: advertise device-code login endpoints at
-# /.well-known/conduit-auth. The CLI's `conduit login` (no --token)
+# /.well-known/beam-auth. The CLI's `beam login` (no --token)
 # fetches this and runs the browser-based flow against the URLs below.
 # Leave the whole block out for OSS deployments — the CLI then falls
 # back to requiring --token.
@@ -51,6 +51,6 @@ max_tunnels_per_token: 25
 #
 # usage_reporter:
 #   webhook_url:      https://app.example.com/api/internal/usage
-#   secret_env:       CONDUIT_USAGE_SECRET     # env var holding the bearer token
+#   secret_env:       BEAMD_USAGE_SECRET     # env var holding the bearer token
 #   interval_seconds: 60
-#   state_file:       /var/lib/conduit/usage-state.json  # default: <data_dir>/usage-state.json
+#   state_file:       /var/lib/beamd/usage-state.json  # default: <data_dir>/usage-state.json

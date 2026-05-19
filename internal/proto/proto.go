@@ -1,4 +1,4 @@
-// Package proto defines the conduit control protocol — NDJSON messages
+// Package proto defines the beam control protocol — NDJSON messages
 // exchanged over a single dedicated yamux stream (PRD §8). The package
 // is dependency-free on the rest of the codebase by design.
 package proto

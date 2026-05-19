@@ -6,16 +6,16 @@ import (
 )
 
 func TestExtractSlug(t *testing.T) {
-	base := "conduit.example.com"
+	base := "beam.example.com"
 	cases := []struct {
 		sni  string
 		want string
 		ok   bool
 	}{
-		{"api.trey.conduit.example.com", "trey", true},
-		{"web.alex.conduit.example.com", "alex", true},
-		{"trey.conduit.example.com", "", false}, // no app label
-		{"conduit.example.com", "", false},      // apex
+		{"api.trey.beam.example.com", "trey", true},
+		{"web.alex.beam.example.com", "alex", true},
+		{"trey.beam.example.com", "", false}, // no app label
+		{"beam.example.com", "", false},      // apex
 		{"api.example.org", "", false},          // wrong base
 		{"", "", false},
 	}
@@ -28,13 +28,13 @@ func TestExtractSlug(t *testing.T) {
 }
 
 func TestSelfSignedManager_ReuseAndDistinctSlugs(t *testing.T) {
-	m, err := NewSelfSignedManager("conduit.example.com")
+	m, err := NewSelfSignedManager("beam.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// First handshake under slug "trey" → issuance #1.
-	c1, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.trey.conduit.example.com"})
+	c1, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.trey.beam.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestSelfSignedManager_ReuseAndDistinctSlugs(t *testing.T) {
 	}
 
 	// Different app under same slug → same cert, no new issuance.
-	c2, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "web.trey.conduit.example.com"})
+	c2, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "web.trey.beam.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestSelfSignedManager_ReuseAndDistinctSlugs(t *testing.T) {
 	}
 
 	// Different slug → second issuance.
-	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.alex.conduit.example.com"}); err != nil {
+	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.alex.beam.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if m.IssuanceCount() != 2 {
@@ -64,7 +64,7 @@ func TestSelfSignedManager_ReuseAndDistinctSlugs(t *testing.T) {
 }
 
 func TestSelfSignedManager_FallbackForOffDomain(t *testing.T) {
-	m, err := NewSelfSignedManager("conduit.example.com")
+	m, err := NewSelfSignedManager("beam.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestSelfSignedManager_FallbackForOffDomain(t *testing.T) {
 }
 
 func TestSelfSignedManager_PreWarm(t *testing.T) {
-	m, err := NewSelfSignedManager("conduit.example.com")
+	m, err := NewSelfSignedManager("beam.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestSelfSignedManager_PreWarm(t *testing.T) {
 		t.Errorf("issuance after PreWarm = %d, want 1", m.IssuanceCount())
 	}
 	// Subsequent handshake for that slug uses the pre-warmed cert.
-	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.trey.conduit.example.com"}); err != nil {
+	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.trey.beam.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if m.IssuanceCount() != 1 {
