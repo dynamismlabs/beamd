@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"github.com/dynamismlabs/beamd/internal/config"
 	"github.com/dynamismlabs/beamd/internal/daemon"
 	"github.com/dynamismlabs/beamd/internal/devicecode"
+	"github.com/dynamismlabs/beamd/internal/naming"
 )
 
 func defaultConfigPath() string {
@@ -121,14 +123,26 @@ func hoistFlags(args []string, valueFlags map[string]bool) []string {
 	return append(flags, positional...)
 }
 
-func upCmd(args []string) {
-	fs := flag.NewFlagSet("up", flag.ExitOnError)
+// openResult is the JSON shape emitted by `beamd open --json` (both modes).
+type openResult struct {
+	URL        string `json:"url"`
+	Name       string `json:"name"`
+	Port       int    `json:"port"`
+	Slug       string `json:"slug"`
+	BaseDomain string `json:"baseDomain"`
+}
+
+func openCmd(args []string) {
+	fs := flag.NewFlagSet("open", flag.ExitOnError)
 	name := fs.String("as", "", "subdomain label (defaults to port number)")
+	detach := fs.Bool("detach", false, "run in the background agent and return immediately (the path automation uses)")
+	fs.BoolVar(detach, "d", false, "shorthand for --detach")
+	jsonOut := fs.Bool("json", false, "print exactly one JSON object describing the tunnel, and nothing else")
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
 	_ = fs.Parse(hoistFlags(args, map[string]bool{"as": true, "config": true}))
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beamd up <port> [--as name]")
+		fmt.Fprintln(os.Stderr, "usage: beamd open <port> [--as name] [-d] [--json]")
 		os.Exit(2)
 	}
 	port, err := strconv.Atoi(fs.Arg(0))
@@ -138,34 +152,122 @@ func upCmd(args []string) {
 	}
 
 	cfg := mustLoadConfig(*configPath)
-	lc := ensureAgent(cfg, *configPath)
+	if *detach {
+		openDetached(cfg, *configPath, port, *name, *jsonOut)
+		return
+	}
+	openForeground(cfg, port, *name, *jsonOut)
+}
+
+// openForeground holds the tunnel in *this* process (the default, like
+// ngrok): it opens its own connection to the edge, registers, prints the
+// URL, and blocks until interrupted — then tears the tunnel down. No
+// agent is involved.
+func openForeground(cfg *config.Client, port int, name string, jsonOut bool) {
+	quietClientLogs()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token)
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "connect failed:", err)
+		os.Exit(1)
+	}
+	defer c.Close()
+
+	url, err := c.Register(name, port)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "open failed:", err)
+		os.Exit(1)
+	}
+
+	resolved := name
+	if resolved == "" {
+		resolved = naming.LabelFromPort(port)
+	}
+
+	if jsonOut {
+		printOpenResult(openResult{URL: url, Name: resolved, Port: port, Slug: c.Slug(), BaseDomain: c.BaseDomain()})
+	} else {
+		fmt.Printf("%s  →  http://127.0.0.1:%d\n\ntunnel live — press Ctrl-C to stop\n", url, port)
+	}
+
+	// Block until interrupted. The client keeps the tunnel alive across
+	// network blips on its own (reconnect + replay); we only exit on a
+	// signal from the user.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
+
+	if !jsonOut {
+		fmt.Fprintln(os.Stderr, "\nshutting down…")
+	}
+	_ = c.Close()
+}
+
+// openDetached hands the tunnel to the background agent and returns
+// immediately. This is the path automation (e.g. Flow) uses.
+func openDetached(cfg *config.Client, configPath string, port int, name string, jsonOut bool) {
+	lc := ensureAgent(cfg, configPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	url, err := lc.Expose(ctx, port, *name)
+	resp, err := lc.Open(ctx, port, name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "up failed:", err)
+		fmt.Fprintln(os.Stderr, "open failed:", err)
 		os.Exit(1)
 	}
-	fmt.Println(url)
+	if jsonOut {
+		printOpenResult(openResult{URL: resp.URL, Name: resp.Name, Port: resp.Port, Slug: resp.Slug, BaseDomain: resp.BaseDomain})
+	} else {
+		fmt.Println(resp.URL)
+	}
 }
 
+// printOpenResult writes exactly one JSON object (one line, trailing
+// newline) to stdout — nothing else, so callers can pipe into `jq`.
+func printOpenResult(r openResult) {
+	enc := json.NewEncoder(os.Stdout)
+	_ = enc.Encode(r)
+}
+
+// quietClientLogs silences the client's INFO chatter (connect/replay)
+// so foreground output is just the URL + status; WARN and above (e.g.
+// reconnect failures) still surface on stderr.
+func quietClientLogs() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+}
+
+// listCmd shows detached tunnels held by the background agent. It never
+// spawns an agent: if none is running there are no detached tunnels, so
+// the answer is an empty list. (Foreground tunnels live in their own
+// process and are not listed here.)
 func listCmd(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print a JSON array of tunnels and nothing else")
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(args)
+	_ = fs.Parse(hoistFlags(args, map[string]bool{"config": true}))
 
-	cfg := mustLoadConfig(*configPath)
-	lc := ensureAgent(cfg, *configPath)
+	cfg := loadClientConfig(*configPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	items := []daemon.ListItem{}
+	if daemon.IsRunning(cfg.AgentSocket) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		got, err := daemon.NewLocalClient(cfg.AgentSocket).List(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "list failed:", err)
+			os.Exit(1)
+		}
+		if got != nil {
+			items = got
+		}
+	}
 
-	items, err := lc.List(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "list failed:", err)
-		os.Exit(1)
+	if *jsonOut {
+		_ = json.NewEncoder(os.Stdout).Encode(items)
+		return
 	}
 	if len(items) == 0 {
 		fmt.Println("(no tunnels)")
@@ -180,27 +282,98 @@ func listCmd(args []string) {
 	}
 }
 
-func downCmd(args []string) {
-	fs := flag.NewFlagSet("down", flag.ExitOnError)
+// closeCmd tears down a detached tunnel. Idempotent: if the agent isn't
+// running or no tunnel by that name exists, it's a no-op that still
+// exits 0. Never spawns an agent.
+func closeCmd(args []string) {
+	fs := flag.NewFlagSet("close", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print a JSON object {name,removed} and nothing else")
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(args)
+	_ = fs.Parse(hoistFlags(args, map[string]bool{"config": true}))
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beamd down <name>")
+		fmt.Fprintln(os.Stderr, "usage: beamd close <name> [--json]")
 		os.Exit(2)
 	}
 	name := fs.Arg(0)
+	cfg := loadClientConfig(*configPath)
 
-	cfg := mustLoadConfig(*configPath)
-	lc := ensureAgent(cfg, *configPath)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := lc.Unexpose(ctx, name); err != nil {
-		fmt.Fprintln(os.Stderr, "down failed:", err)
-		os.Exit(1)
+	removed := false
+	if daemon.IsRunning(cfg.AgentSocket) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		r, err := daemon.NewLocalClient(cfg.AgentSocket).Close(ctx, name)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "close failed:", err)
+			os.Exit(1)
+		}
+		removed = r
 	}
+
+	if *jsonOut {
+		_ = json.NewEncoder(os.Stdout).Encode(struct {
+			Name    string `json:"name"`
+			Removed bool   `json:"removed"`
+		}{name, removed})
+		return
+	}
+	if removed {
+		fmt.Printf("removed '%s'\n", name)
+	} else {
+		fmt.Printf("no detached tunnel named '%s'\n", name)
+	}
+}
+
+// statusCmd reports the background agent's state and connection health,
+// for humans and (with --json) for callers reconciling state. Never
+// spawns an agent.
+func statusCmd(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print a JSON status object and nothing else")
+	configPath := fs.String("config", defaultConfigPath(), "client config path")
+	_ = fs.Parse(hoistFlags(args, map[string]bool{"config": true}))
+
+	cfg := loadClientConfig(*configPath)
+
+	running := daemon.IsRunning(cfg.AgentSocket)
+	slug := ""
+	healthy := false
+	if running {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if h, err := daemon.NewLocalClient(cfg.AgentSocket).Ping(ctx); err == nil {
+			slug = h.Slug
+			healthy = h.Healthy
+		}
+		cancel()
+	}
+
+	if *jsonOut {
+		_ = json.NewEncoder(os.Stdout).Encode(struct {
+			AgentRunning bool   `json:"agentRunning"`
+			Server       string `json:"server"`
+			Slug         string `json:"slug"`
+			Healthy      bool   `json:"healthy"`
+		}{running, cfg.Server, slug, healthy})
+		return
+	}
+
+	fmt.Printf("agent:   %s\n", boolWord(running, "running", "not running"))
+	if cfg.Server != "" {
+		fmt.Printf("server:  %s\n", cfg.Server)
+	}
+	if slug != "" {
+		fmt.Printf("slug:    %s\n", slug)
+	}
+	if running {
+		fmt.Printf("tunnel:  %s\n", boolWord(healthy, "connected", "disconnected"))
+	}
+}
+
+func boolWord(b bool, yes, no string) string {
+	if b {
+		return yes
+	}
+	return no
 }
 
 func mustLoadConfig(path string) *config.Client {
@@ -212,6 +385,19 @@ func mustLoadConfig(path string) *config.Client {
 	if cfg.Server == "" || cfg.Token == "" {
 		fmt.Fprintln(os.Stderr, "missing server or token — run `beamd login` first")
 		os.Exit(2)
+	}
+	return cfg
+}
+
+// loadClientConfig loads config without requiring login — it only needs
+// the agent socket path. Used by list/down/status, which operate on a
+// possibly-absent agent and must not hard-fail when the user hasn't
+// logged in yet.
+func loadClientConfig(path string) *config.Client {
+	cfg, err := config.LoadClient(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load config:", err)
+		os.Exit(1)
 	}
 	return cfg
 }

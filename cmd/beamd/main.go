@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -49,12 +50,14 @@ func main() {
 	// client role
 	case "login":
 		loginCmd(os.Args[2:])
-	case "up":
-		upCmd(os.Args[2:])
-	case "down":
-		downCmd(os.Args[2:])
+	case "open":
+		openCmd(os.Args[2:])
+	case "close":
+		closeCmd(os.Args[2:])
 	case "list":
 		listCmd(os.Args[2:])
+	case "status":
+		statusCmd(os.Args[2:])
 	case "mcp":
 		mcpCmd(os.Args[2:])
 	case "agent":
@@ -64,6 +67,11 @@ func main() {
 	case "help", "--help", "-h":
 		usage()
 	default:
+		// Bare `beamd <port>` is shorthand for `beamd open <port>`.
+		if p, err := strconv.Atoi(os.Args[1]); err == nil && p >= 1 && p <= 65535 {
+			openCmd(os.Args[1:])
+			return
+		}
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
 		os.Exit(2)
@@ -81,9 +89,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "client:")
 	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd edge")
-	fmt.Fprintln(os.Stderr, "  up              expose a local port as a public URL")
-	fmt.Fprintln(os.Stderr, "  down            remove a tunnel")
-	fmt.Fprintln(os.Stderr, "  list            list active tunnels")
+	fmt.Fprintln(os.Stderr, "  open            expose a local port as a public URL (foreground; -d to detach)")
+	fmt.Fprintln(os.Stderr, "  close           remove a detached tunnel")
+	fmt.Fprintln(os.Stderr, "  list            list detached tunnels")
+	fmt.Fprintln(os.Stderr, "  status          show agent + connection status")
 	fmt.Fprintln(os.Stderr, "  mcp             run the MCP stdio server")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  version         print version and exit")
@@ -490,7 +499,7 @@ func addDeveloperCmd(args []string) {
 	fmt.Println()
 	fmt.Println("Developer setup (their laptop):")
 	fmt.Printf("  beamd login --server %s:443 --token <token above>\n", cfg.BaseDomain)
-	fmt.Println("  beamd up 3001 --as api")
+	fmt.Println("  beamd open 3001 --as api")
 }
 
 // atomicWrite writes data to path via a sibling tmpfile + rename, so a

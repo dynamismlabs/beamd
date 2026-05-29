@@ -1,8 +1,9 @@
 // Package mcp implements a Model Context Protocol stdio server that
-// wraps the beamd agent's local HTTP API. Tools exposed:
-//   - expose_port(port, name?)
-//   - unexpose(name)
-//   - list_tunnels()
+// wraps the beamd agent's local HTTP API. Tools exposed (each maps to a
+// `beamd` CLI command):
+//   - expose_port(port, name?)  → `beamd open`
+//   - remove_tunnel(name)       → `beamd close`
+//   - list_tunnels()            → `beamd list`
 //
 // This is the primary integration surface for AI agents (PRD §10).
 package mcp
@@ -112,7 +113,7 @@ func tools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        "expose_port",
-			"description": "Expose a locally-running app on the given port as a public HTTPS URL via Beamd. Returns the URL synchronously.",
+			"description": "Expose a locally-running app on the given port as a public HTTPS URL via Beamd, and return the URL synchronously. Equivalent to the `beamd open <port> --as <name>` CLI command.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -131,8 +132,8 @@ func tools() []map[string]any {
 			},
 		},
 		{
-			"name":        "unexpose",
-			"description": "Remove a previously-exposed tunnel by name.",
+			"name":        "remove_tunnel",
+			"description": "Remove (tear down) a tunnel by name. Equivalent to the `beamd close <name>` CLI command.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -143,7 +144,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "list_tunnels",
-			"description": "List currently exposed tunnels (name, port, url, healthy).",
+			"description": "List the currently exposed tunnels (name, port, url, healthy). Equivalent to the `beamd list` CLI command.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -174,13 +175,13 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *jsonR
 		if a.Port < 1 || a.Port > 65535 {
 			return toolError("port must be 1..65535"), nil
 		}
-		url, err := s.LC.Expose(ctx, a.Port, a.Name)
+		resp, err := s.LC.Open(ctx, a.Port, a.Name)
 		if err != nil {
 			return toolError(err.Error()), nil
 		}
-		return toolText(url), nil
+		return toolText(resp.URL), nil
 
-	case "unexpose":
+	case "remove_tunnel":
 		var a struct {
 			Name string `json:"name"`
 		}
@@ -190,7 +191,7 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *jsonR
 		if a.Name == "" {
 			return toolError("name is required"), nil
 		}
-		if err := s.LC.Unexpose(ctx, a.Name); err != nil {
+		if _, err := s.LC.Close(ctx, a.Name); err != nil {
 			return toolError(err.Error()), nil
 		}
 		return toolText("ok"), nil

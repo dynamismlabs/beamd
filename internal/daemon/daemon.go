@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/dynamismlabs/beamd/internal/client"
+	"github.com/dynamismlabs/beamd/internal/naming"
 )
 
 // Daemon wraps a long-lived *client.Client behind a loopback HTTP API
@@ -59,8 +60,8 @@ func (d *Daemon) Serve() error {
 	slog.Info("agent listening", "socket", d.socket)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/expose", d.handleExpose)
-	mux.HandleFunc("/unexpose", d.handleUnexpose)
+	mux.HandleFunc("/open", d.handleOpen)
+	mux.HandleFunc("/close", d.handleClose)
 	mux.HandleFunc("/list", d.handleList)
 	mux.HandleFunc("/healthz", d.handleHealthz)
 
@@ -91,12 +92,12 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (d *Daemon) handleExpose(w http.ResponseWriter, r *http.Request) {
+func (d *Daemon) handleOpen(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	var req ExposeRequest
+	var req OpenRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
@@ -113,23 +114,30 @@ func (d *Daemon) handleExpose(w http.ResponseWriter, r *http.Request) {
 	}
 	resolvedName := req.Name
 	if resolvedName == "" {
-		// Server derived the name from the port; mirror that locally.
-		resolvedName = fmt.Sprintf("%d", req.Port)
+		// Server derived the name from the port (naming.LabelFromPort);
+		// mirror that derivation locally so our records line up.
+		resolvedName = naming.LabelFromPort(req.Port)
 	}
 
 	d.urlsMu.Lock()
 	d.urls[resolvedName] = url
 	d.urlsMu.Unlock()
 
-	writeJSON(w, http.StatusOK, ExposeResponse{URL: url})
+	writeJSON(w, http.StatusOK, OpenResponse{
+		URL:        url,
+		Name:       resolvedName,
+		Port:       req.Port,
+		Slug:       d.client.Slug(),
+		BaseDomain: d.client.BaseDomain(),
+	})
 }
 
-func (d *Daemon) handleUnexpose(w http.ResponseWriter, r *http.Request) {
+func (d *Daemon) handleClose(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	var req UnexposeRequest
+	var req CloseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
@@ -138,14 +146,17 @@ func (d *Daemon) handleUnexpose(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name required")
 		return
 	}
+
+	d.urlsMu.Lock()
+	_, existed := d.urls[req.Name]
+	delete(d.urls, req.Name)
+	d.urlsMu.Unlock()
+
 	if err := d.client.Unregister(req.Name); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	d.urlsMu.Lock()
-	delete(d.urls, req.Name)
-	d.urlsMu.Unlock()
-	w.WriteHeader(http.StatusOK)
+	writeJSON(w, http.StatusOK, CloseResponse{Removed: existed})
 }
 
 func (d *Daemon) handleList(w http.ResponseWriter, r *http.Request) {

@@ -562,7 +562,7 @@ func TestProvisionDev_WritesApexAndWildcardARecords(t *testing.T) {
 // Daemon + MCP + reconnect
 // ====================================================================
 
-func TestDaemon_ExposeListUnexposeRoundTrip(t *testing.T) {
+func TestDaemon_OpenListCloseRoundTrip(t *testing.T) {
 	port := startDummyApp(t, "api")
 	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
@@ -572,13 +572,17 @@ func TestDaemon_ExposeListUnexposeRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	url, err := lc.Expose(ctx, port, "api")
+	resp, err := lc.Open(ctx, port, "api")
 	if err != nil {
 		t.Fatalf("Expose: %v", err)
 	}
 	wantURL := "https://api.turing." + testBaseDomain
-	if url != wantURL {
-		t.Errorf("url = %q, want %q", url, wantURL)
+	if resp.URL != wantURL {
+		t.Errorf("url = %q, want %q", resp.URL, wantURL)
+	}
+	// The enriched response carries the full resolved identity.
+	if resp.Name != "api" || resp.Port != port || resp.Slug != "turing" || resp.BaseDomain != testBaseDomain {
+		t.Errorf("expose response = %+v, want name=api port=%d slug=turing base=%s", resp, port, testBaseDomain)
 	}
 
 	host := "api.turing." + testBaseDomain
@@ -595,15 +599,53 @@ func TestDaemon_ExposeListUnexposeRoundTrip(t *testing.T) {
 		t.Errorf("List item = %+v", items[0])
 	}
 
-	if err := lc.Unexpose(ctx, "api"); err != nil {
-		t.Fatalf("Unexpose: %v", err)
+	removed, err := lc.Close(ctx, "api")
+	if err != nil {
+		t.Fatalf("Close: %v", err)
 	}
+	if !removed {
+		t.Errorf("Close removed = false, want true (tunnel was present)")
+	}
+	// Idempotent: closing a name that's already gone is a no-op that
+	// succeeds and reports removed=false.
+	removed, err = lc.Close(ctx, "api")
+	if err != nil {
+		t.Fatalf("Close (idempotent rerun): %v", err)
+	}
+	if removed {
+		t.Errorf("second Close removed = true, want false (already gone)")
+	}
+
 	items, err = lc.List(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(items) != 0 {
-		t.Errorf("after unexpose, list returned %d items", len(items))
+		t.Errorf("after close, list returned %d items", len(items))
+	}
+}
+
+func TestDaemon_OpenEmptyNameDerivesPortLabel(t *testing.T) {
+	port := startDummyApp(t, "x")
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
+	c := connectClient(t, edgeAddr, "T1")
+	lc := startDaemon(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// No name → the edge derives it from the port (naming.LabelFromPort),
+	// and the agent mirrors that derivation in the response.
+	resp, err := lc.Open(ctx, port, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	wantName := fmt.Sprintf("%d", port)
+	if resp.Name != wantName {
+		t.Errorf("derived name = %q, want %q (the port label)", resp.Name, wantName)
+	}
+	if want := "https://" + wantName + ".turing." + testBaseDomain; resp.URL != want {
+		t.Errorf("url = %q, want %q", resp.URL, want)
 	}
 }
 
@@ -656,7 +698,7 @@ func TestClient_ReconnectReplaysRegistrationsKeepsURLs(t *testing.T) {
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/after", "api: GET /after\n")
 }
 
-func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
+func TestMCP_InitializeListAndToolLifecycle(t *testing.T) {
 	port := startDummyApp(t, "api")
 	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
@@ -672,15 +714,25 @@ func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
 	})
 	writeJSONRPC(in, nil, "notifications/initialized", nil)
 	writeJSONRPC(in, "l1", "tools/list", nil)
+	// Full lifecycle through the MCP surface: open → list → remove → list.
 	writeJSONRPC(in, "c1", "tools/call", map[string]any{
-		"name": "expose_port",
-		"arguments": map[string]any{
-			"port": port,
-			"name": "api",
-		},
+		"name":      "expose_port",
+		"arguments": map[string]any{"port": port, "name": "api"},
+	})
+	writeJSONRPC(in, "c2", "tools/call", map[string]any{
+		"name":      "list_tunnels",
+		"arguments": map[string]any{},
+	})
+	writeJSONRPC(in, "c3", "tools/call", map[string]any{
+		"name":      "remove_tunnel",
+		"arguments": map[string]any{"name": "api"},
+	})
+	writeJSONRPC(in, "c4", "tools/call", map[string]any{
+		"name":      "list_tunnels",
+		"arguments": map[string]any{},
 	})
 
-	srv := mcp.New(lc, in, out, "beam", "test")
+	srv := mcp.New(lc, in, out, "beamd", "test")
 	if err := srv.Run(context.Background()); err != nil {
 		t.Fatalf("mcp run: %v", err)
 	}
@@ -694,37 +746,67 @@ func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
 		}
 		resps = append(resps, r)
 	}
-	if len(resps) != 3 {
-		t.Fatalf("got %d responses, want 3:\n%s", len(resps), out.String())
+	if len(resps) != 6 {
+		t.Fatalf("got %d responses, want 6:\n%s", len(resps), out.String())
 	}
 
-	// initialize: serverInfo.name = "beam"
+	// initialize: serverInfo.name = "beamd"
 	init := resps[0]["result"].(map[string]any)
-	if server, _ := init["serverInfo"].(map[string]any); server["name"] != "beam" {
-		t.Errorf("serverInfo.name = %v, want beam", server["name"])
+	if server, _ := init["serverInfo"].(map[string]any); server["name"] != "beamd" {
+		t.Errorf("serverInfo.name = %v, want beamd", server["name"])
 	}
 
-	// tools/list: 3 tools
-	toolsResp := resps[1]["result"].(map[string]any)
-	if tools := toolsResp["tools"].([]any); len(tools) != 3 {
-		t.Errorf("tools/list returned %d tools, want 3", len(tools))
+	// tools/list: exactly the three tools, asserted by name (guards the
+	// open/close ↔ expose_port/remove_tunnel/list_tunnels mapping).
+	toolList := resps[1]["result"].(map[string]any)["tools"].([]any)
+	gotNames := map[string]bool{}
+	for _, tl := range toolList {
+		gotNames[tl.(map[string]any)["name"].(string)] = true
+	}
+	for _, want := range []string{"expose_port", "remove_tunnel", "list_tunnels"} {
+		if !gotNames[want] {
+			t.Errorf("tools/list missing tool %q; got %v", want, gotNames)
+		}
+	}
+	if len(toolList) != 3 {
+		t.Errorf("tools/list returned %d tools, want 3", len(toolList))
 	}
 
-	// tools/call expose_port → returns the URL as text content
-	callResp := resps[2]["result"].(map[string]any)
-	content := callResp["content"].([]any)
+	// expose_port → the public URL
+	if got, want := callContentText(t, resps[2]), "https://api.turing."+testBaseDomain; got != want {
+		t.Errorf("expose_port result = %q, want %q", got, want)
+	}
+
+	// list_tunnels (after open) → contains the api tunnel
+	if got := callContentText(t, resps[3]); !strings.Contains(got, `"api"`) {
+		t.Errorf("list_tunnels after open = %q, want it to contain the api tunnel", got)
+	}
+
+	// remove_tunnel → ok
+	if got := callContentText(t, resps[4]); got != "ok" {
+		t.Errorf("remove_tunnel result = %q, want ok", got)
+	}
+
+	// list_tunnels (after remove) → empty array
+	if got := callContentText(t, resps[5]); got != "[]" {
+		t.Errorf("list_tunnels after remove = %q, want []", got)
+	}
+}
+
+// callContentText pulls the text of the first content block out of a
+// tools/call JSON-RPC response.
+func callContentText(t *testing.T, resp map[string]any) string {
+	t.Helper()
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no result: %v", resp)
+	}
+	content := result["content"].([]any)
 	if len(content) == 0 {
 		t.Fatal("tools/call returned empty content")
 	}
-	first := content[0].(map[string]any)
-	text, _ := first["text"].(string)
-	wantPrefix := "https://api.turing." + testBaseDomain
-	if text != wantPrefix {
-		t.Errorf("tools/call result = %q, want %q", text, wantPrefix)
-	}
-
-	host := "api.turing." + testBaseDomain
-	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/m", "api: GET /m\n")
+	text, _ := content[0].(map[string]any)["text"].(string)
+	return text
 }
 
 // ====================================================================

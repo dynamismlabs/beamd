@@ -20,7 +20,7 @@ the edge, the rest are the client:
   conn per developer), reverse-proxies each request to the right client,
   and issues per-developer **wildcard** certs `*.<slug>.<base_domain>`
   from Let's Encrypt via ACME DNS-01 (Cloudflare libdns).
-- **`beamd up <port>`** — the *client*. Runs on whatever machine hosts the
+- **`beamd open <port>`** — the *client*. Runs on whatever machine hosts the
   app being exposed; opens the outbound tunnel to the edge and forwards
   inbound requests to a local TCP port. **Foreground by default** (holds
   the tunnel in that process, like `ngrok`); `-d/--detach` hands it to a
@@ -28,11 +28,11 @@ the edge, the rest are the client:
   agent's local socket are the programmatic controllers.
 
 The **same binary** runs both roles: `beamd serve` on your public box,
-`beamd up` on dev machines. Config + socket live under `~/.beamd/`.
+`beamd open` on dev machines. Config + socket live under `~/.beamd/`.
 
 **Identity model.** A **token** maps to a **slug** (`tokens.json`,
 `{token: slug}`). A developer with slug `turing` gets `*.turing.<base>`. The
-app name is chosen when you bring it up: `beamd up 3000 --as api` →
+app name is chosen when you bring it up: `beamd open 3000 --as api` →
 `https://api.turing.<base>`.
 
 **Key constraint — wildcard depth.** The cert covers `*.<slug>.<base>`,
@@ -57,7 +57,7 @@ a git worktree named `<workspace>-<uuid-substring>` and wants to expose
 the worktree's dev server at a stable public URL it can open or iframe
 from any device. Flow drives `beamd` programmatically (bundled binary +
 spawn, or the agent socket). Flow uses the **detached** path
-(`beamd up … -d --json`) and needs reliable machine-readable output and
+(`beamd open … -d --json`) and needs reliable machine-readable output and
 (later) per-link auth.
 
 ---
@@ -72,7 +72,7 @@ of the binary is required to use it.**
 - [ ] **Module rename only** (§1's *rename* bullets — `go.mod` + imports + `.goreleaser` image template — **not** the single-binary consolidation). Rebuild/retag the image and redeploy; `beamd serve` is unchanged.
 - [ ] *(Optional, for OSS usability)* **Tag `v0.1.0`** so GoReleaser publishes the image + binaries others can pull.
 
-**Defer to "the product, later":** single-binary merge, `up`/`down`
+**Defer to "the product, later":** single-binary merge, `open`/`close`
 rename, foreground mode, npm packaging, hosted, signed-URL auth (the rest
 of §1–§9).
 
@@ -92,11 +92,11 @@ website ("Beamd"), and the `beam`/`beamd` ambiguity goes away.
 - [x] Grep the tree for `treyhuffine` and replace everywhere.
 
 **Single binary:**
-- [x] Merge `cmd/beam` and `cmd/beamd` into one entrypoint (keep `cmd/beamd`): a subcommand dispatcher where `serve` → edge code (`internal/edge`), and `up`/`down`/`list`/`login`/`mcp`/`agent` → client code (`internal/client`, `internal/daemon`, `internal/mcp`). Delete the `cmd/beam` main once merged.
+- [x] Merge `cmd/beam` and `cmd/beamd` into one entrypoint (keep `cmd/beamd`): a subcommand dispatcher where `serve` → edge code (`internal/edge`), and `open`/`close`/`list`/`login`/`mcp`/`agent` → client code (`internal/client`, `internal/daemon`, `internal/mcp`). Delete the `cmd/beam` main once merged.
 - [x] Rename the internal background worker subcommand `daemon` → **`agent`** (it's internal, spawned by `-d`; not user-facing). Update `internal/daemon` references/log lines accordingly.
 - [x] Move client state from `~/.beam/` → **`~/.beamd/`**: `config` and the socket (`~/.beamd/agent.sock`). Update `internal/client`/`internal/daemon` path constants and any docs.
 - [x] Update `.goreleaser.yaml` `builds:` to produce a single `beamd` binary (drop the separate `beam` build; keep `beam-testapp` for the smoke test, or rename to `beamd-testapp`).
-- **Acceptance:** `go build ./...`, `go vet ./...`, `go test ./...` pass; `grep -rn treyhuffine .` is empty; `beamd serve` runs the edge and `beamd up 3000` runs the client from the *same* binary; client state is under `~/.beamd/`; goreleaser snapshot builds one `beamd` per platform.
+- **Acceptance:** `go build ./...`, `go vet ./...`, `go test ./...` pass; `grep -rn treyhuffine .` is empty; `beamd serve` runs the edge and `beamd open 3000` runs the client from the *same* binary; client state is under `~/.beamd/`; goreleaser snapshot builds one `beamd` per platform.
 
 ---
 
@@ -107,7 +107,7 @@ Define the client command surface and foreground vs. background behavior
 
 **Command surface (all under the one `beamd` binary):**
 - **`beamd serve`** — run the edge (server role; see §0). Unchanged in spirit from today's `beamd serve`.
-- **`beamd up <port> [--as <name>]`** — bring a local port up as a public URL.
+- **`beamd open <port> [--as <name>]`** — bring a local port up as a public URL.
   - **Foreground by default** (like `ngrok` / `docker run`): holds the
     tunnel in *this* process, prints the URL prominently, and tears the
     tunnel down on Ctrl-C / process exit. **No agent involved.**
@@ -115,19 +115,19 @@ Define the client command surface and foreground vs. background behavior
     URL, and return immediately. The agent is spawned on demand
     (`ensureAgent`) and is used **only** in detach mode. This is what
     automation (Flow) calls.
-  - Optional shorthand: bare `beamd <port>` aliases `beamd up <port>`.
-- **`beamd down <name>`** — tear down a detached tunnel (idempotent: exit 0
+  - Optional shorthand: bare `beamd <port>` aliases `beamd open <port>`.
+- **`beamd close <name>`** — tear down a detached tunnel (idempotent: exit 0
   if already gone). Foreground tunnels are stopped with Ctrl-C.
 - **`beamd list`** — list detached tunnels.
 
-- [ ] Implement **foreground** mode for `beamd up` (the default): open the tunnel in-process, print the URL + a clear "tunnel live — Ctrl-C to stop" line, block until signal, then tear down.
-- [ ] Implement **`-d/--detach`**: the agent-backed path — register via the agent, print the URL, exit.
-- [ ] `--json` on `beamd up` (both modes): print exactly one JSON object and nothing else — `{"url":"https://<name>.<slug>.<base>","name":"<name>","port":<n>,"slug":"<slug>","baseDomain":"<base>"}`. In foreground+`--json`, print the object once when live, then keep running (tear down on signal).
-- [ ] `--json` on `beamd list`: array of `{"name","url","port","healthy"}`.
-- [ ] `beamd down <name>`: idempotent + `--json` returning `{"name","removed":true|false}`.
-- [ ] `beamd status --json`: agent running state, server, slug, connection health (for caller reconciliation).
-- [ ] Document the **agent local API** (the unix-socket HTTP server the detach path talks to). Write `docs/agent-api.md`: socket path (`~/.beamd/agent.sock`), endpoints, request/response JSON, and a Node example using `http` with `socketPath`. Treat these shapes as a stable v1 contract.
-- **Acceptance:** `beamd up 3000 --as test` runs in the foreground, prints the URL, and Ctrl-C tears it down; `beamd up 3000 --as test -d --json | jq -e .url` returns immediately with the URL; `beamd down test` removes it and is a no-op the second time; piping any `--json` command into `jq` never fails on extra text; `docs/agent-api.md` lets a Node dev drive up/down/list over the socket with no other knowledge.
+- [x] Implement **foreground** mode for `beamd open` (the default): open the tunnel in-process, print the URL + a clear "tunnel live — Ctrl-C to stop" line, block until signal, then tear down.
+- [x] Implement **`-d/--detach`**: the agent-backed path — register via the agent, print the URL, exit.
+- [x] `--json` on `beamd open` (both modes): print exactly one JSON object and nothing else — `{"url":"https://<name>.<slug>.<base>","name":"<name>","port":<n>,"slug":"<slug>","baseDomain":"<base>"}`. In foreground+`--json`, print the object once when live, then keep running (tear down on signal).
+- [x] `--json` on `beamd list`: array of `{"name","url","port","healthy"}`.
+- [x] `beamd close <name>`: idempotent + `--json` returning `{"name","removed":true|false}`.
+- [x] `beamd status --json`: agent running state, server, slug, connection health (for caller reconciliation).
+- [x] Document the **agent local API** (the unix-socket HTTP server the detach path talks to). Write `docs/agent-api.md`: socket path (`~/.beamd/agent.sock`), endpoints, request/response JSON, and a Node example using `http` with `socketPath`. Treat these shapes as a stable v1 contract.
+- **Acceptance:** `beamd open 3000 --as test` runs in the foreground, prints the URL, and Ctrl-C tears it down; `beamd open 3000 --as test -d --json | jq -e .url` returns immediately with the URL; `beamd close test` removes it and is a no-op the second time; piping any `--json` command into `jq` never fails on extra text; `docs/agent-api.md` lets a Node dev drive open/close/list over the socket with no other knowledge.
 
 ---
 
@@ -149,7 +149,7 @@ package (for `npx` and for Flow to bundle), all from one tagged build.
 
 ## 4. Agent-as-a-service (optional)  `[P2]`
 
-> **Mostly optional now.** With foreground-default `beamd up`, humans don't
+> **Mostly optional now.** With foreground-default `beamd open`, humans don't
 > need the agent at all, and the detached/automation path auto-spawns it
 > (`ensureAgent`). For the always-on consumer (Flow on a Mac Mini), the
 > thing that must survive reboots is **Flow's own service** — Flow then
@@ -162,7 +162,7 @@ package (for `npx` and for Flow to bundle), all from one tagged build.
 - [ ] Ship `dist/systemd/beamd.service` (user unit) for Linux hosts.
 - [ ] Add `beamd service install` / `beamd service uninstall` that writes/loads the right unit for the OS (otherwise document manual install).
 - [ ] Document in `docs/running-the-client.md`: install service, where logs live, how to rotate the token.
-- **Acceptance:** after `beamd service install` (or manual load), rebooting the host brings the agent back; note clearly that registrations are **not** persisted — whoever owned the tunnels must re-`up` them.
+- **Acceptance:** after `beamd service install` (or manual load), rebooting the host brings the agent back; note clearly that registrations are **not** persisted — whoever owned the tunnels must re-`open` them.
 
 ---
 
@@ -171,7 +171,7 @@ package (for `npx` and for Flow to bundle), all from one tagged build.
 Mirror the loved Portless ergonomic `portless <name> <cmd>` so `beamd` is a
 great **standalone** tool, not only an SDK.
 
-- [ ] Add `beamd run <name> -- <command...>`: pick a free local port, set `PORT=<port>` (and `--port` passthrough convention) in the child env, spawn the command, wait until the port is listening, then bring it up foreground (`beamd up <port> --as <name>`); stream child stdio; on Ctrl-C/child-exit, tear down the tunnel and kill the child. (This is the `portless <name> <cmd>` ergonomic.)
+- [ ] Add `beamd run <name> -- <command...>`: pick a free local port, set `PORT=<port>` (and `--port` passthrough convention) in the child env, spawn the command, wait until the port is listening, then bring it up foreground (`beamd open <port> --as <name>`); stream child stdio; on Ctrl-C/child-exit, tear down the tunnel and kill the child. (This is the `portless <name> <cmd>` ergonomic.)
 - [ ] Print the URL once ready (respect `--json`).
 - **Acceptance:** `beamd run myapp -- npx serve .` brings up `https://myapp.<slug>.<base>` serving the directory, and cleans up the tunnel on exit.
 
@@ -205,8 +205,8 @@ Tunnel URLs are iframed inside the consumer app; apps that send
 ## 8. Docs  `[P1]`
 
 - [ ] `docs/agent-api.md` (from §2), `docs/running-the-client.md` (from §4).
-- [ ] Update `README.md` install section to the published npm + binary + image once §3 lands (remove "coming soon"); reflect the single `beamd` binary (`beamd serve` / `beamd up`).
-- [ ] Add a short `docs/consuming-beamd.md`: how an external app should drive beamd (bundle the `beamd` npm pkg → write `~/.beamd/config` → `beamd up <port> --as <name> -d --json` → tear down with `beamd down <name>` → re-establish lazily on demand), the one-label naming rule, and the tunnel-cap setting.
+- [ ] Update `README.md` install section to the published npm + binary + image once §3 lands (remove "coming soon"); reflect the single `beamd` binary (`beamd serve` / `beamd open`).
+- [ ] Add a short `docs/consuming-beamd.md`: how an external app should drive beamd (bundle the `beamd` npm pkg → write `~/.beamd/config` → `beamd open <port> --as <name> -d --json` → tear down with `beamd close <name>` → re-establish lazily on demand), the one-label naming rule, and the tunnel-cap setting.
 - **Acceptance:** a developer can integrate beamd into a Node app using only `docs/consuming-beamd.md` + `docs/agent-api.md`.
 
 ---

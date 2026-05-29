@@ -51,38 +51,48 @@ func (c *LocalClient) Ping(ctx context.Context) (*HealthzResponse, error) {
 	return &out, nil
 }
 
-func (c *LocalClient) Expose(ctx context.Context, port int, name string) (string, error) {
-	body, _ := json.Marshal(ExposeRequest{Port: port, Name: name})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/expose", bytes.NewReader(body))
+// Open brings a local port up as a public tunnel via the agent and
+// returns the resolved tunnel identity.
+func (c *LocalClient) Open(ctx context.Context, port int, name string) (*OpenResponse, error) {
+	body, _ := json.Marshal(OpenRequest{Port: port, Name: name})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/open", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", decodeErr(resp)
+		return nil, decodeErr(resp)
 	}
-	var out ExposeResponse
+	var out OpenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return nil, err
 	}
-	return out.URL, nil
+	return &out, nil
 }
 
-func (c *LocalClient) Unexpose(ctx context.Context, name string) error {
-	body, _ := json.Marshal(UnexposeRequest{Name: name})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/unexpose", bytes.NewReader(body))
+// Close removes (closes) the named tunnel and reports whether it was
+// present. A missing name is not an error (the call is idempotent).
+// NB: this closes a *tunnel* by name — it does not release the
+// LocalClient itself (which owns no persistent connection).
+func (c *LocalClient) Close(ctx context.Context, name string) (bool, error) {
+	body, _ := json.Marshal(CloseRequest{Name: name})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/close", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return decodeErr(resp)
+		return false, decodeErr(resp)
 	}
-	return nil
+	var out CloseResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	return out.Removed, nil
 }
 
 func (c *LocalClient) List(ctx context.Context) ([]ListItem, error) {
@@ -144,6 +154,15 @@ func EnsureRunning(ctx context.Context, executable, socketPath string, extraEnv 
 		}
 	}
 	return fmt.Errorf("agent did not start within 5s")
+}
+
+// IsRunning reports whether an agent is currently listening on
+// socketPath, without spawning one. Used by read-only / teardown
+// commands (list, down, status) that must not start an agent just to
+// answer.
+func IsRunning(socketPath string) bool {
+	ok, _ := probe(socketPath, 200*time.Millisecond)
+	return ok
 }
 
 func probe(socketPath string, timeout time.Duration) (bool, error) {

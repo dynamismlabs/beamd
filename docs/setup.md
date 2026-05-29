@@ -317,7 +317,7 @@ Restart beamd to pick up the new token (the file is read at startup):
 
 Developer setup (their laptop):
   beamd login --server YOUR_DOMAIN:443 --token <token above>
-  beamd up 3001 --as api
+  beamd open 3001 --as api
 ```
 
 **Copy the token to your password manager now.** It's only printed
@@ -369,7 +369,7 @@ subject=CN=*.YOUR_SLUG.YOUR_DOMAIN
 ## Step 10 — Install the client on your laptop
 
 The client and server are the **same binary** — `beamd serve` is the
-edge; `beamd up` / `login` / `down` / `list` are the client. Not
+edge; `beamd open` / `login` / `close` / `list` are the client. Not
 published yet — build from source (needs Go 1.25+):
 
 ```
@@ -412,7 +412,7 @@ python3 -m http.server 3001
 In another terminal:
 
 ```
-beamd up 3001 --as hello
+beamd open 3001 --as hello
 ```
 
 It prints one line:
@@ -486,7 +486,7 @@ Then your teammate runs on their laptop:
 
 ```
 beamd login --server YOUR_DOMAIN:443 --token <theirs>
-beamd up 3001 --as api
+beamd open 3001 --as api
 # → https://api.hopper.YOUR_DOMAIN
 ```
 
@@ -514,9 +514,9 @@ Either:
   `api.YOUR_SLUG.YOUR_DOMAIN` works; `deep.nested.YOUR_SLUG.YOUR_DOMAIN`
   doesn't.
 
-**`beamd up` hangs / "no client connected"**
+**`beamd open` hangs / "no client connected"**
 Check `~/.beamd/agent.log` on your laptop. The background agent is what
-holds the client→edge connection; if it can't reach the edge, `up`
+holds the client→edge connection; if it can't reach the edge, `open`
 blocks.
 
 **`Error: no route for host …`**

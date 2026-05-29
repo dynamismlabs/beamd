@@ -8,7 +8,7 @@
 #
 # What it does:
 #   1. Starts beam-testapp on a local port.
-#   2. Runs `beamd up <port> --as smoketest`.
+#   2. Runs `beamd open <port> --as smoketest`.
 #   3. Curls a handful of routes through the resulting public URL.
 #   4. Prints pass/fail per check.
 #
@@ -50,7 +50,7 @@ cleanup() {
         kill "$APP_PID" 2>/dev/null || true
         echo "  stopped beam-testapp (pid $APP_PID)"
     fi
-    beamd down "$NAME" >/dev/null 2>&1 || true
+    beamd close "$NAME" >/dev/null 2>&1 || true
     echo "  removed tunnel '$NAME'"
 }
 trap cleanup EXIT
@@ -70,7 +70,7 @@ fi
 # --- Expose ------------------------------------------------------------------
 
 echo "exposing :$PORT as '$NAME' …"
-URL=$(beamd up "$PORT" --as "$NAME")
+URL=$(beamd open "$PORT" --as "$NAME")
 echo "tunnel URL: $URL"
 echo
 

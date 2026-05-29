@@ -7,7 +7,7 @@ for the AI-agent workflow: agent runs `npm run dev`, calls one tool,
 gets back a working URL.
 
 ```
-$ beamd up 3001 --as api
+$ beamd open 3001 --as api
 https://api.turing.beam.example.com
 ```
 
@@ -38,7 +38,7 @@ for the implementation checklist + open deferred work.
 - You point a domain (e.g. `beam.example.com`) at it.
 - You give each developer a token. The token maps to a slug (`turing`,
   `hopper`, …).
-- The developer runs `beamd up 3001 --as api` on their laptop.
+- The developer runs `beamd open 3001 --as api` on their laptop.
   Beamd issues `*.turing.beam.example.com` from Let's Encrypt
   (via DNS-01 against your DNS provider), routes
   `api.turing.beam.example.com` to their laptop's port 3001.
@@ -153,13 +153,21 @@ Hand the developer their token (the long random string from
 
 ```
 beamd login --server beam.example.com:443 --token <token-from-operator>
-beamd up 3001 --as api
+beamd open 3001 --as api
 # → https://api.turing.beam.example.com
+#   (runs in the foreground; Ctrl-C to stop — like ngrok)
 ```
 
-The background agent stays running; subsequent `up` / `list` / `down`
-calls reuse it. Tunnels survive network blips — the client reconnects
-automatically and replays your registrations.
+By default `open` runs in the **foreground** and holds the tunnel until you
+Ctrl-C. Add **`-d` / `--detach`** to hand it to a background agent and
+return immediately — then `beamd list`, `beamd close <name>`, and `beamd
+status` manage the detached tunnels. Either way the tunnel survives
+network blips: the client reconnects and replays your registrations.
+
+Add `--json` to `open` / `list` / `close` / `status` for machine-readable
+output (one object/array, nothing else) — see
+[`docs/agent-api.md`](docs/agent-api.md) for driving beamd from another
+program.
 
 ### MCP server (AI agents)
 
@@ -172,9 +180,9 @@ beamd mcp
 Wire that into your MCP-aware agent (Claude Code, Cursor, etc.) and
 the agent gets three tools:
 
-- `expose_port(port, name?)` → `https://...`
-- `unexpose(name)`
-- `list_tunnels()`
+- `expose_port(port, name?)` → `https://...`  (= `beamd open`)
+- `remove_tunnel(name)`  (= `beamd close`)
+- `list_tunnels()`  (= `beamd list`)
 
 ## Configuration reference
 

@@ -106,7 +106,7 @@ First usable release.
   unregister, heartbeat, error).
 - Per-developer wildcard certs via Let's Encrypt (DNS-01 over the libdns
   Cloudflare provider).
-- `beamd` CLI: login (copy-paste), up, list, down.
+- `beamd` CLI: login (copy-paste), open, list, close.
 - Local agent over unix socket with auto-start.
 - MCP stdio server exposing `expose_port`, `unexpose`, `list_tunnels`
   to AI agents.
