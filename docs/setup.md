@@ -369,8 +369,16 @@ subject=CN=*.YOUR_SLUG.YOUR_DOMAIN
 ## Step 10 — Install the client on your laptop
 
 The client and server are the **same binary** — `beamd serve` is the
-edge; `beamd open` / `login` / `close` / `list` are the client. Not
-published yet — build from source (needs Go 1.25+):
+edge; `beamd open` / `login` / `close` / `list` are the client. Install it
+whichever way you like:
+
+```
+npm i -g beamd      # or `npx beamd <cmd>` ad-hoc
+```
+
+Or grab a prebuilt binary from the
+[releases page](https://github.com/dynamismlabs/beamd/releases), or build
+from source (needs Go 1.25+):
 
 ```
 git clone https://github.com/dynamismlabs/beamd && cd beamd
@@ -378,10 +386,6 @@ make build          # → bin/beamd (also beam-testapp)
 ```
 
 Use `./bin/beamd`, or copy it onto your `$PATH`.
-
-Coming soon (once v0.1.0 is tagged): `go install
-github.com/dynamismlabs/beamd/cmd/beamd@latest`, a binary on the releases
-page, and `brew install`.
 
 **Verify:**
 

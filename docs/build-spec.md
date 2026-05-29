@@ -136,12 +136,12 @@ Define the client command surface and foreground vs. background behavior
 Make `beamd` installable as a binary (ngrok-style) **and** as an npm
 package (for `npx` and for Flow to bundle), all from one tagged build.
 
-- [ ] Add a GitHub Actions workflow that on `git tag vX.Y.Z` runs `goreleaser release --clean` (needs `GITHUB_TOKEN` + GHCR login).
+- [x] Add a GitHub Actions workflow that on `git tag vX.Y.Z` runs `goreleaser release --clean` (needs `GITHUB_TOKEN` + GHCR login).
 - [ ] Verify `goreleaser release --snapshot --clean` locally produces tarballs + checksums + the docker image for all 4 platforms (one `beamd` binary per platform — see §1).
-- [ ] **npm packaging (esbuild pattern).** Add a `npm/` dir + a publish script that, after goreleaser, generates and publishes:
+- [x] **npm packaging (esbuild pattern).** Add a `npm/` dir + a publish script that, after goreleaser, generates and publishes:
   - per-platform packages `beamd-{darwin-arm64,darwin-x64,linux-x64,linux-arm64}` (scope under `@beamd/` or `@dynamismlabs/` if the bare names are taken) — each `package.json` sets `"os"` + `"cpu"` and ships the matching `beamd` binary in `bin/`.
   - a main package **`beamd`** listing those as `optionalDependencies`, with a `bin/beamd` JS shim that resolves `require.resolve('beamd-<os>-<arch>/bin/beamd')` and `execFileSync`s it (passing through argv/stdio/exit code).
-- [ ] Wire npm publish into the release workflow (`NPM_TOKEN`).
+- [x] Wire npm publish into the release workflow (`NPM_TOKEN`).
 - [ ] Tag **v0.1.0**.
 - **Acceptance:** after release, on macOS arm64: `npx beamd@0.1.0 version` prints the version; `npm i beamd` in a fresh project installs only the matching platform package (~20MB) and `require.resolve('beamd/bin/beamd')` resolves; `docker pull ghcr.io/dynamismlabs/beamd:0.1.0` works.
 
@@ -205,8 +205,8 @@ Tunnel URLs are iframed inside the consumer app; apps that send
 ## 8. Docs  `[P1]`
 
 - [ ] `docs/agent-api.md` (from §2), `docs/running-the-client.md` (from §4).
-- [ ] Update `README.md` install section to the published npm + binary + image once §3 lands (remove "coming soon"); reflect the single `beamd` binary (`beamd serve` / `beamd open`).
-- [ ] Add a short `docs/consuming-beamd.md`: how an external app should drive beamd (bundle the `beamd` npm pkg → write `~/.beamd/config` → `beamd open <port> --as <name> -d --json` → tear down with `beamd close <name>` → re-establish lazily on demand), the one-label naming rule, and the tunnel-cap setting.
+- [x] Update `README.md` install section to the published npm + binary + image once §3 lands (remove "coming soon"); reflect the single `beamd` binary (`beamd serve` / `beamd open`).
+- [x] Add a short `docs/consuming-beamd.md`: how an external app should drive beamd (bundle the `beamd` npm pkg → write `~/.beamd/config` → `beamd open <port> --as <name> -d --json` → tear down with `beamd close <name>` → re-establish lazily on demand), the one-label naming rule, and the tunnel-cap setting.
 - **Acceptance:** a developer can integrate beamd into a Node app using only `docs/consuming-beamd.md` + `docs/agent-api.md`.
 
 ---

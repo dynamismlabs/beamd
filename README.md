@@ -79,16 +79,25 @@ detected zone, so subdomain `base_domain`s work.
 
 ### 2. Install
 
-Not published yet — **build from source** (needs Go 1.25+):
+`beamd` is one binary — same one for the edge (`beamd serve`) and the client
+(`beamd open`). Pick whichever install fits:
+
+```
+# npm (no Go toolchain needed; great for bundling into a Node app)
+npm i -g beamd          # or run ad-hoc: npx beamd <cmd>
+
+# Docker (for running the edge)
+docker pull ghcr.io/dynamismlabs/beamd:latest
+
+# Prebuilt binaries: https://github.com/dynamismlabs/beamd/releases
+```
+
+Or build from source (needs Go 1.25+):
 
 ```
 git clone https://github.com/dynamismlabs/beamd && cd beamd
 make build          # → bin/beamd, bin/beam-testapp
-docker build -t ghcr.io/dynamismlabs/beamd:latest .   # if you run via Docker
 ```
-
-Prebuilt binaries (releases page) and a published Docker image
-(`ghcr.io/dynamismlabs/beamd:latest`) are **coming soon**.
 
 ### 3. Configure
 
