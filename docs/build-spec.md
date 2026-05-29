@@ -196,8 +196,8 @@ while keeping browser + iframe UX seamless.
 Tunnel URLs are iframed inside the consumer app; apps that send
 `X-Frame-Options`/restrictive CSP won't embed.
 
-- [ ] Add config `preview_embed: bool` (or fold into `preview_auth`).
-- [ ] In the reverse proxy (`internal/edge/edge.go: proxyFor`) add a `ModifyResponse` that, for tunnel hosts when enabled, deletes `X-Frame-Options` and removes/relaxes `Content-Security-Policy: frame-ancestors`.
+- [x] Add config `preview_embed: bool` (or fold into `preview_auth`).
+- [x] In the reverse proxy (`internal/edge/edge.go: proxyFor`) add a `ModifyResponse` that, for tunnel hosts when enabled, deletes `X-Frame-Options` and removes/relaxes `Content-Security-Policy: frame-ancestors`.
 - **Acceptance:** an app that sets `X-Frame-Options: DENY` still embeds in an iframe on a different origin when `preview_embed=true`.
 
 ---

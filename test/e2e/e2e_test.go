@@ -813,6 +813,58 @@ func callContentText(t *testing.T, resp map[string]any) string {
 // Proxy correctness — headers, body limits, WebSocket
 // ====================================================================
 
+func TestEmbed_StripsFramingHeadersWhenEnabled(t *testing.T) {
+	port := startFramingBackend(t)
+	_, edgeAddr := startEdgeCfg(t, map[string]string{"T1": "turing"}, func(c *config.Server) {
+		c.PreviewEmbed = true
+	})
+	c := connectClient(t, edgeAddr, "T1")
+	if _, err := c.Register("api", port); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	host := "api.turing." + testBaseDomain
+	resp, err := publicHTTPSClient(edgeAddr, host).Get("https://" + host + "/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("X-Frame-Options"); got != "" {
+		t.Errorf("X-Frame-Options = %q, want it stripped", got)
+	}
+	csp := resp.Header.Get("Content-Security-Policy")
+	if strings.Contains(strings.ToLower(csp), "frame-ancestors") {
+		t.Errorf("CSP still contains frame-ancestors: %q", csp)
+	}
+	if !strings.Contains(csp, "default-src") {
+		t.Errorf("CSP lost its unrelated directives: %q (want default-src kept)", csp)
+	}
+}
+
+func TestEmbed_PreservesFramingHeadersByDefault(t *testing.T) {
+	port := startFramingBackend(t)
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"}) // preview_embed defaults to false
+	c := connectClient(t, edgeAddr, "T1")
+	if _, err := c.Register("api", port); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	host := "api.turing." + testBaseDomain
+	resp, err := publicHTTPSClient(edgeAddr, host).Get("https://" + host + "/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY (untouched by default)", got)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(strings.ToLower(csp), "frame-ancestors") {
+		t.Errorf("CSP = %q, want frame-ancestors preserved by default", csp)
+	}
+}
+
 func TestProxy_AddsXForwardedHeaders(t *testing.T) {
 	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 

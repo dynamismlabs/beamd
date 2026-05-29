@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -34,6 +35,13 @@ type Server struct {
 	// at this limit; oversized requests get HTTP 413. Defaults to 32
 	// MiB. Set to -1 to disable.
 	MaxRequestBodyBytes int64 `yaml:"max_request_body_bytes"`
+
+	// PreviewEmbed, when true, makes the edge strip iframe-blocking
+	// response headers (X-Frame-Options and the CSP frame-ancestors
+	// directive) from tunnel responses, so previews can be embedded
+	// cross-origin in a consumer app. Off by default — an app's own
+	// framing policy is respected unless the operator opts in.
+	PreviewEmbed bool `yaml:"preview_embed"`
 
 	// AuthDiscovery describes the device-code endpoints to advertise at
 	// /.well-known/beam-auth. Empty in OSS deployments (CLI then
@@ -126,6 +134,11 @@ func applyServerEnvOverrides(s *Server) {
 	for k, dst := range envs {
 		if v := os.Getenv(k); v != "" {
 			*dst = v
+		}
+	}
+	if v := os.Getenv("BEAMD_PREVIEW_EMBED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			s.PreviewEmbed = b
 		}
 	}
 }

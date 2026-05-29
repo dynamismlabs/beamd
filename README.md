@@ -203,6 +203,7 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `token_store` | yes | `file:<path>` (JSON `{token: slug}` map), or `memory:` for tests |
 | `data_dir` | defaults to `/var/lib/beamd` | Where cert cache + ACME account state live |
 | `max_tunnels_per_token` | defaults to 25 | Cap on concurrent tunnels per developer |
+| `preview_embed` | defaults to false | Strip `X-Frame-Options` + CSP `frame-ancestors` from tunnel responses so previews embed cross-origin in an iframe |
 
 ## DNS providers
 

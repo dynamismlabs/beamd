@@ -81,6 +81,58 @@ func startEdgeWithCertMgr(t *testing.T, tokens map[string]string) (*edge.Edge, *
 	return e, mgr, edgeAddr
 }
 
+// startEdgeCfg is like startEdge but lets a test tweak the server config
+// before the edge starts (e.g. to flip preview_embed on).
+func startEdgeCfg(t *testing.T, tokens map[string]string, mutate func(*config.Server)) (*edge.Edge, string) {
+	t.Helper()
+	edgeAddr := freeListenAddr(t)
+	cfg := &config.Server{
+		BaseDomain:         testBaseDomain,
+		ListenHTTPS:        edgeAddr,
+		ACMEEmail:          "test@example.com",
+		DNSProvider:        "stub",
+		TokenStore:         "memory:",
+		MaxTunnelsPerToken: 25,
+	}
+	if mutate != nil {
+		mutate(cfg)
+	}
+	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
+	if err != nil {
+		t.Fatalf("cert manager: %v", err)
+	}
+	e := edge.New(cfg, "test", auth.NewMemoryStore(tokens), mgr)
+	go func() { _ = e.Serve() }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_ = e.Shutdown(ctx)
+	})
+	waitForTCP(t, edgeAddr, 2*time.Second)
+	return e, edgeAddr
+}
+
+// startFramingBackend brings up a backend that sets iframe-blocking
+// headers (X-Frame-Options + a CSP with frame-ancestors alongside an
+// unrelated directive). Returns its port.
+func startFramingBackend(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("framing backend listen: %v", err)
+	}
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+			fmt.Fprint(w, "ok")
+		}),
+	}
+	go srv.Serve(ln)
+	t.Cleanup(func() { _ = srv.Close() })
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
 // ---------------------------------------------------------------------
 // Client setup
 // ---------------------------------------------------------------------

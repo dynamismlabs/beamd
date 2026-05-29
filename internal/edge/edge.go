@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"sync"
 	"time"
 
@@ -667,6 +668,51 @@ func (e *Edge) proxyFor(host string) *httputil.ReverseProxy {
 			DisableKeepAlives: true,
 		},
 	}
+	// When preview embedding is enabled, strip headers that would block
+	// the tunnel from being iframed cross-origin in a consumer app.
+	// proxyFor only ever serves tunnel hosts, so no host check is needed.
+	if e.cfg.PreviewEmbed {
+		p.ModifyResponse = stripFramingHeaders
+	}
 	e.proxies[host] = p
 	return p
+}
+
+// stripFramingHeaders removes the response headers that prevent a page
+// from being embedded in an iframe on another origin. Wired in as the
+// proxy's ModifyResponse only when preview_embed is set.
+func stripFramingHeaders(resp *http.Response) error {
+	resp.Header.Del("X-Frame-Options")
+	for _, h := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
+		if csp := resp.Header.Get(h); csp != "" {
+			if relaxed := stripFrameAncestors(csp); relaxed == "" {
+				resp.Header.Del(h)
+			} else {
+				resp.Header.Set(h, relaxed)
+			}
+		}
+	}
+	return nil
+}
+
+// stripFrameAncestors returns csp with any `frame-ancestors` directive
+// removed, leaving the rest of the policy intact. Returns "" if nothing
+// is left (so the caller can drop the header entirely).
+func stripFrameAncestors(csp string) string {
+	var kept []string
+	for _, directive := range strings.Split(csp, ";") {
+		d := strings.TrimSpace(directive)
+		if d == "" {
+			continue
+		}
+		name := d
+		if i := strings.IndexAny(d, " \t"); i >= 0 {
+			name = d[:i]
+		}
+		if strings.EqualFold(name, "frame-ancestors") {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return strings.Join(kept, "; ")
 }
