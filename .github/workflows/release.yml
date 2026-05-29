@@ -1,0 +1,57 @@
+name: release
+
+# Publishes a release when a version tag is pushed:
+#   git tag v0.0.1 && git push origin v0.0.1
+#
+# Produces, all from the one tag:
+#   - cross-platform binaries + checksums + a (draft) GitHub release  (goreleaser)
+#   - ghcr.io/dynamismlabs/beamd:<version> and :latest                (goreleaser)
+#   - the `beamd` npm package + per-platform packages                 (build-npm.mjs)
+#
+# Required repo secret: NPM_TOKEN (an npm automation token).
+# GHCR uses the built-in GITHUB_TOKEN (no extra secret needed).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub release
+  packages: write # push the image to GHCR
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser needs full history + tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release binaries + image (GoReleaser)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to npm
+        run: node scripts/build-npm.mjs "${GITHUB_REF_NAME#v}" --publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

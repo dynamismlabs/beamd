@@ -1,4 +1,7 @@
 bin/
+dist/
+npm/build/
+data/
 *.test
 *.out
 *.log
@@ -6,5 +9,6 @@ bin/
 .DS_Store
 tokens.json
 .beam/
+.beamd/
 .idea/
 .vscode/
