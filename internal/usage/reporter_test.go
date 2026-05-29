@@ -61,8 +61,8 @@ func TestReporter_FirstReportSendsCurrentTotals(t *testing.T) {
 	srv, received, _ := startReceiver(t)
 	source := &mockSource{}
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 100, "alex": 50},
-		TunnelsBySlug: map[string]int64{"trey": 2, "alex": 1},
+		BytesBySlug:   map[string]int64{"turing": 100, "hopper": 50},
+		TunnelsBySlug: map[string]int64{"turing": 2, "hopper": 1},
 		RequestsTotal: 5,
 	})
 
@@ -87,7 +87,7 @@ func TestReporter_FirstReportSendsCurrentTotals(t *testing.T) {
 		t.Errorf("requests delta = %d, want 5", body.RequestsTotalDelta)
 	}
 	got := bytesBySlug(body.Events)
-	if got["trey"] != 100 || got["alex"] != 50 {
+	if got["turing"] != 100 || got["hopper"] != 50 {
 		t.Errorf("first-report bytes wrong: %v", got)
 	}
 }
@@ -96,8 +96,8 @@ func TestReporter_SecondReportSendsDeltas(t *testing.T) {
 	srv, received, _ := startReceiver(t)
 	source := &mockSource{}
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 100, "alex": 50},
-		TunnelsBySlug: map[string]int64{"trey": 1, "alex": 1},
+		BytesBySlug:   map[string]int64{"turing": 100, "hopper": 50},
+		TunnelsBySlug: map[string]int64{"turing": 1, "hopper": 1},
 		RequestsTotal: 5,
 	})
 
@@ -113,10 +113,10 @@ func TestReporter_SecondReportSendsDeltas(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// trey added 75 bytes, alex unchanged, requests +3.
+	// turing added 75 bytes, hopper unchanged, requests +3.
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 175, "alex": 50},
-		TunnelsBySlug: map[string]int64{"trey": 1, "alex": 1},
+		BytesBySlug:   map[string]int64{"turing": 175, "hopper": 50},
+		TunnelsBySlug: map[string]int64{"turing": 1, "hopper": 1},
 		RequestsTotal: 8,
 	})
 
@@ -131,12 +131,12 @@ func TestReporter_SecondReportSendsDeltas(t *testing.T) {
 		t.Errorf("requests delta = %d, want 3", body.RequestsTotalDelta)
 	}
 	got := bytesBySlug(body.Events)
-	if got["trey"] != 75 {
-		t.Errorf("trey delta = %d, want 75", got["trey"])
+	if got["turing"] != 75 {
+		t.Errorf("turing delta = %d, want 75", got["turing"])
 	}
-	// alex had 0 delta AND nonzero active_tunnels — still reported.
-	if _, ok := got["alex"]; !ok {
-		t.Errorf("alex should still be reported when active_tunnels > 0; events: %+v", body.Events)
+	// hopper had 0 delta AND nonzero active_tunnels — still reported.
+	if _, ok := got["hopper"]; !ok {
+		t.Errorf("hopper should still be reported when active_tunnels > 0; events: %+v", body.Events)
 	}
 }
 
@@ -144,8 +144,8 @@ func TestReporter_RestartTreatsResetAsNonNegative(t *testing.T) {
 	srv, received, _ := startReceiver(t)
 	source := &mockSource{}
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 1000},
-		TunnelsBySlug: map[string]int64{"trey": 1},
+		BytesBySlug:   map[string]int64{"turing": 1000},
+		TunnelsBySlug: map[string]int64{"turing": 1},
 		RequestsTotal: 50,
 	})
 
@@ -165,8 +165,8 @@ func TestReporter_RestartTreatsResetAsNonNegative(t *testing.T) {
 	// Simulate beamd restart: source returns 0 (fresh counters), but
 	// state file still says we last reported 1000.
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 200},
-		TunnelsBySlug: map[string]int64{"trey": 1},
+		BytesBySlug:   map[string]int64{"turing": 200},
+		TunnelsBySlug: map[string]int64{"turing": 1},
 		RequestsTotal: 10,
 	})
 	r2, err := NewReporter(Config{
@@ -187,8 +187,8 @@ func TestReporter_RestartTreatsResetAsNonNegative(t *testing.T) {
 	// Second report should NOT be -800 — it should be the post-reset
 	// 200, treated as "all new" because the counter clearly reset.
 	got := bytesBySlug((*received)[1].Events)
-	if got["trey"] != 200 {
-		t.Errorf("post-reset delta = %d, want 200", got["trey"])
+	if got["turing"] != 200 {
+		t.Errorf("post-reset delta = %d, want 200", got["turing"])
 	}
 }
 
@@ -217,8 +217,8 @@ func TestReporter_SecretSentAsBearer(t *testing.T) {
 	srv, _, auths := startReceiver(t)
 	source := &mockSource{}
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 100},
-		TunnelsBySlug: map[string]int64{"trey": 1},
+		BytesBySlug:   map[string]int64{"turing": 100},
+		TunnelsBySlug: map[string]int64{"turing": 1},
 		RequestsTotal: 1,
 	})
 
@@ -249,8 +249,8 @@ func TestReporter_FailedWebhookKeepsWatermark(t *testing.T) {
 
 	source := &mockSource{}
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 100},
-		TunnelsBySlug: map[string]int64{"trey": 1},
+		BytesBySlug:   map[string]int64{"turing": 100},
+		TunnelsBySlug: map[string]int64{"turing": 1},
 		RequestsTotal: 5,
 	})
 
@@ -270,14 +270,14 @@ func TestReporter_FailedWebhookKeepsWatermark(t *testing.T) {
 	// we should still see the FULL cumulative bytes (100→150 → delta 150,
 	// not 50) — i.e. the watermark didn't advance.
 	source.set(Snapshot{
-		BytesBySlug:   map[string]int64{"trey": 150},
-		TunnelsBySlug: map[string]int64{"trey": 1},
+		BytesBySlug:   map[string]int64{"turing": 150},
+		TunnelsBySlug: map[string]int64{"turing": 1},
 		RequestsTotal: 8,
 	})
 
 	// Verify watermark unchanged.
 	r.mu.Lock()
-	last := r.lastBytesBySlug["trey"]
+	last := r.lastBytesBySlug["turing"]
 	r.mu.Unlock()
 	if last != 0 {
 		t.Errorf("watermark advanced after failed report: %d", last)

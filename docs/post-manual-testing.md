@@ -77,17 +77,17 @@ git push origin v0.1.0
 GoReleaser (`.goreleaser.yaml`) will then:
 
 - Build cross-platform binaries (linux/darwin × amd64/arm64) for
-  `beamd`, `beam`, and `beam-testapp`.
+  `beamd` and `beam-testapp`.
 - Bundle them with `README.md`, `LICENSE`, `example/beamd.yaml`,
   `scripts/smoke-test.sh`, and the two docs.
-- Push `ghcr.io/treyhuffine/beamd:{v0.1.0,latest}` to GHCR.
+- Push `ghcr.io/dynamismlabs/beamd:{v0.1.0,latest}` to GHCR.
 - Create a draft GitHub release.
 
 After the release lands:
 
 - Edit `README.md` and `docs/setup.md` to remove the "until v0.1.0 is
   tagged" caveats.
-- Test the published image: `docker pull ghcr.io/treyhuffine/beamd:v0.1.0`.
+- Test the published image: `docker pull ghcr.io/dynamismlabs/beamd:v0.1.0`.
 
 ### CHANGELOG.md template
 
@@ -106,8 +106,8 @@ First usable release.
   unregister, heartbeat, error).
 - Per-developer wildcard certs via Let's Encrypt (DNS-01 over the libdns
   Cloudflare provider).
-- `beam` CLI: login (copy-paste), expose, list, unexpose.
-- Local daemon over unix socket with auto-start.
+- `beamd` CLI: login (copy-paste), up, list, down.
+- Local agent over unix socket with auto-start.
 - MCP stdio server exposing `expose_port`, `unexpose`, `list_tunnels`
   to AI agents.
 - Reconnect with exponential backoff + replay of every active
@@ -119,7 +119,7 @@ First usable release.
 ### Known limitations
 - Operator must onboard each developer manually (copy-paste token).
 - Only Cloudflare and a test stub are wired DNS providers.
-- Unix-only daemon (no Windows named pipe yet).
+- Unix-only agent (no Windows named pipe yet).
 - Real ACME path is exercised manually; no automated CI test against
   Pebble or LE staging.
 ```
@@ -155,7 +155,7 @@ issuance → chain validation) has never been run in CI.
 3. Test plan: configure `MagicManager` with `acme_ca:
    https://localhost:14000/dir`, use `dns.StubProvider` so the
    DNS-01 challenge writes succeed in-memory, trigger
-   `mgr.PreWarm("trey")`, assert no error + cert chain validates
+   `mgr.PreWarm("turing")`, assert no error + cert chain validates
    against Pebble's root (fetched from `:15000/roots/0`).
 
 This is the single highest-confidence test you can add — it proves

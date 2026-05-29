@@ -29,13 +29,13 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/treyhuffine/beamd/internal/auth"
-	"github.com/treyhuffine/beamd/internal/certs"
-	"github.com/treyhuffine/beamd/internal/client"
-	"github.com/treyhuffine/beamd/internal/config"
-	"github.com/treyhuffine/beamd/internal/dns"
-	"github.com/treyhuffine/beamd/internal/edge"
-	"github.com/treyhuffine/beamd/internal/mcp"
+	"github.com/dynamismlabs/beamd/internal/auth"
+	"github.com/dynamismlabs/beamd/internal/certs"
+	"github.com/dynamismlabs/beamd/internal/client"
+	"github.com/dynamismlabs/beamd/internal/config"
+	"github.com/dynamismlabs/beamd/internal/dns"
+	"github.com/dynamismlabs/beamd/internal/edge"
+	"github.com/dynamismlabs/beamd/internal/mcp"
 )
 
 // ====================================================================
@@ -44,19 +44,19 @@ import (
 
 func TestTunnel_SingleRegisteredAppServesPublicURL(t *testing.T) {
 	dummyPort := startDummyApp(t, "dummy")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	c := connectClient(t, edgeAddr, "T1")
 	url, err := c.Register("hardcoded", dummyPort)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	wantURL := "https://hardcoded.trey." + testBaseDomain
+	wantURL := "https://hardcoded.turing." + testBaseDomain
 	if url != wantURL {
 		t.Errorf("url = %q, want %q", url, wantURL)
 	}
 
-	host := "hardcoded.trey." + testBaseDomain
+	host := "hardcoded.turing." + testBaseDomain
 	hc := publicHTTPSClient(edgeAddr, host)
 
 	resp, err := hc.Get("https://" + host + "/foo")
@@ -97,7 +97,7 @@ func TestTunnel_TwoBackendsConcurrentOverOneSession(t *testing.T) {
 	port1 := startDummyApp(t, "app1")
 	port2 := startDummyApp(t, "app2")
 
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 
 	if _, err := c.Register("app1", port1); err != nil {
@@ -107,8 +107,8 @@ func TestTunnel_TwoBackendsConcurrentOverOneSession(t *testing.T) {
 		t.Fatalf("register app2: %v", err)
 	}
 
-	host1 := "app1.trey." + testBaseDomain
-	host2 := "app2.trey." + testBaseDomain
+	host1 := "app1.turing." + testBaseDomain
+	host2 := "app2.turing." + testBaseDomain
 	hc1 := publicHTTPSClient(edgeAddr, host1)
 	hc2 := publicHTTPSClient(edgeAddr, host2)
 
@@ -162,7 +162,7 @@ func TestTunnel_TwoBackendsConcurrentOverOneSession(t *testing.T) {
 func TestEdge_UnknownHostReturns404(t *testing.T) {
 	dummyPort := startDummyApp(t, "dummy")
 
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 	if _, err := c.Register("known", dummyPort); err != nil {
 		t.Fatalf("register: %v", err)
@@ -186,7 +186,7 @@ func TestRegister_TwoNamesProduceWorkingURLs(t *testing.T) {
 	port1 := startDummyApp(t, "api")
 	port2 := startDummyApp(t, "web")
 
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 
 	url1, err := c.Register("api", port1)
@@ -198,29 +198,29 @@ func TestRegister_TwoNamesProduceWorkingURLs(t *testing.T) {
 		t.Fatalf("register web: %v", err)
 	}
 
-	if want := "https://api.trey." + testBaseDomain; url1 != want {
+	if want := "https://api.turing." + testBaseDomain; url1 != want {
 		t.Errorf("url1 = %q, want %q", url1, want)
 	}
-	if want := "https://web.trey." + testBaseDomain; url2 != want {
+	if want := "https://web.turing." + testBaseDomain; url2 != want {
 		t.Errorf("url2 = %q, want %q", url2, want)
 	}
 
-	host1 := "api.trey." + testBaseDomain
-	host2 := "web.trey." + testBaseDomain
+	host1 := "api.turing." + testBaseDomain
+	host2 := "web.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host1), "https://"+host1+"/x", "api: GET /x\n")
 	checkResponse(t, publicHTTPSClient(edgeAddr, host2), "https://"+host2+"/y", "web: GET /y\n")
 }
 
 func TestRegister_DerivesNameFromPortWhenOmitted(t *testing.T) {
 	port := startDummyApp(t, "p")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 
 	url, err := c.Register("", port)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if !strings.Contains(url, ".trey."+testBaseDomain) {
+	if !strings.Contains(url, ".turing."+testBaseDomain) {
 		t.Errorf("url %q missing slug+base", url)
 	}
 	if !strings.HasPrefix(url, "https://") {
@@ -230,7 +230,7 @@ func TestRegister_DerivesNameFromPortWhenOmitted(t *testing.T) {
 
 func TestRegister_RejectsInvalidNames(t *testing.T) {
 	port := startDummyApp(t, "p")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 
 	cases := []string{"Bad_Name", "API", "has.dot", "-leading", "trailing-", strings.Repeat("a", 64)}
@@ -248,7 +248,7 @@ func TestRegister_RejectsInvalidNames(t *testing.T) {
 
 func TestRegister_CrossSessionCollisionReturnsNameTaken(t *testing.T) {
 	port := startDummyApp(t, "p")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	c1 := connectClient(t, edgeAddr, "T1")
 	if _, err := c1.Register("api", port); err != nil {
@@ -277,7 +277,7 @@ func TestRegister_CrossSessionCollisionReturnsNameTaken(t *testing.T) {
 
 func TestRegister_NameReusableAfterSessionDrops(t *testing.T) {
 	port := startDummyApp(t, "p")
-	e, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	e, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	c1 := connectClient(t, edgeAddr, "T1")
 	if _, err := c1.Register("api", port); err != nil {
@@ -313,7 +313,7 @@ func TestRegister_PerSlugTunnelCapReturnsOverLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "trey"}), mgr)
+	e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "turing"}), mgr)
 	go func() { _ = e.Serve() }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -339,7 +339,7 @@ func TestRegister_PerSlugTunnelCapReturnsOverLimit(t *testing.T) {
 }
 
 func TestHello_RejectsBadToken(t *testing.T) {
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -354,7 +354,7 @@ func TestHello_RejectsBadToken(t *testing.T) {
 
 func TestHeartbeat_TimeoutDropsSession(t *testing.T) {
 	port := startDummyApp(t, "p")
-	e, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	e, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	e.SetHeartbeatTimeout(200 * time.Millisecond)
 
@@ -395,7 +395,7 @@ func TestHeartbeat_TimeoutDropsSession(t *testing.T) {
 
 func TestSession_ClientCloseDropsRoutes(t *testing.T) {
 	port := startDummyApp(t, "p")
-	e, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	e, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	c := connectClient(t, edgeAddr, "T1")
 	if _, err := c.Register("api", port); err != nil {
@@ -429,7 +429,7 @@ func TestCerts_ReuseSameWildcardAcrossAppsUnderSlug(t *testing.T) {
 	port1 := startDummyApp(t, "api")
 	port2 := startDummyApp(t, "web")
 
-	_, mgr, edgeAddr := startEdgeWithCertMgr(t, map[string]string{"T1": "trey"})
+	_, mgr, edgeAddr := startEdgeWithCertMgr(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 
 	if _, err := c.Register("api", port1); err != nil {
@@ -439,8 +439,8 @@ func TestCerts_ReuseSameWildcardAcrossAppsUnderSlug(t *testing.T) {
 		t.Fatalf("register web: %v", err)
 	}
 
-	host1 := "api.trey." + testBaseDomain
-	host2 := "web.trey." + testBaseDomain
+	host1 := "api.turing." + testBaseDomain
+	host2 := "web.turing." + testBaseDomain
 
 	checkResponse(t, publicHTTPSClient(edgeAddr, host1), "https://"+host1+"/x", "api: GET /x\n")
 	if got := mgr.IssuanceCount(); got != 1 {
@@ -458,28 +458,28 @@ func TestCerts_DistinctSlugsGetDistinctWildcards(t *testing.T) {
 	port := startDummyApp(t, "p")
 
 	_, mgr, edgeAddr := startEdgeWithCertMgr(t, map[string]string{
-		"T1": "trey",
-		"T2": "alex",
+		"T1": "turing",
+		"T2": "hopper",
 	})
 
 	c1 := connectClient(t, edgeAddr, "T1")
 	if _, err := c1.Register("api", port); err != nil {
 		t.Fatalf("c1 register: %v", err)
 	}
-	host1 := "api.trey." + testBaseDomain
+	host1 := "api.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host1), "https://"+host1+"/x", "p: GET /x\n")
 	if got := mgr.IssuanceCount(); got != 1 {
-		t.Errorf("after slug trey, issuance = %d, want 1", got)
+		t.Errorf("after slug turing, issuance = %d, want 1", got)
 	}
 
 	c2 := connectClient(t, edgeAddr, "T2")
 	if _, err := c2.Register("api", port); err != nil {
 		t.Fatalf("c2 register: %v", err)
 	}
-	host2 := "api.alex." + testBaseDomain
+	host2 := "api.hopper." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host2), "https://"+host2+"/y", "p: GET /y\n")
 	if got := mgr.IssuanceCount(); got != 2 {
-		t.Errorf("after distinct slug alex, issuance = %d, want 2", got)
+		t.Errorf("after distinct slug hopper, issuance = %d, want 2", got)
 	}
 }
 
@@ -489,22 +489,22 @@ func TestCerts_DifferentTokensSameSlugShareWildcard(t *testing.T) {
 	port := startDummyApp(t, "p")
 
 	_, mgr, edgeAddr := startEdgeWithCertMgr(t, map[string]string{
-		"T1": "trey",
-		"T2": "trey",
+		"T1": "turing",
+		"T2": "turing",
 	})
 
 	c1 := connectClient(t, edgeAddr, "T1")
 	if _, err := c1.Register("api", port); err != nil {
 		t.Fatalf("c1 register: %v", err)
 	}
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/x", "p: GET /x\n")
 
 	c2 := connectClient(t, edgeAddr, "T2")
 	if _, err := c2.Register("web", port); err != nil {
 		t.Fatalf("c2 register: %v", err)
 	}
-	host2 := "web.trey." + testBaseDomain
+	host2 := "web.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host2), "https://"+host2+"/y", "p: GET /y\n")
 
 	if got := mgr.IssuanceCount(); got != 1 {
@@ -518,7 +518,7 @@ func TestProvisionDev_WritesApexAndWildcardARecords(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if err := dns.ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
+	if err := dns.ProvisionSlug(ctx, p, "beam.example.com", "beam.example.com", "turing", "1.2.3.4", "2001:db8::1"); err != nil {
 		t.Fatalf("ProvisionSlug: %v", err)
 	}
 
@@ -529,10 +529,10 @@ func TestProvisionDev_WritesApexAndWildcardARecords(t *testing.T) {
 
 	type key struct{ name, typ string }
 	want := map[key]bool{
-		{"trey", "A"}:      false,
-		{"*.trey", "A"}:    false,
-		{"trey", "AAAA"}:   false,
-		{"*.trey", "AAAA"}: false,
+		{"turing", "A"}:      false,
+		{"*.turing", "A"}:    false,
+		{"turing", "AAAA"}:   false,
+		{"*.turing", "AAAA"}: false,
 	}
 	for _, r := range recs {
 		rr := r.RR()
@@ -550,7 +550,7 @@ func TestProvisionDev_WritesApexAndWildcardARecords(t *testing.T) {
 	}
 
 	// Idempotent.
-	if err := dns.ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
+	if err := dns.ProvisionSlug(ctx, p, "beam.example.com", "beam.example.com", "turing", "1.2.3.4", "2001:db8::1"); err != nil {
 		t.Fatalf("ProvisionSlug rerun: %v", err)
 	}
 	if got := len(p.Records("beam.example.com")); got != 4 {
@@ -564,7 +564,7 @@ func TestProvisionDev_WritesApexAndWildcardARecords(t *testing.T) {
 
 func TestDaemon_ExposeListUnexposeRoundTrip(t *testing.T) {
 	port := startDummyApp(t, "api")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	c := connectClient(t, edgeAddr, "T1")
 	lc := startDaemon(t, c)
@@ -576,12 +576,12 @@ func TestDaemon_ExposeListUnexposeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expose: %v", err)
 	}
-	wantURL := "https://api.trey." + testBaseDomain
+	wantURL := "https://api.turing." + testBaseDomain
 	if url != wantURL {
 		t.Errorf("url = %q, want %q", url, wantURL)
 	}
 
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/x", "api: GET /x\n")
 
 	items, err := lc.List(ctx)
@@ -608,7 +608,7 @@ func TestDaemon_ExposeListUnexposeRoundTrip(t *testing.T) {
 }
 
 func TestDaemon_HealthzReportsSlugAndHealth(t *testing.T) {
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 	lc := startDaemon(t, c)
 
@@ -618,8 +618,8 @@ func TestDaemon_HealthzReportsSlugAndHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Slug != "trey" {
-		t.Errorf("slug = %q, want trey", h.Slug)
+	if h.Slug != "turing" {
+		t.Errorf("slug = %q, want turing", h.Slug)
 	}
 	if !h.Healthy {
 		t.Errorf("healthy = false, want true")
@@ -628,7 +628,7 @@ func TestDaemon_HealthzReportsSlugAndHealth(t *testing.T) {
 
 func TestClient_ReconnectReplaysRegistrationsKeepsURLs(t *testing.T) {
 	port := startDummyApp(t, "api")
-	e, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	e, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	c := connectClientWithOpts(t, edgeAddr, "T1", client.Options{
 		HeartbeatInterval: 100 * time.Millisecond,
@@ -640,7 +640,7 @@ func TestClient_ReconnectReplaysRegistrationsKeepsURLs(t *testing.T) {
 	if _, err := c.Register("api", port); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/before", "api: GET /before\n")
 
 	before := e.SessionsCreatedTotal()
@@ -658,7 +658,7 @@ func TestClient_ReconnectReplaysRegistrationsKeepsURLs(t *testing.T) {
 
 func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
 	port := startDummyApp(t, "api")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 	lc := startDaemon(t, c)
 
@@ -718,12 +718,12 @@ func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
 	}
 	first := content[0].(map[string]any)
 	text, _ := first["text"].(string)
-	wantPrefix := "https://api.trey." + testBaseDomain
+	wantPrefix := "https://api.turing." + testBaseDomain
 	if text != wantPrefix {
 		t.Errorf("tools/call result = %q, want %q", text, wantPrefix)
 	}
 
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/m", "api: GET /m\n")
 }
 
@@ -732,7 +732,7 @@ func TestMCP_InitializeListToolsCallExposePort(t *testing.T) {
 // ====================================================================
 
 func TestProxy_AddsXForwardedHeaders(t *testing.T) {
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	// Backend that echoes the received X-Forwarded-* headers.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -757,7 +757,7 @@ func TestProxy_AddsXForwardedHeaders(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	resp, err := publicHTTPSClient(edgeAddr, host).Get("https://" + host + "/echo")
 	if err != nil {
 		t.Fatal(err)
@@ -810,13 +810,13 @@ func TestProxy_WebSocketUpgradeEndToEnd(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 	if _, err := c.Register("ws", port); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
-	host := "ws.trey." + testBaseDomain
+	host := "ws.turing." + testBaseDomain
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 		NetDialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -883,7 +883,7 @@ func TestProxy_OversizedRequestBodyRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "trey"}), mgr)
+	e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "turing"}), mgr)
 	go func() { _ = e.Serve() }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -897,7 +897,7 @@ func TestProxy_OversizedRequestBodyRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	hc := publicHTTPSClient(edgeAddr, host)
 
 	small := bytes.Repeat([]byte("x"), 100)
@@ -929,13 +929,13 @@ func TestProxy_OversizedRequestBodyRejected(t *testing.T) {
 
 func TestMetrics_ExposesExpectedCounters(t *testing.T) {
 	port := startDummyApp(t, "api")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 	if _, err := c.Register("api", port); err != nil {
 		t.Fatal(err)
 	}
 
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/m", "api: GET /m\n")
 
 	resp, err := publicHTTPSClient(edgeAddr, host).Get("https://" + host + "/metrics")
@@ -954,7 +954,7 @@ func TestMetrics_ExposesExpectedCounters(t *testing.T) {
 		"beam_bytes_proxied_total",
 		`beam_active_sessions 1`,
 		`beam_active_tunnels 1`,
-		`beam_bytes_proxied_total{slug="trey"}`,
+		`beam_bytes_proxied_total{slug="turing"}`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("metrics output missing %q\nfull body:\n%s", want, got)
@@ -964,13 +964,13 @@ func TestMetrics_ExposesExpectedCounters(t *testing.T) {
 
 func TestMetrics_BandwidthCounterReflectsResponseBytes(t *testing.T) {
 	port := startDummyApp(t, "api")
-	_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
 	if _, err := c.Register("api", port); err != nil {
 		t.Fatal(err)
 	}
 
-	host := "api.trey." + testBaseDomain
+	host := "api.turing." + testBaseDomain
 	// "api: GET /x\n" → 13 bytes.
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/x", "api: GET /x\n")
 
@@ -982,7 +982,7 @@ func TestMetrics_BandwidthCounterReflectsResponseBytes(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	out := string(body)
 
-	want := `beam_bytes_proxied_total{slug="trey"}`
+	want := `beam_bytes_proxied_total{slug="turing"}`
 	idx := strings.Index(out, want)
 	if idx < 0 {
 		t.Fatalf("missing %q in metrics:\n%s", want, out)
@@ -1016,7 +1016,7 @@ func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "trey"}), mgr)
+	e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "turing"}), mgr)
 	go func() { _ = e.Serve() }()
 	waitForTCP(t, edgeAddr, 2*time.Second)
 
@@ -1053,7 +1053,7 @@ func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {
 
 func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 	t.Run("OSS returns empty discovery", func(t *testing.T) {
-		_, edgeAddr := startEdge(t, map[string]string{"T1": "trey"})
+		_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 		resp, err := publicHTTPSClient(edgeAddr, testBaseDomain).Get(
 			"https://" + testBaseDomain + "/.well-known/beam-auth")
@@ -1087,7 +1087,7 @@ func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "trey"}), mgr)
+		e := edge.New(cfg, "test", auth.NewMemoryStore(map[string]string{"T1": "turing"}), mgr)
 		go func() { _ = e.Serve() }()
 		t.Cleanup(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)

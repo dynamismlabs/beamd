@@ -1,5 +1,5 @@
 // Package mcp implements a Model Context Protocol stdio server that
-// wraps the beam daemon's local HTTP API. Tools exposed:
+// wraps the beamd agent's local HTTP API. Tools exposed:
 //   - expose_port(port, name?)
 //   - unexpose(name)
 //   - list_tunnels()
@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/treyhuffine/beamd/internal/daemon"
+	"github.com/dynamismlabs/beamd/internal/daemon"
 )
 
 const ProtocolVersion = "2024-11-05"

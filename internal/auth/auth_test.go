@@ -7,8 +7,8 @@ import (
 )
 
 func TestMemoryStore(t *testing.T) {
-	s := NewMemoryStore(map[string]string{"T1": "trey", "T2": "alex"})
-	if slug, ok := s.Resolve("T1"); !ok || slug != "trey" {
+	s := NewMemoryStore(map[string]string{"T1": "turing", "T2": "hopper"})
+	if slug, ok := s.Resolve("T1"); !ok || slug != "turing" {
 		t.Errorf("Resolve(T1) = (%q, %v)", slug, ok)
 	}
 	if _, ok := s.Resolve("nope"); ok {
@@ -19,7 +19,7 @@ func TestMemoryStore(t *testing.T) {
 func TestFileStore(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tokens.json")
-	body := `{"T1":"trey","T2":"alex"}`
+	body := `{"T1":"turing","T2":"hopper"}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestFileStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
 	}
-	if slug, ok := s.Resolve("T2"); !ok || slug != "alex" {
+	if slug, ok := s.Resolve("T2"); !ok || slug != "hopper" {
 		t.Errorf("Resolve(T2) = (%q, %v)", slug, ok)
 	}
 }

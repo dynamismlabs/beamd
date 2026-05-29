@@ -17,16 +17,24 @@ them in a scratch file:
 
 | Placeholder | Meaning | Example |
 |---|---|---|
-| `YOUR_DOMAIN` | A domain dedicated to Beamd. Buy a fresh cheap one — don't reuse an existing one. | `mytunnel.dev` |
+| `YOUR_DOMAIN` | The hostname Beamd lives under (its `base_domain`). A dedicated apex domain (`mytunnel.dev`) **or** a subdomain of a domain you already run on Cloudflare (`beam.mydomain.com`). | `beam.mydomain.com` |
+| `YOUR_ZONE` | The registered Cloudflare zone that owns `YOUR_DOMAIN`. Same as `YOUR_DOMAIN` for an apex; the parent for a subdomain. Beamd auto-detects this. | `mydomain.com` |
 | `YOUR_SERVER_IP` | Public IPv4 of the VM you'll run beamd on | `203.0.113.42` |
 | `YOUR_EMAIL` | Contact email for Let's Encrypt registration | `you@example.com` |
-| `YOUR_SLUG` | Short label for your own developer identity (lowercase, alphanumeric, hyphens — RFC 1123 label) | `trey` |
+| `YOUR_SLUG` | Short label for your own developer identity (lowercase, alphanumeric, hyphens — RFC 1123 label) | `turing` |
 | `YOUR_TOKEN` | A long random secret you'll generate in step 7 | `4f2c…` (64 hex chars) |
 | `YOUR_CF_TOKEN` | The Cloudflare API token you'll create in step 3 | `abc123…` (40 chars) |
 
 ---
 
 ## Step 1 — Buy a domain
+
+> **Already have a domain on Cloudflare?** You can skip buying one and
+> use a **subdomain** of it as `YOUR_DOMAIN` (e.g. `beam.mydomain.com`).
+> Beamd auto-detects the parent zone (`mydomain.com`) and writes records
+> relative to it. If you go this route, skip Steps 1–2, keep your CF
+> token scoped to the **parent zone**, and in Step 5 add the A record at
+> the subdomain label instead of `@`.
 
 Get a fresh domain dedicated to Beamd. Cheapest options:
 
@@ -142,7 +150,7 @@ In Cloudflare dashboard → `YOUR_DOMAIN` → **DNS** → **Records** →
 | Field | Value |
 |---|---|
 | **Type** | A |
-| **Name** | `@` (this means the apex, i.e. `YOUR_DOMAIN` itself) |
+| **Name** | `@` if `YOUR_DOMAIN` is the zone apex; the **subdomain label** if it's a subdomain (e.g. `beam` for `beam.mydomain.com`) |
 | **IPv4 address** | `YOUR_SERVER_IP` |
 | **Proxy status** | **DNS only** (gray cloud — *NOT* orange) |
 | **TTL** | Auto |
@@ -190,7 +198,7 @@ run:
 docker run --rm -it \
   -v /etc/beamd:/etc/beamd \
   -v /var/lib/beamd:/var/lib/beamd \
-  ghcr.io/treyhuffine/beamd:latest init
+  ghcr.io/dynamismlabs/beamd:latest init
 ```
 
 It prompts for `base_domain`, `edge_ipv4`, `acme_email`, etc. (defaults
@@ -221,19 +229,23 @@ cat /etc/beamd/beamd.yaml
 
 ## Step 8 — Run Beamd
 
-> **Image availability:** the Docker image
-> `ghcr.io/treyhuffine/beamd:latest` is published by GoReleaser when
-> we tag a release. Until v0.1.0 is tagged, you'll need to either build
-> the binary on the server (see [Appendix A](#appendix-a--building-from-source))
-> or build the image locally + push it yourself.
+> **Image availability:** `ghcr.io/dynamismlabs/beamd:latest` is **not
+> published yet** (coming soon). For now, build it on the server from a
+> clone of the repo — this also gives you the `example/` files used below:
+>
+> ```
+> git clone https://github.com/dynamismlabs/beamd /opt/beamd
+> cd /opt/beamd && docker build -t ghcr.io/dynamismlabs/beamd:latest .
+> ```
+>
+> (If you ran `beamd init` via the image in Step 7, build this first.)
 
-Copy the bundled compose file + env template to `/etc/beamd/`:
+Copy the bundled compose file + env template to `/etc/beamd/` from your
+clone:
 
 ```
-sudo curl -L -o /etc/beamd/docker-compose.yml \
-  https://raw.githubusercontent.com/treyhuffine/beam/main/example/docker-compose.yml
-sudo curl -L -o /etc/beamd/.env \
-  https://raw.githubusercontent.com/treyhuffine/beam/main/example/.env.example
+sudo cp /opt/beamd/example/docker-compose.yml /etc/beamd/docker-compose.yml
+sudo cp /opt/beamd/example/.env.example       /etc/beamd/.env
 ```
 
 Edit `/etc/beamd/.env` and paste in your Cloudflare API token from
@@ -296,7 +308,7 @@ It prints something like:
 
 ```
 developer added:
-  slug:   trey
+  slug:   turing
   token:  4f2c8b7d1e09…  (64 hex chars)
 
 Restart beamd to pick up the new token (the file is read at startup):
@@ -304,8 +316,8 @@ Restart beamd to pick up the new token (the file is read at startup):
   systemctl restart beamd     # if running as a systemd unit
 
 Developer setup (their laptop):
-  beam login --server YOUR_DOMAIN:443 --token <token above>
-  beam expose 3001 --as api
+  beamd login --server YOUR_DOMAIN:443 --token <token above>
+  beamd up 3001 --as api
 ```
 
 **Copy the token to your password manager now.** It's only printed
@@ -356,19 +368,25 @@ subject=CN=*.YOUR_SLUG.YOUR_DOMAIN
 
 ## Step 10 — Install the client on your laptop
 
-Today, the easiest path is `go install`:
+The client and server are the **same binary** — `beamd serve` is the
+edge; `beamd up` / `login` / `down` / `list` are the client. Not
+published yet — build from source (needs Go 1.25+):
 
 ```
-go install github.com/treyhuffine/beamd/cmd/beam@latest
+git clone https://github.com/dynamismlabs/beamd && cd beamd
+make build          # → bin/beamd (also beam-testapp)
 ```
 
-Once v0.1.0 is tagged, you'll also be able to download a binary from the
-releases page or `brew install` (TBD).
+Use `./bin/beamd`, or copy it onto your `$PATH`.
+
+Coming soon (once v0.1.0 is tagged): `go install
+github.com/dynamismlabs/beamd/cmd/beamd@latest`, a binary on the releases
+page, and `brew install`.
 
 **Verify:**
 
 ```
-beam version
+beamd version
 ```
 
 ---
@@ -376,10 +394,10 @@ beam version
 ## Step 11 — Log in from your laptop
 
 ```
-beam login --server YOUR_DOMAIN:443 --token YOUR_TOKEN
+beamd login --server YOUR_DOMAIN:443 --token YOUR_TOKEN
 ```
 
-Should print `logged in`. This saves to `~/.beam/config`.
+Should print `logged in`. This saves to `~/.beamd/config`.
 
 ---
 
@@ -394,7 +412,7 @@ python3 -m http.server 3001
 In another terminal:
 
 ```
-beam expose 3001 --as hello
+beamd up 3001 --as hello
 ```
 
 It prints one line:
@@ -418,7 +436,7 @@ For a more thorough sanity check, this repo ships:
 - **`scripts/smoke-test.sh`** — drives `beam-testapp` through your
   real tunnel and reports pass/fail per check.
 
-From the repo root, with `bin/beam` already logged in:
+From the repo root, with `bin/beamd` already logged in:
 
 ```
 make smoke-test
@@ -454,10 +472,10 @@ One command does everything — token + tokens.json + DNS + cert pre-warm:
 
 ```
 sudo docker compose exec beamd \
-  beamd add-developer --slug alex --config /etc/beamd/beamd.yaml
+  beamd add-developer --slug hopper --config /etc/beamd/beamd.yaml
 ```
 
-It prints `alex`'s token. Send it to them via Slack/Signal (private
+It prints `hopper`'s token. Send it to them via Slack/Signal (private
 channels). Restart beamd so the new token is loaded:
 
 ```
@@ -467,9 +485,9 @@ sudo docker compose restart beamd
 Then your teammate runs on their laptop:
 
 ```
-beam login --server YOUR_DOMAIN:443 --token <theirs>
-beam expose 3001 --as api
-# → https://api.alex.YOUR_DOMAIN
+beamd login --server YOUR_DOMAIN:443 --token <theirs>
+beamd up 3001 --as api
+# → https://api.hopper.YOUR_DOMAIN
 ```
 
 Restarting beamd briefly drops all clients, but they auto-reconnect
@@ -496,13 +514,14 @@ Either:
   `api.YOUR_SLUG.YOUR_DOMAIN` works; `deep.nested.YOUR_SLUG.YOUR_DOMAIN`
   doesn't.
 
-**`beam expose` hangs / "no client connected"**
-Check `~/.beam/daemon.log` on your laptop. The daemon is what holds
-the beam→edge connection; if it can't reach the edge, expose blocks.
+**`beamd up` hangs / "no client connected"**
+Check `~/.beamd/agent.log` on your laptop. The background agent is what
+holds the client→edge connection; if it can't reach the edge, `up`
+blocks.
 
 **`Error: no route for host …`**
 You're hitting an app/slug combination that hasn't been registered.
-Run `beam list` to see what's currently exposed.
+Run `beamd list` to see what's currently exposed.
 
 **Need to revoke a developer**
 Delete their entry from `tokens.json`, restart beamd. Their active
@@ -513,7 +532,7 @@ sessions are dropped immediately; they can't reconnect.
 | What | Where |
 |---|---|
 | Edge server | `docker logs beamd` |
-| Developer daemon | `~/.beam/daemon.log` |
+| Developer agent | `~/.beamd/agent.log` |
 
 ---
 
@@ -526,7 +545,7 @@ Until v0.1.0 is tagged + image published, build on the server:
 sudo apt update && sudo apt install -y golang-go git
 
 # Clone and build.
-git clone https://github.com/treyhuffine/beamd /opt/beam
+git clone https://github.com/dynamismlabs/beamd /opt/beam
 cd /opt/beam
 make build
 

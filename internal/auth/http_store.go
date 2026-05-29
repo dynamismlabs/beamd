@@ -29,7 +29,7 @@ const (
 //	Content-Type: application/json
 //	Body:  {"token": "<the beam bearer token>"}
 //
-//	200 OK     {"slug": "trey"}      → valid, allow
+//	200 OK     {"slug": "turing"}      → valid, allow
 //	200 OK     {"slug": ""}          → unknown, reject
 //	404        (any body)            → unknown, reject
 //	401        (any body)            → unknown, reject (also: maybe the

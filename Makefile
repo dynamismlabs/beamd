@@ -7,7 +7,6 @@ LDFLAGS := -X main.Version=$(VERSION)
 build:
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/beamd        ./cmd/beamd
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/beam         ./cmd/beam
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/beam-testapp ./cmd/beam-testapp
 
 smoke-test: build

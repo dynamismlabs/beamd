@@ -9,9 +9,21 @@
 
 services:
   beamd:
-    image: ghcr.io/treyhuffine/beamd:latest
+    image: ghcr.io/dynamismlabs/beamd:latest
     container_name: beamd
     restart: unless-stopped
+
+    # Run as root. Needed to bind privileged :443, read tokens.json
+    # (0600), and let `add-developer` write tokens.json + the cert cache.
+    # Matches the systemd (User=root) deployment in Appendix A.
+    user: "0:0"
+
+    # certmagic finds the DNS-01 zone via an SOA lookup. Some hosts'
+    # default resolver intermittently SERVFAILs, which breaks ACME
+    # issuance — pin stable public resolvers.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
 
     # :443 is the only public port. ALPN-demuxed: public HTTPS visitors
     # share it with beam client control connections.
@@ -19,9 +31,9 @@ services:
       - "443:443"
 
     volumes:
-      # Read-only config + tokens.
-      - /etc/beamd:/etc/beamd:ro
-      # Read-write: cert cache + ACME account state survive restarts.
+      # rw (not :ro) so `beamd add-developer` can update tokens.json.
+      - /etc/beamd:/etc/beamd
+      # cert cache + ACME account state survive restarts.
       - /var/lib/beamd:/var/lib/beamd
 
     environment:

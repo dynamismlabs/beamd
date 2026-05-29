@@ -29,8 +29,8 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/treyhuffine/beamd/internal/mux"
-	"github.com/treyhuffine/beamd/internal/proto"
+	"github.com/dynamismlabs/beamd/internal/mux"
+	"github.com/dynamismlabs/beamd/internal/proto"
 )
 
 const ALPNBeam = "beam/1"

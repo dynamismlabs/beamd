@@ -100,7 +100,7 @@ Content-Type: application/json
 
 ```
 200 OK
-{"slug": "trey"}
+{"slug": "turing"}
 ```
 
 **Response (unknown or revoked token):**
@@ -248,7 +248,7 @@ UX:
 3. Look up the `device_codes` row by `user_code`. If missing,
    expired, or already-consumed, show an error.
 4. Show a confirm screen: "Approve **beam** to act as your
-   workspace **trey**? (Click confirm.)" Include device fingerprint
+   workspace **turing**? (Click confirm.)" Include device fingerprint
    if you have it, IP, geolocation hint — same shape as GitHub's
    device-code flow.
 5. On confirm:
@@ -285,13 +285,13 @@ Content-Type: application/json
 {
   "events": [
     {
-      "slug":           "trey",
+      "slug":           "turing",
       "bytes":          12345678,
       "active_tunnels": 3,
       "period_start":   "2025-06-01T12:00:00Z",
       "period_end":     "2025-06-01T12:01:00Z"
     },
-    { "slug": "alex", "bytes": 0, "active_tunnels": 0, ... }
+    { "slug": "hopper", "bytes": 0, "active_tunnels": 0, ... }
   ],
   "requests_total_delta": 412
 }

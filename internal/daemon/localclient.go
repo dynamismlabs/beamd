@@ -13,7 +13,7 @@ import (
 )
 
 // LocalClient is an HTTP client over a unix domain socket — the
-// "talk to the daemon" side of the CLI.
+// "talk to the agent" side of the CLI.
 type LocalClient struct {
 	socket string
 	http   *http.Client
@@ -110,26 +110,26 @@ func decodeErr(resp *http.Response) error {
 	return fmt.Errorf("daemon returned %s", resp.Status)
 }
 
-// EnsureRunning probes the daemon at socketPath; if it doesn't answer,
-// spawns `executable daemon --socket <path>` as a detached background
-// process and waits up to 5 seconds for it to start. The spawned daemon
+// EnsureRunning probes the agent at socketPath; if it doesn't answer,
+// spawns `executable agent --socket <path>` as a detached background
+// process and waits up to 5 seconds for it to start. The spawned agent
 // loads its server / token settings from the client config the CLI
 // passes through env.
 //
-// `extraEnv` lets the caller pass through `BEAMD_SERVER` etc. so the
-// daemon picks up the same config the CLI saw.
+// `extraEnv` lets the caller pass through `BEAMD_CONFIG` etc. so the
+// agent picks up the same config the CLI saw.
 func EnsureRunning(ctx context.Context, executable, socketPath string, extraEnv []string) error {
 	if ok, _ := probe(socketPath, 200*time.Millisecond); ok {
 		return nil
 	}
 
-	cmd := exec.Command(executable, "daemon", "--socket", socketPath)
+	cmd := exec.Command(executable, "agent", "--socket", socketPath)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("spawn daemon: %w", err)
+		return fmt.Errorf("spawn agent: %w", err)
 	}
-	// We deliberately don't Wait — daemon should outlive the CLI.
+	// We deliberately don't Wait — the agent should outlive the CLI.
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -143,7 +143,7 @@ func EnsureRunning(ctx context.Context, executable, socketPath string, extraEnv 
 		default:
 		}
 	}
-	return fmt.Errorf("daemon did not start within 5s")
+	return fmt.Errorf("agent did not start within 5s")
 }
 
 func probe(socketPath string, timeout time.Duration) (bool, error) {

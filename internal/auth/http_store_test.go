@@ -18,7 +18,7 @@ func TestHTTPStore_ValidToken(t *testing.T) {
 		var body struct{ Token string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body.Token == "T1" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"slug": "trey"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"slug": "turing"})
 			return
 		}
 		http.Error(w, "not found", http.StatusNotFound)
@@ -27,8 +27,8 @@ func TestHTTPStore_ValidToken(t *testing.T) {
 
 	s := NewHTTPStore(srv.URL, "s3cret")
 	slug, ok := s.Resolve("T1")
-	if !ok || slug != "trey" {
-		t.Errorf("Resolve(T1) = (%q, %v); want (trey, true)", slug, ok)
+	if !ok || slug != "turing" {
+		t.Errorf("Resolve(T1) = (%q, %v); want (turing, true)", slug, ok)
 	}
 	if slug, ok := s.Resolve("garbage"); ok {
 		t.Errorf("Resolve(garbage) = (%q, %v); want (_, false)", slug, ok)
@@ -41,7 +41,7 @@ func TestHTTPStore_BadSecretRejected(t *testing.T) {
 			http.Error(w, "bad secret", http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"slug": "trey"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"slug": "turing"})
 	}))
 	defer srv.Close()
 
@@ -55,14 +55,14 @@ func TestHTTPStore_CachesPositiveResult(t *testing.T) {
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]string{"slug": "trey"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"slug": "turing"})
 	}))
 	defer srv.Close()
 
 	s := NewHTTPStore(srv.URL, "")
 	for i := 0; i < 5; i++ {
 		slug, ok := s.Resolve("T1")
-		if !ok || slug != "trey" {
+		if !ok || slug != "turing" {
 			t.Fatalf("iter %d: Resolve = (%q, %v)", i, slug, ok)
 		}
 	}

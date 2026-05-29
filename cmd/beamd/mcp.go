@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/treyhuffine/beamd/internal/mcp"
+	"github.com/dynamismlabs/beamd/internal/mcp"
 )
 
 func mcpCmd(args []string) {
@@ -16,9 +16,9 @@ func mcpCmd(args []string) {
 	_ = fs.Parse(args)
 
 	cfg := mustLoadConfig(*configPath)
-	lc := ensureDaemon(cfg, *configPath)
+	lc := ensureAgent(cfg, *configPath)
 
-	srv := mcp.New(lc, os.Stdin, os.Stdout, "beam", Version)
+	srv := mcp.New(lc, os.Stdin, os.Stdout, "beamd", Version)
 	if err := srv.Run(context.Background()); err != nil && err != io.EOF {
 		fmt.Fprintln(os.Stderr, "mcp:", err)
 		os.Exit(1)

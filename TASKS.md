@@ -33,7 +33,7 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 Goal: both binaries build, both load config, both print version, server serves `/healthz`. No tunnel logic yet.
 
 ### Foundation
-- [x] `go.mod` initialized at `github.com/treyhuffine/beamd` (rename if needed) on Go 1.22
+- [x] `go.mod` initialized at `github.com/dynamismlabs/beamd` (rename if needed) on Go 1.22
 - [x] Repo directory layout per PRD §7 created (M0 subset: `cmd/`, `internal/config/`, `example/` — other `internal/*` dirs land with their milestones)
 - [x] `LICENSE` — Apache 2.0
 - [x] `.gitignore` — standard Go ignores + local dev artifacts
@@ -221,7 +221,7 @@ Goal: per-slug wildcard cert lifecycle (one cert per slug, reused), pluggable DN
 - [x] `TestM4_DistinctSlugsGetDistinctCerts` — second slug → second issuance
 - [x] `TestM4_ProvisionSlugWritesDNSRecords` — DNS provider receives expected A/AAAA records, idempotent rerun
 - [x] `TestM4_TwoTokensSameSlugShareCert` — two tokens mapping to the same slug share the cert
-- [x] Manual smoke: `bin/beamd provision-dev --slug trey --config example/beamd.yaml` against stub provider succeeds
+- [x] Manual smoke: `bin/beamd provision-dev --slug turing --config example/beamd.yaml` against stub provider succeeds
 
 **M4 architecture done; ACME issuance deferred.** The cert-cache + SNI-selection + DNS provision flow is in place and tested. Real certmagic/ACME issuance plugs in behind `Manager` without touching the rest of the codebase.
 

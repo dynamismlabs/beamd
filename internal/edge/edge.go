@@ -24,13 +24,13 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/treyhuffine/beamd/internal/auth"
-	"github.com/treyhuffine/beamd/internal/certs"
-	"github.com/treyhuffine/beamd/internal/config"
-	"github.com/treyhuffine/beamd/internal/mux"
-	"github.com/treyhuffine/beamd/internal/naming"
-	"github.com/treyhuffine/beamd/internal/proto"
-	"github.com/treyhuffine/beamd/internal/usage"
+	"github.com/dynamismlabs/beamd/internal/auth"
+	"github.com/dynamismlabs/beamd/internal/certs"
+	"github.com/dynamismlabs/beamd/internal/config"
+	"github.com/dynamismlabs/beamd/internal/mux"
+	"github.com/dynamismlabs/beamd/internal/naming"
+	"github.com/dynamismlabs/beamd/internal/proto"
+	"github.com/dynamismlabs/beamd/internal/usage"
 )
 
 const ALPNBeam = "beam/1"
@@ -604,7 +604,7 @@ func (e *Edge) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuthDiscovery returns the device-code endpoints the hosted
-// web app exposes, so `beam login` (no-token mode) knows where to
+// web app exposes, so `beamd login` (no-token mode) knows where to
 // run the browser-based flow. In OSS deployments these fields are
 // empty and the CLI falls back to requiring --token.
 func (e *Edge) handleAuthDiscovery(w http.ResponseWriter, r *http.Request) {

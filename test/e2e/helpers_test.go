@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/treyhuffine/beamd/internal/auth"
-	"github.com/treyhuffine/beamd/internal/certs"
-	"github.com/treyhuffine/beamd/internal/client"
-	"github.com/treyhuffine/beamd/internal/config"
-	"github.com/treyhuffine/beamd/internal/daemon"
-	"github.com/treyhuffine/beamd/internal/edge"
+	"github.com/dynamismlabs/beamd/internal/auth"
+	"github.com/dynamismlabs/beamd/internal/certs"
+	"github.com/dynamismlabs/beamd/internal/client"
+	"github.com/dynamismlabs/beamd/internal/config"
+	"github.com/dynamismlabs/beamd/internal/daemon"
+	"github.com/dynamismlabs/beamd/internal/edge"
 )
 
 const testBaseDomain = "test.example.com"

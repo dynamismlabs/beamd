@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/treyhuffine/beamd/internal/client"
+	"github.com/dynamismlabs/beamd/internal/client"
 )
 
 // Daemon wraps a long-lived *client.Client behind a loopback HTTP API
@@ -56,7 +56,7 @@ func (d *Daemon) Serve() error {
 		_ = ln.Close()
 		return fmt.Errorf("chmod socket: %w", err)
 	}
-	slog.Info("daemon listening", "socket", d.socket)
+	slog.Info("agent listening", "socket", d.socket)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/expose", d.handleExpose)

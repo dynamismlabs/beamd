@@ -63,19 +63,19 @@ func TestLoadClient_MissingFile_DefaultsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadClient should tolerate missing file: %v", err)
 	}
-	if cfg.DaemonSocket == "" {
-		t.Error("DaemonSocket should default to ~/.beam/daemon.sock")
+	if cfg.AgentSocket == "" {
+		t.Error("AgentSocket should default to ~/.beamd/agent.sock")
 	}
 }
 
-func TestLoadClient_ExplicitDaemonSocket(t *testing.T) {
-	body := "daemon_socket: /tmp/custom.sock\n"
+func TestLoadClient_ExplicitAgentSocket(t *testing.T) {
+	body := "agent_socket: /tmp/custom.sock\n"
 	p := writeFile(t, t.TempDir(), "config", body)
 	cfg, err := LoadClient(p)
 	if err != nil {
 		t.Fatalf("LoadClient: %v", err)
 	}
-	if cfg.DaemonSocket != "/tmp/custom.sock" {
-		t.Errorf("DaemonSocket = %q, want /tmp/custom.sock", cfg.DaemonSocket)
+	if cfg.AgentSocket != "/tmp/custom.sock" {
+		t.Errorf("AgentSocket = %q, want /tmp/custom.sock", cfg.AgentSocket)
 	}
 }

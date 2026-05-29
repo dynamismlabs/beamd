@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/treyhuffine/beamd/internal/auth"
-	"github.com/treyhuffine/beamd/internal/certs"
-	"github.com/treyhuffine/beamd/internal/config"
-	"github.com/treyhuffine/beamd/internal/dns"
-	"github.com/treyhuffine/beamd/internal/edge"
-	"github.com/treyhuffine/beamd/internal/naming"
-	usagepkg "github.com/treyhuffine/beamd/internal/usage"
+	"github.com/dynamismlabs/beamd/internal/auth"
+	"github.com/dynamismlabs/beamd/internal/certs"
+	"github.com/dynamismlabs/beamd/internal/config"
+	"github.com/dynamismlabs/beamd/internal/dns"
+	"github.com/dynamismlabs/beamd/internal/edge"
+	"github.com/dynamismlabs/beamd/internal/naming"
+	usagepkg "github.com/dynamismlabs/beamd/internal/usage"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".
@@ -35,6 +35,7 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	// edge / server role
 	case "serve":
 		serveCmd(os.Args[2:])
 	case "init":
@@ -45,6 +46,19 @@ func main() {
 		provisionDevCmd(os.Args[2:])
 	case "issue-token":
 		notImpl("issue-token", "device-code milestone (post-v1)")
+	// client role
+	case "login":
+		loginCmd(os.Args[2:])
+	case "up":
+		upCmd(os.Args[2:])
+	case "down":
+		downCmd(os.Args[2:])
+	case "list":
+		listCmd(os.Args[2:])
+	case "mcp":
+		mcpCmd(os.Args[2:])
+	case "agent":
+		agentCmd(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(Version)
 	case "help", "--help", "-h":
@@ -59,12 +73,19 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: beamd <command> [flags]")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "commands:")
+	fmt.Fprintln(os.Stderr, "edge (server):")
+	fmt.Fprintln(os.Stderr, "  serve           run the edge server")
 	fmt.Fprintln(os.Stderr, "  init            interactively write beamd.yaml + an empty tokens.json")
 	fmt.Fprintln(os.Stderr, "  add-developer   issue a token for a slug, provision DNS + cert, print the token")
-	fmt.Fprintln(os.Stderr, "  serve           run the edge server")
 	fmt.Fprintln(os.Stderr, "  provision-dev   write DNS + pre-warm cert for a slug (low-level — add-developer wraps this)")
-	fmt.Fprintln(os.Stderr, "  issue-token     approve a device-code login (deferred, post-v1)")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "client:")
+	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd edge")
+	fmt.Fprintln(os.Stderr, "  up              expose a local port as a public URL")
+	fmt.Fprintln(os.Stderr, "  down            remove a tunnel")
+	fmt.Fprintln(os.Stderr, "  list            list active tunnels")
+	fmt.Fprintln(os.Stderr, "  mcp             run the MCP stdio server")
+	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  version         print version and exit")
 }
 
@@ -164,6 +185,16 @@ func startUsageReporter(cfg *config.Server, src usagepkg.Source) context.CancelF
 	return cancel
 }
 
+// resolveZone returns the registered DNS zone to manage records in.
+// Honors an explicit dns_zone config override; otherwise auto-detects
+// from base_domain via the provider (so subdomain base_domains work).
+func resolveZone(ctx context.Context, cfg *config.Server) (string, error) {
+	if cfg.DNSZone != "" {
+		return cfg.DNSZone, nil
+	}
+	return dns.ResolveZone(ctx, cfg.DNSProvider, cfg.DNSProviderCreds, cfg.BaseDomain)
+}
+
 func provisionDevCmd(args []string) {
 	fs := flag.NewFlagSet("provision-dev", flag.ExitOnError)
 	configPath := fs.String("config", "/etc/beamd/beamd.yaml", "path to config file")
@@ -192,7 +223,13 @@ func provisionDevCmd(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if err := dns.ProvisionSlug(ctx, p, cfg.BaseDomain, *slug, cfg.EdgeIPv4, cfg.EdgeIPv6); err != nil {
+	zone, err := resolveZone(ctx, cfg)
+	if err != nil {
+		slog.Error("resolve dns zone failed", "base_domain", cfg.BaseDomain, "err", err.Error())
+		os.Exit(1)
+	}
+
+	if err := dns.ProvisionSlug(ctx, p, zone, cfg.BaseDomain, *slug, cfg.EdgeIPv4, cfg.EdgeIPv6); err != nil {
 		slog.Error("dns provision failed", "slug", *slug, "err", err.Error())
 		os.Exit(1)
 	}
@@ -422,7 +459,12 @@ func addDeveloperCmd(args []string) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
-		if err := dns.ProvisionSlug(ctx, p, cfg.BaseDomain, *slug, cfg.EdgeIPv4, cfg.EdgeIPv6); err != nil {
+		zone, err := resolveZone(ctx, cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "resolve dns zone:", err)
+			os.Exit(1)
+		}
+		if err := dns.ProvisionSlug(ctx, p, zone, cfg.BaseDomain, *slug, cfg.EdgeIPv4, cfg.EdgeIPv6); err != nil {
 			fmt.Fprintln(os.Stderr, "provision dns:", err)
 			os.Exit(1)
 		}
@@ -447,8 +489,8 @@ func addDeveloperCmd(args []string) {
 	fmt.Println("  systemctl restart beamd     # if running as a systemd unit")
 	fmt.Println()
 	fmt.Println("Developer setup (their laptop):")
-	fmt.Printf("  beam login --server %s:443 --token <token above>\n", cfg.BaseDomain)
-	fmt.Println("  beam expose 3001 --as api")
+	fmt.Printf("  beamd login --server %s:443 --token <token above>\n", cfg.BaseDomain)
+	fmt.Println("  beamd up 3001 --as api")
 }
 
 // atomicWrite writes data to path via a sibling tmpfile + rename, so a

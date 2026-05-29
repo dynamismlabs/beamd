@@ -1,5 +1,10 @@
 package main
 
+// Client-side subcommands of the single `beamd` binary: login, up, down,
+// list, and the internal `agent` background worker. The edge/server
+// subcommands (serve, init, add-developer, provision-dev) live in
+// main.go; both roles ship in one binary.
+
 import (
 	"context"
 	"crypto/tls"
@@ -11,65 +16,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/treyhuffine/beamd/internal/client"
-	"github.com/treyhuffine/beamd/internal/config"
-	"github.com/treyhuffine/beamd/internal/daemon"
-	"github.com/treyhuffine/beamd/internal/devicecode"
+	"github.com/dynamismlabs/beamd/internal/client"
+	"github.com/dynamismlabs/beamd/internal/config"
+	"github.com/dynamismlabs/beamd/internal/daemon"
+	"github.com/dynamismlabs/beamd/internal/devicecode"
 )
-
-// Version is set at build time via -ldflags "-X main.Version=...".
-var Version = "dev"
-
-func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
-	}
-
-	switch os.Args[1] {
-	case "login":
-		loginCmd(os.Args[2:])
-	case "expose":
-		exposeCmd(os.Args[2:])
-	case "list":
-		listCmd(os.Args[2:])
-	case "unexpose":
-		unexposeCmd(os.Args[2:])
-	case "daemon":
-		daemonCmd(os.Args[2:])
-	case "mcp":
-		mcpCmd(os.Args[2:])
-	case "version", "--version", "-v":
-		fmt.Println(Version)
-	case "help", "--help", "-h":
-		usage()
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		usage()
-		os.Exit(2)
-	}
-}
-
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: beam <command> [flags]")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd server")
-	fmt.Fprintln(os.Stderr, "  expose          expose a local port as a public URL")
-	fmt.Fprintln(os.Stderr, "  list            list active tunnels")
-	fmt.Fprintln(os.Stderr, "  unexpose        remove a tunnel")
-	fmt.Fprintln(os.Stderr, "  daemon          run the daemon (used internally by other subcommands)")
-	fmt.Fprintln(os.Stderr, "  mcp             run the MCP stdio server")
-	fmt.Fprintln(os.Stderr, "  version         print version and exit")
-}
-
-func notImpl(name, milestone string) {
-	fmt.Fprintf(os.Stderr, "%s: not implemented (%s)\n", name, milestone)
-	os.Exit(2)
-}
 
 func defaultConfigPath() string {
 	p, err := config.DefaultClientPath()
@@ -101,13 +56,13 @@ func loginCmd(args []string) {
 		*token = got
 	}
 
-	sock, err := config.DefaultDaemonSocket()
+	sock, err := config.DefaultAgentSocket()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "resolve daemon socket:", err)
+		fmt.Fprintln(os.Stderr, "resolve agent socket:", err)
 		os.Exit(1)
 	}
 
-	cfg := &config.Client{Server: *server, Token: *token, DaemonSocket: sock}
+	cfg := &config.Client{Server: *server, Token: *token, AgentSocket: sock}
 	if err := config.SaveClient(cfg, *configPath); err != nil {
 		fmt.Fprintln(os.Stderr, "save config:", err)
 		os.Exit(1)
@@ -143,14 +98,37 @@ func deviceCodeLogin(server string, insecure bool) (string, error) {
 	return devicecode.Login(ctx, hc, disc, os.Stderr)
 }
 
-func exposeCmd(args []string) {
-	fs := flag.NewFlagSet("expose", flag.ExitOnError)
+// hoistFlags reorders args so flag tokens come before positional args.
+// Go's flag package stops parsing at the first non-flag arg, so without
+// this `beamd up 3001 --as hello` (the documented form) would treat
+// `--as hello` as positionals. valueFlags names the flags that consume a
+// following value token (so we move the value along with the flag).
+func hoistFlags(args []string, valueFlags map[string]bool) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a != "-" && strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+			name := strings.TrimLeft(a, "-")
+			if !strings.Contains(a, "=") && valueFlags[name] && i+1 < len(args) {
+				flags = append(flags, args[i+1])
+				i++
+			}
+			continue
+		}
+		positional = append(positional, a)
+	}
+	return append(flags, positional...)
+}
+
+func upCmd(args []string) {
+	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	name := fs.String("as", "", "subdomain label (defaults to port number)")
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(args)
+	_ = fs.Parse(hoistFlags(args, map[string]bool{"as": true, "config": true}))
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beam expose <port> [--as name]")
+		fmt.Fprintln(os.Stderr, "usage: beamd up <port> [--as name]")
 		os.Exit(2)
 	}
 	port, err := strconv.Atoi(fs.Arg(0))
@@ -160,14 +138,14 @@ func exposeCmd(args []string) {
 	}
 
 	cfg := mustLoadConfig(*configPath)
-	lc := ensureDaemon(cfg, *configPath)
+	lc := ensureAgent(cfg, *configPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	url, err := lc.Expose(ctx, port, *name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "expose failed:", err)
+		fmt.Fprintln(os.Stderr, "up failed:", err)
 		os.Exit(1)
 	}
 	fmt.Println(url)
@@ -179,7 +157,7 @@ func listCmd(args []string) {
 	_ = fs.Parse(args)
 
 	cfg := mustLoadConfig(*configPath)
-	lc := ensureDaemon(cfg, *configPath)
+	lc := ensureAgent(cfg, *configPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -202,25 +180,25 @@ func listCmd(args []string) {
 	}
 }
 
-func unexposeCmd(args []string) {
-	fs := flag.NewFlagSet("unexpose", flag.ExitOnError)
+func downCmd(args []string) {
+	fs := flag.NewFlagSet("down", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
 	_ = fs.Parse(args)
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beam unexpose <name>")
+		fmt.Fprintln(os.Stderr, "usage: beamd down <name>")
 		os.Exit(2)
 	}
 	name := fs.Arg(0)
 
 	cfg := mustLoadConfig(*configPath)
-	lc := ensureDaemon(cfg, *configPath)
+	lc := ensureAgent(cfg, *configPath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := lc.Unexpose(ctx, name); err != nil {
-		fmt.Fprintln(os.Stderr, "unexpose failed:", err)
+		fmt.Fprintln(os.Stderr, "down failed:", err)
 		os.Exit(1)
 	}
 }
@@ -232,13 +210,16 @@ func mustLoadConfig(path string) *config.Client {
 		os.Exit(1)
 	}
 	if cfg.Server == "" || cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "missing server or token — run `beam login` first")
+		fmt.Fprintln(os.Stderr, "missing server or token — run `beamd login` first")
 		os.Exit(2)
 	}
 	return cfg
 }
 
-func ensureDaemon(cfg *config.Client, configPath string) *daemon.LocalClient {
+// ensureAgent makes sure the background agent (the long-lived worker that
+// holds the tunnel session) is running, spawning it on demand, and
+// returns a client to its local socket API.
+func ensureAgent(cfg *config.Client, configPath string) *daemon.LocalClient {
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "locate executable:", err)
@@ -246,17 +227,20 @@ func ensureDaemon(cfg *config.Client, configPath string) *daemon.LocalClient {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := daemon.EnsureRunning(ctx, exe, cfg.DaemonSocket, []string{
+	if err := daemon.EnsureRunning(ctx, exe, cfg.AgentSocket, []string{
 		"BEAMD_CONFIG=" + configPath,
 	}); err != nil {
-		fmt.Fprintln(os.Stderr, "daemon not available:", err)
+		fmt.Fprintln(os.Stderr, "agent not available:", err)
 		os.Exit(1)
 	}
-	return daemon.NewLocalClient(cfg.DaemonSocket)
+	return daemon.NewLocalClient(cfg.AgentSocket)
 }
 
-func daemonCmd(args []string) {
-	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
+// agentCmd runs the background worker. It is spawned internally by the
+// client subcommands (via ensureAgent); it is not meant to be run by
+// hand.
+func agentCmd(args []string) {
+	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 	socket := fs.String("socket", "", "unix socket path")
 	configPath := fs.String("config", os.Getenv("BEAMD_CONFIG"), "client config path")
 	_ = fs.Parse(args)
@@ -265,7 +249,7 @@ func daemonCmd(args []string) {
 		*configPath = defaultConfigPath()
 	}
 
-	logPath, _ := defaultDaemonLogPath()
+	logPath, _ := defaultAgentLogPath()
 	logOut := os.Stderr
 	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 		logOut = f
@@ -278,11 +262,11 @@ func daemonCmd(args []string) {
 		os.Exit(1)
 	}
 	if cfg.Server == "" || cfg.Token == "" {
-		slog.Error("missing server or token; run `beam login` first")
+		slog.Error("missing server or token; run `beamd login` first")
 		os.Exit(1)
 	}
 	if *socket == "" {
-		*socket = cfg.DaemonSocket
+		*socket = cfg.AgentSocket
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -300,20 +284,20 @@ func daemonCmd(args []string) {
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigs
-		slog.Info("daemon: shutdown signal received")
+		slog.Info("agent: shutdown signal received")
 		_ = d.Shutdown(context.Background())
 	}()
 
 	if err := d.Serve(); err != nil {
-		slog.Error("daemon serve", "err", err.Error())
+		slog.Error("agent serve", "err", err.Error())
 		os.Exit(1)
 	}
 }
 
-func defaultDaemonLogPath() (string, error) {
+func defaultAgentLogPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".beam", "daemon.log"), nil
+	return filepath.Join(home, ".beamd", "agent.log"), nil
 }

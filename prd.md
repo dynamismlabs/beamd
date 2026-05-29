@@ -12,9 +12,9 @@ Target structure:
 
 ```
 <app>.<dev>.beam.example.com
-e.g.  api.trey.beam.example.com
-      web.trey.beam.example.com
-      3001.trey.beam.example.com   (default when no name given)
+e.g.  api.turing.beam.example.com
+      web.turing.beam.example.com
+      3001.turing.beam.example.com   (default when no name given)
 ```
 
 The developer (or an AI agent acting for them) runs a server on a port, runs one command, and synchronously gets back a URL that already works. The client may run on an always-on remote box **or a flaky laptop** — reconnection must be transparent and URLs must be stable across network blips.
@@ -25,7 +25,7 @@ The server is open source and self-hostable. A hosted version is the eventual bu
 
 The painful loop today: developers (increasingly, AI coding agents) run many short-lived apps on a dev box and need to test them over a real URL — for webhooks, mobile testing, sharing, or agent self-verification. Existing tools make you register tunnels one at a time, route multiple apps under awkward path prefixes, or enroll a machine into a VPN/identity mesh. None give a developer a clean *subdomain-per-app namespace under their own brand* with zero per-app ceremony.
 
-The wedge is the AI-agent workflow: agent writes code → runs `npm run dev` on a port → calls one command → gets `https://api.trey.beam.example.com` → tests it. The platforms that solve this (Replit, v0, Cursor background agents, E2B/Daytona) solve it *internally and proprietarily*. There is no unbundled, self-hostable, bring-your-own-box version of that preview-URL primitive. That is what we build.
+The wedge is the AI-agent workflow: agent writes code → runs `npm run dev` on a port → calls one command → gets `https://api.turing.beam.example.com` → tests it. The platforms that solve this (Replit, v0, Cursor background agents, E2B/Daytona) solve it *internally and proprietarily*. There is no unbundled, self-hostable, bring-your-own-box version of that preview-URL primitive. That is what we build.
 
 ## 3. Why it's unique (and where it is NOT)
 
@@ -59,12 +59,12 @@ Explicitly out of scope for v1. Do not build these; do not architect around them
 
 ### 5.1 The cert/DNS model — read carefully, this is the subtle part
 
-TLS wildcard certs match **exactly one label**: `*.trey.beam.example.com` covers `api.trey...` but not deeper. This is fine for our scheme because the structure is exactly two dynamic levels: `<app>.<slug>`.
+TLS wildcard certs match **exactly one label**: `*.turing.beam.example.com` covers `api.turing...` but not deeper. This is fine for our scheme because the structure is exactly two dynamic levels: `<app>.<slug>`.
 
 Therefore:
 
 - Issue **one** wildcard cert `*.<slug>.beam.example.com` **per developer**, lazily on that developer's first tunnel, via certmagic + DNS-01. Every app that developer ever exposes **reuses that one cert**. No per-app cert work, nothing on the hot path.
-- DNS has the same one-label rule. `*.beam.example.com` will NOT resolve `api.trey.beam.example.com`. The operator must run authoritative DNS for the apex (or use a provider with a true nested catch-all), so any depth resolves to the edge IP. Document this as an operator requirement. For MVP, the acceptance path is: operator points `*.<slug>.beam.example.com` and `<slug>.beam.example.com` at the edge via the DNS provider API at developer-onboarding time (a `provision-dev` admin command), OR runs a wildcard authoritative zone. Implement the provider-API path; document the authoritative-DNS alternative.
+- DNS has the same one-label rule. `*.beam.example.com` will NOT resolve `api.turing.beam.example.com`. The operator must run authoritative DNS for the apex (or use a provider with a true nested catch-all), so any depth resolves to the edge IP. Document this as an operator requirement. For MVP, the acceptance path is: operator points `*.<slug>.beam.example.com` and `<slug>.beam.example.com` at the edge via the DNS provider API at developer-onboarding time (a `provision-dev` admin command), OR runs a wildcard authoritative zone. Implement the provider-API path; document the authoritative-DNS alternative.
 
 ## 6. Architecture
 
@@ -117,8 +117,8 @@ Client → Server:
 - `heartbeat` `{ "type":"heartbeat" }` (every 20s)
 
 Server → Client:
-- `hello_ok` `{ "type":"hello_ok", "slug":"trey", "base_domain":"beam.example.com" }`
-- `registered` `{ "type":"registered", "name":"api", "url":"https://api.trey.beam.example.com" }`
+- `hello_ok` `{ "type":"hello_ok", "slug":"turing", "base_domain":"beam.example.com" }`
+- `registered` `{ "type":"registered", "name":"api", "url":"https://api.turing.beam.example.com" }`
 - `error` `{ "type":"error", "code":"...", "message":"..." }` (codes: `bad_token`, `name_taken`, `invalid_name`, `over_limit`, `internal`)
 
 Rules:
@@ -138,7 +138,7 @@ Rules:
 The client runs a background daemon exposing an HTTP API over a **unix domain socket** (default `~/.beam/daemon.sock`, mode `0600`; named pipe `\\.\pipe\beam-daemon-<user>` on Windows). The CLI is a thin wrapper so an agent can use either the CLI, raw HTTP-over-socket, or the MCP server below. File-system permissions enforce single-user access — no in-band auth needed.
 
 Local API:
-- `POST /expose` `{ "port":3001, "name":"api" }` → `200 { "url":"https://api.trey.beam.example.com" }` — **blocks until the URL is live (registered + control conn healthy), then returns.** This synchronous return is the core UX; do not make it fire-and-forget.
+- `POST /expose` `{ "port":3001, "name":"api" }` → `200 { "url":"https://api.turing.beam.example.com" }` — **blocks until the URL is live (registered + control conn healthy), then returns.** This synchronous return is the core UX; do not make it fire-and-forget.
 - `POST /unexpose` `{ "name":"api" }` → `200`
 - `GET /list` → `[ { "name":"api","port":3001,"url":"...","healthy":true } ]`
 - `GET /healthz`
@@ -177,7 +177,7 @@ token_store:        file:/etc/beamd/tokens.json   # {token: slug} for MVP
 max_tunnels_per_token: 25
 ```
 
-Admin command: `beamd provision-dev --slug trey` → ensures DNS records (`*.trey.<base>` and `trey.<base>` → edge IP) exist via the provider, and pre-warms the cert. Idempotent.
+Admin command: `beamd provision-dev --slug turing` → ensures DNS records (`*.turing.<base>` and `turing.<base>` → edge IP) exist via the provider, and pre-warms the cert. Idempotent.
 
 ## 12. Security & abuse (MVP-level only)
 
@@ -214,7 +214,7 @@ Build in this order. Each milestone has a concrete, testable "done."
 
 ## 15. Definition of done (v1)
 
-A developer self-hosts `beamd` against their domain and DNS provider, runs `beamd provision-dev --slug trey` once, then on their laptop (which can drop network) runs `beam expose 3001 --as api` and immediately gets `https://api.trey.beam.example.com` serving their local app over valid TLS. They can `expose` several more apps instantly with no extra setup, each on its own subdomain, all over one connection, all surviving a network blip. An AI agent can do the identical thing by calling `expose_port` on the daemon's MCP server (or the local HTTP API) and reading the returned URL.
+A developer self-hosts `beamd` against their domain and DNS provider, runs `beamd provision-dev --slug turing` once, then on their laptop (which can drop network) runs `beam expose 3001 --as api` and immediately gets `https://api.turing.beam.example.com` serving their local app over valid TLS. They can `expose` several more apps instantly with no extra setup, each on its own subdomain, all over one connection, all surviving a network blip. An AI agent can do the identical thing by calling `expose_port` on the daemon's MCP server (or the local HTTP API) and reading the returned URL.
 
 ## 16. Reference implementations to study (do not copy licenses blindly; study architecture)
 

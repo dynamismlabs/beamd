@@ -16,6 +16,12 @@ type Server struct {
 	ACMECA             string `yaml:"acme_ca"`
 	DNSProvider        string `yaml:"dns_provider"`
 	DNSProviderCreds   string `yaml:"dns_provider_creds"`
+
+	// DNSZone is the registered DNS zone to manage records in. Leave
+	// blank to auto-detect from base_domain (recommended). Set it
+	// explicitly only to skip the provider's zone lookup, e.g.
+	// base_domain=tunnel.dynami.sm with dns_zone=dynami.sm.
+	DNSZone string `yaml:"dns_zone"`
 	TokenStore         string `yaml:"token_store"`
 	MaxTunnelsPerToken int    `yaml:"max_tunnels_per_token"`
 
@@ -113,6 +119,7 @@ func applyServerEnvOverrides(s *Server) {
 		"BEAMD_ACME_CA":            &s.ACMECA,
 		"BEAMD_DNS_PROVIDER":       &s.DNSProvider,
 		"BEAMD_DNS_PROVIDER_CREDS": &s.DNSProviderCreds,
+		"BEAMD_DNS_ZONE":           &s.DNSZone,
 		"BEAMD_TOKEN_STORE":        &s.TokenStore,
 		"BEAMD_DATA_DIR":           &s.DataDir,
 	}

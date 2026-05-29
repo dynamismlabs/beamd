@@ -6,11 +6,9 @@ distinct subdomain per app under a per-developer wildcard zone. Built
 for the AI-agent workflow: agent runs `npm run dev`, calls one tool,
 gets back a working URL.
 
-> Working name. Rename freely before v1.
-
 ```
-$ beam expose 3001 --as api
-https://api.trey.beam.example.com
+$ beamd up 3001 --as api
+https://api.turing.beam.example.com
 ```
 
 ## Status
@@ -29,7 +27,7 @@ for the implementation checklist + open deferred work.
      │  one TLS conn per developer
      │  (ALPN "beam/1", yamux-multiplexed)
      ▼
-[ beam client/daemon ]
+[ beamd client (+ background agent) ]
      │
      │  loopback
      ▼
@@ -38,12 +36,12 @@ for the implementation checklist + open deferred work.
 
 - You run **one** `beamd` process on a server with a public IP.
 - You point a domain (e.g. `beam.example.com`) at it.
-- You give each developer a token. The token maps to a slug (`trey`,
-  `alex`, …).
-- The developer runs `beam expose 3001 --as api` on their laptop.
-  Beamd issues `*.trey.beam.example.com` from Let's Encrypt
+- You give each developer a token. The token maps to a slug (`turing`,
+  `hopper`, …).
+- The developer runs `beamd up 3001 --as api` on their laptop.
+  Beamd issues `*.turing.beam.example.com` from Let's Encrypt
   (via DNS-01 against your DNS provider), routes
-  `api.trey.beam.example.com` to their laptop's port 3001.
+  `api.turing.beam.example.com` to their laptop's port 3001.
 
 ## Quickstart (operator)
 
@@ -63,24 +61,34 @@ same way (PRs welcome — see `internal/dns/dns.go`).
 
 In Cloudflare:
 
-1. Add the zone you'll use (e.g. `beam.example.com`).
+1. Add your domain as a zone (e.g. `example.com`). Your `base_domain`
+   can be that apex (`example.com`) **or any subdomain of it**
+   (`beam.example.com`, `tunnel.dynami.sm`, …) — beamd auto-detects
+   which Cloudflare zone owns `base_domain`, so you don't need a
+   dedicated domain.
 2. Create an **API Token** with permission `Zone → DNS → Edit` scoped
    to that zone. Copy the token.
-3. Create one A record at the apex:
-   `beam.example.com  A  <your beamd server IP>`.
+3. Create one A record pointing `base_domain` at the server:
+   `beam.example.com  A  <your beamd server IP>` (use name `@` if
+   `base_domain` is the zone apex). Keep it **DNS only** (gray cloud),
+   not proxied.
 
-Per-developer DNS (`*.trey.beam.example.com` + `trey.beam.example.com`)
-is created automatically by `beamd provision-dev`.
+Per-developer DNS (`*.turing.beam.example.com` + `turing.beam.example.com`)
+is created automatically by `beamd provision-dev` — relative to the
+detected zone, so subdomain `base_domain`s work.
 
 ### 2. Install
 
-Either:
+Not published yet — **build from source** (needs Go 1.25+):
 
-- Download a binary from the [releases page] (once tagged).
-- Or pull the Docker image: `docker pull ghcr.io/treyhuffine/beamd:latest`.
-- Or build from source: `make build`.
+```
+git clone https://github.com/dynamismlabs/beamd && cd beamd
+make build          # → bin/beamd, bin/beam-testapp
+docker build -t ghcr.io/dynamismlabs/beamd:latest .   # if you run via Docker
+```
 
-[releases page]: https://github.com/treyhuffine/beamd/releases
+Prebuilt binaries (releases page) and a published Docker image
+(`ghcr.io/dynamismlabs/beamd:latest`) are **coming soon**.
 
 ### 3. Configure
 
@@ -109,8 +117,8 @@ Create `tokens.json` with one entry per developer:
 
 ```json
 {
-  "<long random token>": "trey",
-  "<another long random token>": "alex"
+  "<long random token>": "turing",
+  "<another long random token>": "hopper"
 }
 ```
 
@@ -128,14 +136,14 @@ sudo beamd serve --config /etc/beamd/beamd.yaml
 For each developer slug:
 
 ```
-beamd provision-dev --slug trey --config /etc/beamd/beamd.yaml
+beamd provision-dev --slug turing --config /etc/beamd/beamd.yaml
 ```
 
 This:
 
-- Writes `trey.beam.example.com  A  203.0.113.10` and
-  `*.trey.beam.example.com  A  203.0.113.10` to your DNS provider.
-- Pre-warms the `*.trey.beam.example.com` certificate (issues from
+- Writes `turing.beam.example.com  A  203.0.113.10` and
+  `*.turing.beam.example.com  A  203.0.113.10` to your DNS provider.
+- Pre-warms the `*.turing.beam.example.com` certificate (issues from
   Let's Encrypt via DNS-01).
 
 Hand the developer their token (the long random string from
@@ -144,21 +152,21 @@ Hand the developer their token (the long random string from
 ## Quickstart (developer)
 
 ```
-beam login --server beam.example.com:443 --token <token-from-operator>
-beam expose 3001 --as api
-# → https://api.trey.beam.example.com
+beamd login --server beam.example.com:443 --token <token-from-operator>
+beamd up 3001 --as api
+# → https://api.turing.beam.example.com
 ```
 
-The daemon stays running in the background; subsequent `expose` /
-`list` / `unexpose` calls reuse it. Tunnels survive network blips —
-the client reconnects automatically and replays your registrations.
+The background agent stays running; subsequent `up` / `list` / `down`
+calls reuse it. Tunnels survive network blips — the client reconnects
+automatically and replays your registrations.
 
 ### MCP server (AI agents)
 
-The same daemon also exposes an MCP server over stdio:
+The same agent also exposes an MCP server over stdio:
 
 ```
-beam mcp
+beamd mcp
 ```
 
 Wire that into your MCP-aware agent (Claude Code, Cursor, etc.) and
@@ -183,6 +191,7 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `acme_ca` | no | ACME directory URL. Blank = LE prod. `off` = self-signed (dev only) |
 | `dns_provider` | yes | One of: `cloudflare`, `stub` (more on the way) |
 | `dns_provider_creds` | provider-specific | Cloudflare: `Zone:DNS:Edit` API token |
+| `dns_zone` | no | Registered zone to write records in. Blank = auto-detect from `base_domain` (recommended). Set to skip the lookup, e.g. `dynami.sm` when `base_domain` is `tunnel.dynami.sm` |
 | `token_store` | yes | `file:<path>` (JSON `{token: slug}` map), or `memory:` for tests |
 | `data_dir` | defaults to `/var/lib/beamd` | Where cert cache + ACME account state live |
 | `max_tunnels_per_token` | defaults to 25 | Cap on concurrent tunnels per developer |
@@ -203,7 +212,7 @@ import + one switch case in `internal/dns/dns.go` — PRs welcome.
 ## Build / develop
 
 ```
-make build         # produces bin/beamd, bin/beam, bin/beam-testapp
+make build         # produces bin/beamd, bin/beam-testapp
 make test          # runs all unit + e2e tests
 make run-server    # runs beamd against example/beamd.yaml
 make smoke-test    # spins up beam-testapp + drives it through your tunnel

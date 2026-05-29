@@ -6,7 +6,7 @@
 
 version: 2
 
-project_name: beam
+project_name: beamd
 
 before:
   hooks:
@@ -16,17 +16,6 @@ builds:
   - id: beamd
     main: ./cmd/beamd
     binary: beamd
-    env:
-      - CGO_ENABLED=0
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
-    flags: [-trimpath]
-    ldflags:
-      - -s -w -X main.Version={{.Version}}
-
-  - id: beam
-    main: ./cmd/beam
-    binary: beam
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin]
@@ -80,15 +69,15 @@ dockers:
   - id: beamd-image
     ids: [beamd]
     image_templates:
-      - "ghcr.io/treyhuffine/beamd:{{ .Version }}"
-      - "ghcr.io/treyhuffine/beamd:latest"
+      - "ghcr.io/dynamismlabs/beamd:{{ .Version }}"
+      - "ghcr.io/dynamismlabs/beamd:latest"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
       - --platform=linux/amd64
       - --label=org.opencontainers.image.title=beamd
       - --label=org.opencontainers.image.description=Self-hostable instant-URL tunnel server
-      - --label=org.opencontainers.image.source=https://github.com/treyhuffine/beamd
+      - --label=org.opencontainers.image.source=https://github.com/dynamismlabs/beamd
       - --label=org.opencontainers.image.licenses=Apache-2.0
       - --label=org.opencontainers.image.version={{ .Version }}
 

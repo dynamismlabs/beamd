@@ -12,9 +12,9 @@ func TestExtractSlug(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"api.trey.beam.example.com", "trey", true},
-		{"web.alex.beam.example.com", "alex", true},
-		{"trey.beam.example.com", "", false}, // no app label
+		{"api.turing.beam.example.com", "turing", true},
+		{"web.hopper.beam.example.com", "hopper", true},
+		{"turing.beam.example.com", "", false}, // no app label
 		{"beam.example.com", "", false},      // apex
 		{"api.example.org", "", false},          // wrong base
 		{"", "", false},
@@ -33,8 +33,8 @@ func TestSelfSignedManager_ReuseAndDistinctSlugs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First handshake under slug "trey" → issuance #1.
-	c1, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.trey.beam.example.com"})
+	// First handshake under slug "turing" → issuance #1.
+	c1, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.turing.beam.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestSelfSignedManager_ReuseAndDistinctSlugs(t *testing.T) {
 	}
 
 	// Different app under same slug → same cert, no new issuance.
-	c2, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "web.trey.beam.example.com"})
+	c2, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "web.turing.beam.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestSelfSignedManager_ReuseAndDistinctSlugs(t *testing.T) {
 	}
 
 	// Different slug → second issuance.
-	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.alex.beam.example.com"}); err != nil {
+	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.hopper.beam.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if m.IssuanceCount() != 2 {
@@ -85,14 +85,14 @@ func TestSelfSignedManager_PreWarm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.PreWarm("trey"); err != nil {
+	if err := m.PreWarm("turing"); err != nil {
 		t.Fatalf("PreWarm: %v", err)
 	}
 	if m.IssuanceCount() != 1 {
 		t.Errorf("issuance after PreWarm = %d, want 1", m.IssuanceCount())
 	}
 	// Subsequent handshake for that slug uses the pre-warmed cert.
-	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.trey.beam.example.com"}); err != nil {
+	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.turing.beam.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if m.IssuanceCount() != 1 {

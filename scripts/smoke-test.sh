@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# smoke-test.sh — exercise a real beam deployment end-to-end.
+# smoke-test.sh — exercise a real beamd deployment end-to-end.
 #
 # Prerequisites:
-#   - `beam` and `beam-testapp` are on PATH (`make build && export PATH=$PWD/bin:$PATH`)
-#   - You've already run `beam login --server <yours> --token <yours>`
+#   - `beamd` and `beam-testapp` are on PATH (`make build && export PATH=$PWD/bin:$PATH`)
+#   - You've already run `beamd login --server <yours> --token <yours>`
 #
 # What it does:
 #   1. Starts beam-testapp on a local port.
-#   2. Runs `beam expose <port> --as smoketest`.
+#   2. Runs `beamd up <port> --as smoketest`.
 #   3. Curls a handful of routes through the resulting public URL.
 #   4. Prints pass/fail per check.
 #
@@ -24,15 +24,15 @@ green() { printf "\033[32m%s\033[0m" "$*"; }
 
 # --- Precheck ----------------------------------------------------------------
 
-for bin in beam beam-testapp curl; do
+for bin in beamd beam-testapp curl; do
     if ! command -v "$bin" >/dev/null 2>&1; then
         echo "missing prerequisite: $bin not on PATH"
         exit 1
     fi
 done
 
-if ! beam list >/dev/null 2>&1; then
-    echo "couldn't reach the beam daemon. Have you run 'beam login' yet?"
+if ! beamd list >/dev/null 2>&1; then
+    echo "couldn't reach the beamd agent. Have you run 'beamd login' yet?"
     exit 1
 fi
 
@@ -50,8 +50,8 @@ cleanup() {
         kill "$APP_PID" 2>/dev/null || true
         echo "  stopped beam-testapp (pid $APP_PID)"
     fi
-    beam unexpose "$NAME" >/dev/null 2>&1 || true
-    echo "  unexposed tunnel '$NAME'"
+    beamd down "$NAME" >/dev/null 2>&1 || true
+    echo "  removed tunnel '$NAME'"
 }
 trap cleanup EXIT
 
@@ -70,7 +70,7 @@ fi
 # --- Expose ------------------------------------------------------------------
 
 echo "exposing :$PORT as '$NAME' …"
-URL=$(beam expose "$PORT" --as "$NAME")
+URL=$(beamd up "$PORT" --as "$NAME")
 echo "tunnel URL: $URL"
 echo
 
@@ -125,11 +125,11 @@ check "GET /sleep?ms=1000 succeeds"                    "$out" "slept 1000 ms"
 
 echo
 if [[ "$fails" -eq 0 ]]; then
-    echo "$(green '🎉 all smoke checks passed.') your beam deployment is healthy."
+    echo "$(green '🎉 all smoke checks passed.') your beamd deployment is healthy."
     echo
     echo "tunnel URL was: $URL"
-    echo "(it'll be unexposed once this script exits)"
+    echo "(it'll be removed once this script exits)"
 else
-    echo "$(red "❌ $fails check(s) failed.") see output above; the daemon log is at ~/.beam/daemon.log"
+    echo "$(red "❌ $fails check(s) failed.") see output above; the agent log is at ~/.beamd/agent.log"
     exit 1
 fi

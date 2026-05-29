@@ -26,7 +26,7 @@ func TestProvisionSlug_StubWritesExpectedRecords(t *testing.T) {
 	p := NewStubProvider()
 	ctx := context.Background()
 
-	if err := ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", "2001:db8::1"); err != nil {
+	if err := ProvisionSlug(ctx, p, "beam.example.com", "beam.example.com", "turing", "1.2.3.4", "2001:db8::1"); err != nil {
 		t.Fatalf("ProvisionSlug: %v", err)
 	}
 
@@ -37,10 +37,10 @@ func TestProvisionSlug_StubWritesExpectedRecords(t *testing.T) {
 
 	type key struct{ name, typ string }
 	want := map[key]bool{
-		{"trey", "A"}:      false,
-		{"*.trey", "A"}:    false,
-		{"trey", "AAAA"}:   false,
-		{"*.trey", "AAAA"}: false,
+		{"turing", "A"}:      false,
+		{"*.turing", "A"}:    false,
+		{"turing", "AAAA"}:   false,
+		{"*.turing", "AAAA"}: false,
 	}
 	for _, r := range got {
 		rr := r.RR()
@@ -62,11 +62,11 @@ func TestProvisionSlug_Idempotent(t *testing.T) {
 	p := NewStubProvider()
 	ctx := context.Background()
 
-	if err := ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", ""); err != nil {
+	if err := ProvisionSlug(ctx, p, "beam.example.com", "beam.example.com", "turing", "1.2.3.4", ""); err != nil {
 		t.Fatal(err)
 	}
 	first := len(p.Records("beam.example.com"))
-	if err := ProvisionSlug(ctx, p, "beam.example.com", "trey", "1.2.3.4", ""); err != nil {
+	if err := ProvisionSlug(ctx, p, "beam.example.com", "beam.example.com", "turing", "1.2.3.4", ""); err != nil {
 		t.Fatal(err)
 	}
 	second := len(p.Records("beam.example.com"))
@@ -79,7 +79,7 @@ func TestStubProvider_AppendThenDelete(t *testing.T) {
 	p := NewStubProvider()
 	ctx := context.Background()
 
-	a := libdns.TXT{Name: "_acme-challenge.trey", Text: "challenge-1"}
+	a := libdns.TXT{Name: "_acme-challenge.turing", Text: "challenge-1"}
 	if _, err := p.AppendRecords(ctx, "beam.example.com", []libdns.Record{a}); err != nil {
 		t.Fatal(err)
 	}
