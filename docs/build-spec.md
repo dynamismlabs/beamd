@@ -171,8 +171,8 @@ package (for `npx` and for Flow to bundle), all from one tagged build.
 Mirror the loved Portless ergonomic `portless <name> <cmd>` so `beamd` is a
 great **standalone** tool, not only an SDK.
 
-- [ ] Add `beamd run <name> -- <command...>`: pick a free local port, set `PORT=<port>` (and `--port` passthrough convention) in the child env, spawn the command, wait until the port is listening, then bring it up foreground (`beamd open <port> --as <name>`); stream child stdio; on Ctrl-C/child-exit, tear down the tunnel and kill the child. (This is the `portless <name> <cmd>` ergonomic.)
-- [ ] Print the URL once ready (respect `--json`).
+- [x] Add `beamd run <name> -- <command...>`: pick a free local port, set `PORT=<port>` (and `--port` passthrough convention) in the child env, spawn the command, wait until the port is listening, then bring it up foreground (`beamd open <port> --as <name>`); stream child stdio; on Ctrl-C/child-exit, tear down the tunnel and kill the child. (This is the `portless <name> <cmd>` ergonomic.)
+- [x] Print the URL once ready (respect `--json`).
 - **Acceptance:** `beamd run myapp -- npx serve .` brings up `https://myapp.<slug>.<base>` serving the directory, and cleans up the tunnel on exit.
 
 ---
@@ -220,6 +220,7 @@ completeness; do not build yet.
 - [ ] Device-code login endpoints behind `/.well-known/beam-auth` (the client already supports the no-`--token` flow).
 - [ ] Per-tenant quotas + usage reporting (the `usage_reporter` webhook block already exists). **Groundwork done:** the edge counts per-slug **and per-tunnel** bytes in/out (incl. WebSocket) behind a `TrafficRecorder` seam — `Edge.AddTrafficSink(r)` lets a hosted, account-aware recorder receive every `(slug, name, in, out)` delta without touching the proxy. Self-hosted uses the built-in in-memory+persisted store (`data_dir/bandwidth.json`, `/metrics`).
 - [ ] Abuse controls: per-IP rate limiting, body caps (body cap exists).
+- [ ] **Custom domains** (a tenant serves previews on `preview.acme.com`). The core architecture already allows this — routing is keyed by `Host` with the slug **attached to the route**, never parsed from the hostname, and cert issuance is behind the `certs.Manager` interface. The new pieces are hosted/cert-layer only: (a) **on-demand TLS** via HTTP-01 or TLS-ALPN-01 — the edge can't DNS-01 a zone it doesn't control — gated by an "is this a verified custom domain?" decision fn; (b) a **hostname → tenant/tunnel** map provisioned by the control plane; (c) **ownership verification** (the CNAME-to-edge itself, or a TXT record). **Guardrail for all current work:** never derive slug/tenant by parsing the hostname. **Synergy:** a custom domain under the tenant's *own* registrable domain makes the §6 preview-auth cookie *first-party*, which sidesteps the Safari/iOS third-party-cookie caveat entirely.
 
 ---
 

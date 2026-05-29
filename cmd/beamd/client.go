@@ -12,8 +12,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -166,20 +168,12 @@ func openCmd(args []string) {
 func openForeground(cfg *config.Client, port int, name string, jsonOut bool) {
 	quietClientLogs()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token)
-	cancel()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "connect failed:", err)
-		os.Exit(1)
-	}
-	defer c.Close()
-
-	url, err := c.Register(name, port)
+	c, url, err := dialAndRegister(cfg, port, name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open failed:", err)
 		os.Exit(1)
 	}
+	defer c.Close()
 
 	resolved := name
 	if resolved == "" {
@@ -237,6 +231,186 @@ func printOpenResult(r openResult) {
 // reconnect failures) still surface on stderr.
 func quietClientLogs() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+}
+
+// dialAndRegister opens a foreground connection to the edge and registers
+// name→port, returning the live client and its public URL. The caller
+// owns closing the client.
+func dialAndRegister(cfg *config.Client, port int, name string) (*client.Client, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token)
+	cancel()
+	if err != nil {
+		return nil, "", fmt.Errorf("connect to edge: %w", err)
+	}
+	url, err := c.Register(name, port)
+	if err != nil {
+		_ = c.Close()
+		return nil, "", err
+	}
+	return c, url, nil
+}
+
+// runCmd wraps a command as a tunnel: it picks a free local port, runs the
+// command with $PORT set, waits for it to start listening, opens a
+// foreground tunnel to it, then cleans up (tunnel + the command's whole
+// process group) on Ctrl-C or when the command exits. Mirrors the loved
+// `portless <name> <cmd>` ergonomic.
+//
+// Usage: beamd run <name> [--port N] [--json] -- <command> [args...]
+func runCmd(args []string) {
+	sep := -1
+	for i, a := range args {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep < 0 || sep == len(args)-1 {
+		fmt.Fprintln(os.Stderr, "usage: beamd run <name> [--port N] [--json] -- <command> [args...]")
+		os.Exit(2)
+	}
+	runArgs, cmdArgs := args[:sep], args[sep+1:]
+
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	portFlag := fs.Int("port", 0, "local port to expose (0 = pick a free one and set $PORT)")
+	jsonOut := fs.Bool("json", false, "print one JSON object describing the tunnel, and nothing else")
+	configPath := fs.String("config", defaultConfigPath(), "client config path")
+	_ = fs.Parse(hoistFlags(runArgs, map[string]bool{"port": true, "config": true}))
+
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: beamd run <name> [--port N] [--json] -- <command> [args...]")
+		os.Exit(2)
+	}
+	name := fs.Arg(0)
+	if err := naming.ValidateLabel(name); err != nil {
+		fmt.Fprintln(os.Stderr, "invalid name:", err)
+		os.Exit(2)
+	}
+
+	cfg := mustLoadConfig(*configPath)
+	quietClientLogs()
+
+	port := *portFlag
+	if port == 0 {
+		port = freePort()
+	}
+
+	// Spawn the command with $PORT set, in its own process group so we can
+	// signal the whole tree (the command may fork workers) on teardown.
+	child := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	child.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
+	child.Stdin = os.Stdin
+	child.Stderr = os.Stderr
+	if *jsonOut {
+		child.Stdout = os.Stderr // keep our stdout pure for the JSON object
+	} else {
+		child.Stdout = os.Stdout
+	}
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := child.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "run: start command:", err)
+		os.Exit(1)
+	}
+
+	childExited := make(chan struct{})
+	var childErr error
+	go func() { childErr = child.Wait(); close(childExited) }()
+
+	// Wait for the command to bind $PORT (or bail if it exits first).
+	if !waitListening(port, 30*time.Second, childExited) {
+		select {
+		case <-childExited:
+			fmt.Fprintf(os.Stderr, "run: %q exited before listening on port %d: %v\n", cmdArgs[0], port, childErr)
+		default:
+			fmt.Fprintf(os.Stderr, "run: %q didn't listen on port %d within 30s\n", cmdArgs[0], port)
+			killChild(child, childExited)
+		}
+		os.Exit(1)
+	}
+
+	c, url, err := dialAndRegister(cfg, port, name)
+	if err != nil {
+		killChild(child, childExited)
+		fmt.Fprintln(os.Stderr, "run: open tunnel:", err)
+		os.Exit(1)
+	}
+	defer c.Close()
+
+	if *jsonOut {
+		printOpenResult(openResult{URL: url, Name: name, Port: port, Slug: c.Slug(), BaseDomain: c.BaseDomain()})
+	} else {
+		fmt.Printf("%s  →  http://127.0.0.1:%d  (running: %s)\n\ntunnel live — Ctrl-C to stop\n", url, port, strings.Join(cmdArgs, " "))
+	}
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-sigs:
+		if !*jsonOut {
+			fmt.Fprintln(os.Stderr, "\nshutting down…")
+		}
+		_ = c.Close()
+		killChild(child, childExited)
+	case <-childExited:
+		if !*jsonOut {
+			fmt.Fprintf(os.Stderr, "\ncommand exited: %v\n", childErr)
+		}
+		_ = c.Close()
+		if ee, ok := childErr.(*exec.ExitError); ok {
+			os.Exit(ee.ExitCode())
+		}
+	}
+}
+
+// freePort grabs an ephemeral TCP port and releases it, returning the
+// number so the wrapped command can bind it via $PORT.
+func freePort() int {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "run: pick free port:", err)
+		os.Exit(1)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// waitListening polls until something accepts TCP on port, returning true
+// once it does, or false on timeout or the child exiting first.
+func waitListening(port int, timeout time.Duration, childExited <-chan struct{}) bool {
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-childExited:
+			return false
+		default:
+		}
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return false
+}
+
+// killChild signals the command's process group, escalating to SIGKILL if
+// it doesn't exit promptly.
+func killChild(cmd *exec.Cmd, exited <-chan struct{}) {
+	if cmd.Process == nil {
+		return
+	}
+	pgid := -cmd.Process.Pid // negative = the whole process group
+	_ = syscall.Kill(pgid, syscall.SIGTERM)
+	select {
+	case <-exited:
+	case <-time.After(3 * time.Second):
+		_ = syscall.Kill(pgid, syscall.SIGKILL)
+	}
 }
 
 // listCmd shows detached tunnels held by the background agent. It never

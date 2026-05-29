@@ -169,6 +169,14 @@ output (one object/array, nothing else) — see
 [`docs/agent-api.md`](docs/agent-api.md) for driving beamd from another
 program.
 
+Or wrap a command and expose it in one step (sets `$PORT`, waits for it to
+listen, opens the tunnel, and cleans up on exit):
+
+```
+beamd run myapp -- npm run dev
+# → https://myapp.turing.beam.example.com
+```
+
 ### MCP server (AI agents)
 
 The same agent also exposes an MCP server over stdio:

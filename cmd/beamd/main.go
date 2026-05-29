@@ -54,6 +54,8 @@ func main() {
 		openCmd(os.Args[2:])
 	case "close":
 		closeCmd(os.Args[2:])
+	case "run":
+		runCmd(os.Args[2:])
 	case "list":
 		listCmd(os.Args[2:])
 	case "status":
@@ -91,6 +93,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd edge")
 	fmt.Fprintln(os.Stderr, "  open            expose a local port as a public URL (foreground; -d to detach)")
 	fmt.Fprintln(os.Stderr, "  close           remove a detached tunnel")
+	fmt.Fprintln(os.Stderr, "  run             run a command and expose its port: run <name> -- <cmd...>")
 	fmt.Fprintln(os.Stderr, "  list            list detached tunnels")
 	fmt.Fprintln(os.Stderr, "  status          show agent + connection status")
 	fmt.Fprintln(os.Stderr, "  mcp             run the MCP stdio server")
