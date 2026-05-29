@@ -1,19 +1,21 @@
 name: release
 
-# Publishes a release when a version tag is pushed:
-#   git tag v0.0.1 && git push origin v0.0.1
-#
-# Produces, all from the one tag:
+# Manual release. In the Actions tab → "release" → Run workflow, pick the
+# vX.Y.Z **tag** as the ref. Produces, from that tag:
 #   - cross-platform binaries + checksums + a (draft) GitHub release  (goreleaser)
 #   - ghcr.io/dynamismlabs/beamd:<version> and :latest                (goreleaser)
 #   - the `beamd` npm package + per-platform packages                 (build-npm.mjs)
 #
 # Required repo secret: NPM_TOKEN (an npm automation token).
 # GHCR uses the built-in GITHUB_TOKEN (no extra secret needed).
+#
+# Kept MANUAL (not auto-on-tag) so publishing locally — `npm login` +
+# `make publish-npm` / `make publish-binaries` — never collides with CI
+# republishing the same version. To make releases fire automatically on a
+# tag instead, replace the trigger with:  on: { push: { tags: ["v*"] } }
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch: {}
 
 permissions:
   contents: write # create the GitHub release
@@ -26,6 +28,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # goreleaser needs full history + tags
+
+      - name: Require a version tag ref
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*) echo "releasing $GITHUB_REF_NAME" ;;
+            *) echo "::error::Run this workflow against a vX.Y.Z tag (use the ref selector), got '$GITHUB_REF_NAME'"; exit 1 ;;
+          esac
 
       - uses: actions/setup-go@v5
         with:
