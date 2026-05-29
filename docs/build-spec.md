@@ -218,7 +218,7 @@ completeness; do not build yet.
 
 - [ ] Multi-tenant provisioning API: authenticated endpoint to create a slug + token (wraps `add-developer`) so tenants self-serve.
 - [ ] Device-code login endpoints behind `/.well-known/beam-auth` (the client already supports the no-`--token` flow).
-- [ ] Per-tenant quotas + usage reporting (the `usage_reporter` webhook block already exists).
+- [ ] Per-tenant quotas + usage reporting (the `usage_reporter` webhook block already exists). **Groundwork done:** the edge counts per-slug **and per-tunnel** bytes in/out (incl. WebSocket) behind a `TrafficRecorder` seam — `Edge.AddTrafficSink(r)` lets a hosted, account-aware recorder receive every `(slug, name, in, out)` delta without touching the proxy. Self-hosted uses the built-in in-memory+persisted store (`data_dir/bandwidth.json`, `/metrics`).
 - [ ] Abuse controls: per-IP rate limiting, body caps (body cap exists).
 
 ---

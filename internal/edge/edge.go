@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,13 @@ type Edge struct {
 	proxies  map[string]*httputil.ReverseProxy
 	pubSrvs  map[*http.Server]struct{} // per-public-conn HTTP servers, tracked so Shutdown can drain them
 	metrics  *metrics
+
+	// traffic is the self-hosted bandwidth recorder (in-memory + persisted),
+	// powering /metrics and the usage webhook. trafficSinks holds any extra
+	// recorders (e.g. a hosted account-aware billing sink) registered before
+	// Serve; the proxy fans byte deltas out to all of them.
+	traffic      *trafficStore
+	trafficSinks []TrafficRecorder
 
 	// firstSession is closed when the first session completes hello/hello_ok.
 	firstSessionOnce sync.Once
@@ -89,8 +97,35 @@ func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Ma
 		proxies:          make(map[string]*httputil.ReverseProxy),
 		pubSrvs:          make(map[*http.Server]struct{}),
 		metrics:          newMetrics(),
+		traffic:          newTrafficStore(trafficPath(cfg)),
 		firstSession:     make(chan struct{}),
 		shutdown:         make(chan struct{}),
+	}
+}
+
+// trafficPath returns where the bandwidth store persists, or "" to keep
+// it in-memory only (no data_dir configured — e.g. tests).
+func trafficPath(cfg *config.Server) string {
+	if cfg.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.DataDir, "bandwidth.json")
+}
+
+// AddTrafficSink registers an additional TrafficRecorder that receives
+// every per-tunnel byte delta alongside the built-in store. Intended for
+// hosted deployments to plug in durable, account-aware billing. Must be
+// called before Serve (sinks are read without locking on the hot path).
+func (e *Edge) AddTrafficSink(r TrafficRecorder) {
+	e.trafficSinks = append(e.trafficSinks, r)
+}
+
+// recordTraffic fans a closed connection's byte totals out to the
+// built-in store and any registered sinks.
+func (e *Edge) recordTraffic(slug, name string, bytesIn, bytesOut int64) {
+	e.traffic.RecordTraffic(slug, name, bytesIn, bytesOut)
+	for _, s := range e.trafficSinks {
+		s.RecordTraffic(slug, name, bytesIn, bytesOut)
 	}
 }
 
@@ -98,6 +133,24 @@ func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Ma
 // deadline. Useful for tests; production tunes via config later.
 func (e *Edge) SetHeartbeatTimeout(d time.Duration) {
 	e.heartbeatTimeout = d
+}
+
+// flushTrafficPeriodically persists the bandwidth store on an interval so
+// a crash loses at most one interval of counts. The authoritative final
+// flush happens in Shutdown. No-op when persistence is disabled.
+func (e *Edge) flushTrafficPeriodically() {
+	tick := time.NewTicker(60 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-e.shutdown:
+			return
+		case <-tick.C:
+			if err := e.traffic.Flush(); err != nil {
+				slog.Warn("traffic store flush failed", "err", err.Error())
+			}
+		}
+	}
 }
 
 func (e *Edge) Serve() error {
@@ -114,6 +167,8 @@ func (e *Edge) Serve() error {
 	e.ln = ln
 	e.mu.Unlock()
 	slog.Info("edge listening", "addr", e.cfg.ListenHTTPS)
+
+	go e.flushTrafficPeriodically()
 
 	for {
 		c, err := ln.Accept()
@@ -133,6 +188,11 @@ func (e *Edge) Serve() error {
 // force-closing remaining sessions. Idempotent.
 func (e *Edge) Shutdown(ctx context.Context) error {
 	e.shutdownOnce.Do(func() { close(e.shutdown) })
+
+	// Persist final bandwidth totals before we go.
+	if err := e.traffic.Flush(); err != nil {
+		slog.Warn("traffic store final flush failed", "err", err.Error())
+	}
 
 	e.mu.Lock()
 	ln := e.ln
@@ -216,11 +276,11 @@ func (e *Edge) SessionsCreatedTotal() int64 {
 // UsageSnapshot satisfies usage.Source — a point-in-time read of the
 // per-slug counters the usage reporter ships to your billing webhook.
 func (e *Edge) UsageSnapshot() usage.Snapshot {
+	// BytesBySlug reports egress (response bytes) per slug — the billable
+	// dimension the webhook has always carried.
+	bytes := e.traffic.bytesOutBySlug()
+
 	e.metrics.mu.Lock()
-	bytes := make(map[string]int64, len(e.metrics.bytesBySlug))
-	for k, v := range e.metrics.bytesBySlug {
-		bytes[k] = v
-	}
 	var requests int64
 	for _, v := range e.metrics.requestsByStatus {
 		requests += v
@@ -587,7 +647,7 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	if rr.status == 0 {
 		rr.status = http.StatusOK
 	}
-	e.metrics.recordRequest(rr.status, rr.bytes, slug)
+	e.metrics.recordRequest(rr.status)
 
 	slog.Info("request",
 		"host", r.Host,
@@ -602,6 +662,7 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 func (e *Edge) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	e.metrics.writeText(w, int64(e.certs.IssuanceCount()))
+	e.traffic.writeMetrics(w)
 }
 
 // handleAuthDiscovery returns the device-code endpoints the hosted
@@ -663,7 +724,13 @@ func (e *Edge) proxyFor(host string) *httputil.ReverseProxy {
 					_ = stream.Close()
 					return nil, fmt.Errorf("write name prefix: %w", err)
 				}
-				return stream, nil
+				// Wrap after the name prefix so only real app traffic is
+				// counted. Reported per-tunnel on close (incl. WebSocket).
+				slug, name := route.session.slug, route.name
+				return &countingConn{
+					Conn:    stream,
+					onClose: func(in, out int64) { e.recordTraffic(slug, name, in, out) },
+				}, nil
 			},
 			DisableKeepAlives: true,
 		},

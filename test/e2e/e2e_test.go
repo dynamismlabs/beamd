@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1085,10 +1086,10 @@ func TestMetrics_ExposesExpectedCounters(t *testing.T) {
 		"beam_active_tunnels",
 		"beam_cert_issuance_total",
 		"beam_requests_total",
-		"beam_bytes_proxied_total",
+		"beam_bytes_in_total",
+		"beam_bytes_out_total",
 		`beam_active_sessions 1`,
 		`beam_active_tunnels 1`,
-		`beam_bytes_proxied_total{slug="turing"}`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("metrics output missing %q\nfull body:\n%s", want, got)
@@ -1096,7 +1097,7 @@ func TestMetrics_ExposesExpectedCounters(t *testing.T) {
 	}
 }
 
-func TestMetrics_BandwidthCounterReflectsResponseBytes(t *testing.T) {
+func TestMetrics_BandwidthCounterReflectsTraffic(t *testing.T) {
 	port := startDummyApp(t, "api")
 	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 	c := connectClient(t, edgeAddr, "T1")
@@ -1105,33 +1106,57 @@ func TestMetrics_BandwidthCounterReflectsResponseBytes(t *testing.T) {
 	}
 
 	host := "api.turing." + testBaseDomain
-	// "api: GET /x\n" → 13 bytes.
+	// "api: GET /x\n" → 13 bytes of egress; the request itself is ingress.
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/x", "api: GET /x\n")
 
-	resp, err := publicHTTPSClient(edgeAddr, host).Get("https://" + host + "/metrics")
+	hc := publicHTTPSClient(edgeAddr, host)
+	outKey := `beam_bytes_out_total{slug="turing",name="api"}`
+	inKey := `beam_bytes_in_total{slug="turing",name="api"}`
+
+	// Bytes are recorded when the proxied connection closes, which can lag
+	// the client's read slightly — poll until the egress counter lands.
+	waitUntil(t, "egress bytes recorded per tunnel", 2*time.Second, func() bool {
+		resp, err := hc.Get("https://" + host + "/metrics")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return metricValue(string(b), outKey) >= 13
+	})
+
+	// Confirm ingress (request bytes) is tracked too.
+	resp, err := hc.Get("https://" + host + "/metrics")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	out := string(body)
-
-	want := `beam_bytes_proxied_total{slug="turing"}`
-	idx := strings.Index(out, want)
-	if idx < 0 {
-		t.Fatalf("missing %q in metrics:\n%s", want, out)
+	b, _ := io.ReadAll(resp.Body)
+	if got := metricValue(string(b), inKey); got <= 0 {
+		t.Errorf("%s = %d, want > 0 (request bytes)", inKey, got)
 	}
-	line := out[idx:]
-	if nl := strings.Index(line, "\n"); nl > 0 {
+}
+
+// metricValue finds the metric line beginning with key and parses its
+// trailing integer value. Returns -1 if absent or malformed.
+func metricValue(body, key string) int64 {
+	idx := strings.Index(body, key)
+	if idx < 0 {
+		return -1
+	}
+	line := body[idx:]
+	if nl := strings.IndexByte(line, '\n'); nl >= 0 {
 		line = line[:nl]
 	}
-	parts := strings.Fields(line)
-	if len(parts) != 2 {
-		t.Fatalf("unexpected metric line shape: %q", line)
+	fields := strings.Fields(line)
+	if len(fields) != 2 {
+		return -1
 	}
-	if parts[1] == "0" {
-		t.Errorf("bytes_proxied stuck at 0; want >= 13")
+	n, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return -1
 	}
+	return n
 }
 
 func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {

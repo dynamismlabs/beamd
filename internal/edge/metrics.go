@@ -25,24 +25,18 @@ type metrics struct {
 	mu sync.Mutex
 	// requestsByStatus[status] = total seen
 	requestsByStatus map[int]int64
-	// bytesBySlug[slug] = total bytes proxied for that slug
-	bytesBySlug map[string]int64
 }
 
 func newMetrics() *metrics {
 	return &metrics{
 		requestsByStatus: make(map[int]int64),
-		bytesBySlug:      make(map[string]int64),
 	}
 }
 
-func (m *metrics) recordRequest(status int, bytes int64, slug string) {
+func (m *metrics) recordRequest(status int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requestsByStatus[status]++
-	if slug != "" {
-		m.bytesBySlug[slug] += bytes
-	}
 }
 
 // writeText emits the Prometheus text exposition format. certIssuance
@@ -70,16 +64,6 @@ func (m *metrics) writeText(w io.Writer, certIssuance int64) {
 	for _, s := range statuses {
 		statusCounts[s] = m.requestsByStatus[s]
 	}
-
-	slugs := make([]string, 0, len(m.bytesBySlug))
-	for s := range m.bytesBySlug {
-		slugs = append(slugs, s)
-	}
-	sort.Strings(slugs)
-	bytesCounts := make(map[string]int64, len(m.bytesBySlug))
-	for _, s := range slugs {
-		bytesCounts[s] = m.bytesBySlug[s]
-	}
 	m.mu.Unlock()
 
 	fmt.Fprintln(w, "# HELP beam_requests_total Total public requests served, by status code.")
@@ -87,13 +71,10 @@ func (m *metrics) writeText(w io.Writer, certIssuance int64) {
 	for _, s := range statuses {
 		fmt.Fprintf(w, "beam_requests_total{status=\"%d\"} %d\n", s, statusCounts[s])
 	}
-
-	fmt.Fprintln(w, "# HELP beam_bytes_proxied_total Total response bytes proxied, by slug.")
-	fmt.Fprintln(w, "# TYPE beam_bytes_proxied_total counter")
-	for _, s := range slugs {
-		fmt.Fprintf(w, "beam_bytes_proxied_total{slug=\"%s\"} %d\n", s, bytesCounts[s])
-	}
 }
+
+// Per-slug/per-tunnel byte counters are emitted separately by the
+// trafficStore (beam_bytes_in_total / beam_bytes_out_total).
 
 // responseRecorder wraps http.ResponseWriter to capture status code
 // and bytes written. Implements http.Hijacker so WebSocket upgrades
