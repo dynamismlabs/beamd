@@ -161,6 +161,18 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 func (m *MagicManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	slug, ok := extractSlug(hello.ServerName, m.baseDomain)
 	if !ok {
+		// No per-developer slug in the SNI — this is the apex (or another
+		// eagerly-managed name, e.g. the one /.well-known/beam-auth is
+		// served on). Serve its managed cert if certmagic has one. certmagic
+		// needs the handshake context, so only consult it when there is one
+		// (real handshakes always set it); otherwise, and for genuinely
+		// unknown SNIs or beam control connections — which skip
+		// verification anyway — use the self-signed fallback.
+		if hello.Context() != nil {
+			if cert, err := m.cm.GetCertificate(hello); err == nil {
+				return cert, nil
+			}
+		}
 		return m.fallbackCert, nil
 	}
 
