@@ -258,19 +258,27 @@ func dialAndRegister(cfg *config.Client, port int, name string) (*client.Client,
 // `portless <name> <cmd>` ergonomic.
 //
 // Usage: beamd run <name> [--port N] [--json] -- <command> [args...]
-func runCmd(args []string) {
-	sep := -1
+// splitRunArgs splits `run` args on the first "--": the part before is
+// run's own flags + name, the part after is the command to execute. ok is
+// false when there's no "--" or nothing follows it.
+func splitRunArgs(args []string) (runArgs, cmdArgs []string, ok bool) {
 	for i, a := range args {
 		if a == "--" {
-			sep = i
-			break
+			if i == len(args)-1 {
+				return nil, nil, false
+			}
+			return args[:i], args[i+1:], true
 		}
 	}
-	if sep < 0 || sep == len(args)-1 {
+	return nil, nil, false
+}
+
+func runCmd(args []string) {
+	runArgs, cmdArgs, ok := splitRunArgs(args)
+	if !ok {
 		fmt.Fprintln(os.Stderr, "usage: beamd run <name> [--port N] [--json] -- <command> [args...]")
 		os.Exit(2)
 	}
-	runArgs, cmdArgs := args[:sep], args[sep+1:]
 
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	portFlag := fs.Int("port", 0, "local port to expose (0 = pick a free one and set $PORT)")
