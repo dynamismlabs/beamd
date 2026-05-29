@@ -8,7 +8,7 @@
 #
 # What it does:
 #   1. Starts beam-testapp on a local port.
-#   2. Runs `beamd open <port> --as smoketest`.
+#   2. Runs `beamd open <port> --as smoketest -d` (detached).
 #   3. Curls a handful of routes through the resulting public URL.
 #   4. Prints pass/fail per check.
 #
@@ -70,7 +70,9 @@ fi
 # --- Expose ------------------------------------------------------------------
 
 echo "exposing :$PORT as '$NAME' …"
-URL=$(beamd open "$PORT" --as "$NAME")
+# Detached (-d) so this returns the URL instead of holding the tunnel in
+# the foreground; the agent keeps it up and cleanup tears it down.
+URL=$(beamd open "$PORT" --as "$NAME" -d)
 echo "tunnel URL: $URL"
 echo
 
