@@ -26,8 +26,22 @@ import (
 )
 
 func main() {
-	port := flag.Int("port", 8765, "listen port")
+	port := flag.Int("port", 0, "listen port (default: $PORT, else 8765)")
 	flag.Parse()
+
+	// Honor the $PORT convention (so `beamd run … -- beam-testapp` works)
+	// when no explicit --port is given.
+	p := *port
+	if p == 0 {
+		if env := os.Getenv("PORT"); env != "" {
+			if n, err := strconv.Atoi(env); err == nil {
+				p = n
+			}
+		}
+	}
+	if p == 0 {
+		p = 8765
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleIndex)
@@ -37,9 +51,9 @@ func main() {
 	mux.HandleFunc("/size", handleSize)
 	mux.HandleFunc("/sse", handleSSE)
 
-	addr := fmt.Sprintf(":%d", *port)
+	addr := fmt.Sprintf(":%d", p)
 	log.Printf("beam-testapp listening on %s", addr)
-	log.Printf("expose with:  beamd up %d --as test", *port)
+	log.Printf("expose with:  beamd open %d --as test", p)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}

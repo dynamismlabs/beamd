@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -134,7 +135,9 @@ func EnsureRunning(ctx context.Context, executable, socketPath string, extraEnv 
 	}
 
 	cmd := exec.Command(executable, "agent", "--socket", socketPath)
-	cmd.Env = append(cmd.Env, extraEnv...)
+	// Inherit the caller's environment (so the agent can resolve $HOME for
+	// its log, etc.) and add the pass-through vars (e.g. BEAMD_CONFIG).
+	cmd.Env = append(os.Environ(), extraEnv...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn agent: %w", err)
