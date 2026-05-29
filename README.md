@@ -244,6 +244,9 @@ make run-server    # runs beamd against example/beamd.yaml
 make smoke-test    # spins up beam-testapp + drives it through your tunnel
 ```
 
+Cutting a release (npm + binaries + Docker + `go install`): see
+[`docs/releasing.md`](docs/releasing.md).
+
 ## Smoke-testing a real deployment
 
 After [setup](docs/setup.md), `make smoke-test` exercises the proxy path
