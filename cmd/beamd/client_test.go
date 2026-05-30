@@ -60,6 +60,24 @@ func TestSplitRunArgs(t *testing.T) {
 	}
 }
 
+func TestNormalizeServerAddr(t *testing.T) {
+	cases := map[string]string{
+		"demobeamd.dynami.sm":          "demobeamd.dynami.sm:443",
+		"demobeamd.dynami.sm:443":      "demobeamd.dynami.sm:443",
+		"demobeamd.dynami.sm:8443":     "demobeamd.dynami.sm:8443",
+		"https://demobeamd.dynami.sm":  "demobeamd.dynami.sm:443",
+		"https://demobeamd.dynami.sm/": "demobeamd.dynami.sm:443",
+		"http://x.com:8443":            "x.com:8443",
+		"  x.com  ":                    "x.com:443",
+		"":                             "",
+	}
+	for in, want := range cases {
+		if got := normalizeServerAddr(in); got != want {
+			t.Errorf("normalizeServerAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestWaitListening(t *testing.T) {
 	never := make(chan struct{})
 

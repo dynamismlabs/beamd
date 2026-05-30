@@ -39,6 +39,22 @@ func defaultConfigPath() string {
 	return p
 }
 
+// normalizeServerAddr tolerates a pasted scheme/trailing slash and adds the
+// default :443 when no port is given, so users can type just the host.
+func normalizeServerAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	addr = strings.TrimPrefix(addr, "https://")
+	addr = strings.TrimPrefix(addr, "http://")
+	addr = strings.TrimSuffix(addr, "/")
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "443") // no port → default to 443
+	}
+	return addr
+}
+
 // isInteractive reports whether stdin is a terminal, so we can prompt the
 // user — vs a pipe/redirect/CI, where we must not block on a prompt.
 func isInteractive() bool {
@@ -51,7 +67,7 @@ func isInteractive() bool {
 
 func loginCmd(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com:443")
+	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com (port defaults to 443)")
 	token := fs.String("token", "", "bearer token (copy-paste flow); omit for device-code login")
 	insecure := fs.Bool("insecure", false, "skip TLS verification for the discovery + device-code calls (dev/self-signed setups)")
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
@@ -65,7 +81,7 @@ func loginCmd(args []string) {
 		r := bufio.NewReader(os.Stdin)
 		if *server == "" {
 			fmt.Println("Connect this machine to a beamd edge.")
-			*server = prompt(r, "edge address (host:port, e.g. tunnel.example.com:443)", "")
+			*server = prompt(r, "edge address (e.g. tunnel.example.com — :443 assumed)", "")
 		}
 		if *token == "" {
 			fmt.Println("Your developer token — ask whoever runs the edge, or find it in the")
@@ -73,6 +89,8 @@ func loginCmd(args []string) {
 			*token = prompt(r, "token (or Enter to try browser login, if the edge supports it)", "")
 		}
 	}
+
+	*server = normalizeServerAddr(*server)
 
 	if *server == "" {
 		fmt.Fprintln(os.Stderr, "login: --server is required")
