@@ -233,15 +233,22 @@ Build these seams in P1 even though only the personal path uses them:
       X`." P2 enriches the *same* hook with server-matching + device-code +
       the trust prompt — one place to grow, not N call sites.
 
-**File story (no format change):** it's always `.beamd`. *Personal now* = a
-gitignored `.beamd` with `profile:`. *Shared later* = a committed `.beamd`
-with `server:` (+ naming = team policy), plus an optional personal
-`.beamd.local` (gitignored) that overrides it — the `.env` / `.env.local`
-pattern devs already know. The **precedence ladder already gives
-personal-overrides-shared for free** (`--profile` / `BEAMD_PROFILE` /
-`current` beat the committed file), so coexistence needs no new concept;
-`.beamd.local` is just the persistent, project-scoped form of that override
-(a small P2 addition to discovery: load `.beamd`, then merge `.beamd.local`).
+**File story (no format change, no new filenames):** the project file is
+**always `.beamd`**, distinguished by *content*, not name:
+- `.beamd` with `profile:` (a personal alias) → personal; gitignore it.
+- `.beamd` with `server:` + naming → shareable; **commit it** — this *is*
+  the "team" file, it just keeps the plain name.
+- `.beamd.local` → personal override, always gitignored, overrides `.beamd`.
+
+We suffix the **personal** file (`.beamd.local`), following `.env` /
+`.env.local` — **not** a `.beamd.team` / `.beamd.shared`. Rationale: zero new
+convention to learn; the *override* is the special/local one, so it gets the
+suffix; and "personal overrides shared" falls out for free (the precedence
+ladder already lets `--profile` / `BEAMD_PROFILE` / `current` beat the
+committed file). `.beamd.local` is just the persistent, project-scoped form
+of that override (a small P2 addition to discovery: load `.beamd`, then merge
+`.beamd.local`). Distinct from `~/.beamd/` — your *global* identity/secrets,
+never in a repo.
 
 ## Open questions (only the genuinely unresolved)
 
