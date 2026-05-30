@@ -221,12 +221,15 @@ func TestRegister_DerivesNameFromPortWhenOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if !strings.Contains(url, ".turing."+testBaseDomain) {
-		t.Errorf("url %q missing slug+base", url)
+	label := fmt.Sprintf("%d", port)
+	if want := "https://" + label + ".turing." + testBaseDomain; url != want {
+		t.Errorf("url = %q, want %q", url, want)
 	}
-	if !strings.HasPrefix(url, "https://") {
-		t.Errorf("missing https scheme: %q", url)
-	}
+	// Regression: the edge sends the *derived* name on each data stream, so
+	// the client must key its backend under that label (not the empty name
+	// it was called with) — otherwise public requests 502 "no backend".
+	host := label + ".turing." + testBaseDomain
+	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/x", "p: GET /x\n")
 }
 
 func TestRegister_RejectsInvalidNames(t *testing.T) {

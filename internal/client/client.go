@@ -30,6 +30,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/dynamismlabs/beamd/internal/mux"
+	"github.com/dynamismlabs/beamd/internal/naming"
 	"github.com/dynamismlabs/beamd/internal/proto"
 )
 
@@ -183,6 +184,14 @@ func (c *Client) Close() error {
 // If the client is currently disconnected, Register blocks (up to
 // RegisterTimeout) waiting for a session.
 func (c *Client) Register(name string, port int) (string, error) {
+	if name == "" {
+		// The edge derives the label from the port for an empty name and
+		// sends that label on data streams; key our backend map under the
+		// same label so stream lookups match (otherwise the edge 502s with
+		// "no backend for name").
+		name = naming.LabelFromPort(port)
+	}
+
 	c.mu.Lock()
 	c.intended[name] = port
 	c.mu.Unlock()
