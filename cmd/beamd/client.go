@@ -6,6 +6,7 @@ package main
 // main.go; both roles ship in one binary.
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -38,6 +39,16 @@ func defaultConfigPath() string {
 	return p
 }
 
+// isInteractive reports whether stdin is a terminal, so we can prompt the
+// user — vs a pipe/redirect/CI, where we must not block on a prompt.
+func isInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
 func loginCmd(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com:443")
@@ -45,6 +56,23 @@ func loginCmd(args []string) {
 	insecure := fs.Bool("insecure", false, "skip TLS verification for the discovery + device-code calls (dev/self-signed setups)")
 	configPath := fs.String("config", defaultConfigPath(), "client config path")
 	_ = fs.Parse(args)
+
+	// In an interactive terminal, prompt for anything missing (with hints)
+	// instead of erroring — friendlier than re-typing the whole command.
+	// Piped/scripted use keeps the strict behavior so it fails fast rather
+	// than blocking on a prompt no one will answer.
+	if (*server == "" || *token == "") && isInteractive() {
+		r := bufio.NewReader(os.Stdin)
+		if *server == "" {
+			fmt.Println("Connect this machine to a beamd edge.")
+			*server = prompt(r, "edge address (host:port, e.g. tunnel.example.com:443)", "")
+		}
+		if *token == "" {
+			fmt.Println("Your developer token — ask whoever runs the edge, or find it in the")
+			fmt.Println("edge's tokens.json (the key that maps to your slug).")
+			*token = prompt(r, "token (or Enter to try browser login, if the edge supports it)", "")
+		}
+	}
 
 	if *server == "" {
 		fmt.Fprintln(os.Stderr, "login: --server is required")
