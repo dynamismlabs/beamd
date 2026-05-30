@@ -213,6 +213,36 @@ resolved profile). Detached needs per-profile agents.
 
 ---
 
+## Evolving personal → shared (build P1 so P2 is additive)
+
+The expansion is cheap *only if* P1 resolves to abstractions, not one-offs.
+Build these seams in P1 even though only the personal path uses them:
+
+- [ ] **Resolve to identity, not a name.** One `resolveContext()` returns the
+      concrete `{server, token}` + label; every command consumes *that*,
+      never a profile *name*. (P2's `server:` lookup has no name — so the
+      name must not be the currency anywhere downstream.)
+- [ ] **Profiles store their `server`** (they already do) → P2's
+      `findByServer()` is a free `list()` + filter, no storage change.
+- [ ] **Parse `.beamd` into a struct that tolerates unknown keys.** P2 just
+      adds a `Server` field; a P1 client meeting a future `server:` file
+      ignores it and falls back (forward-compatible) instead of erroring.
+- [ ] **`~/.beamd/config` is an extensible struct** (`current` + room for
+      `defaults`, and later `trusted_servers`), not a bare value.
+- [ ] **One "identity missing" hook.** P1 says "run `beamd login --profile
+      X`." P2 enriches the *same* hook with server-matching + device-code +
+      the trust prompt — one place to grow, not N call sites.
+
+**File story (no format change):** it's always `.beamd`. *Personal now* = a
+gitignored `.beamd` with `profile:`. *Shared later* = a committed `.beamd`
+with `server:` (+ naming = team policy), plus an optional personal
+`.beamd.local` (gitignored) that overrides it — the `.env` / `.env.local`
+pattern devs already know. The **precedence ladder already gives
+personal-overrides-shared for free** (`--profile` / `BEAMD_PROFILE` /
+`current` beat the committed file), so coexistence needs no new concept;
+`.beamd.local` is just the persistent, project-scoped form of that override
+(a small P2 addition to discovery: load `.beamd`, then merge `.beamd.local`).
+
 ## Open questions (only the genuinely unresolved)
 
 1. **`branch`-named *detached/always-on* tunnels.** A branch switch changes
