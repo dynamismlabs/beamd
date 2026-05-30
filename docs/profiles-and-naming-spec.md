@@ -24,9 +24,9 @@ problem, so they share **one precedence ladder** and one project file.
   (nearest, walking up from cwd) → global config → built-in default.
 - **Secrets are global-only.** A `.beamd` file references a profile/server;
   it never contains a token. That's what makes it safe to share.
-- **No naming DSL.** Strategies are a small fixed menu of keywords on the
-  one `--as` flag (`--as dir`), not a `@token` template. Composition (e.g.
-  `myapp-api`) is just a literal `--as` value, not syntax.
+- **No naming DSL.** Derivation is a small fixed menu on a `--from` flag
+  (`--from dir`); an explicit literal is `--as`. No `@token` template —
+  composition (e.g. `myapp-api`) is just a literal `--as` value.
 - **Default name stays `port`.** Nicer naming is opt-in, so no URL changes
   out from under anyone.
 - **The programmatic path is unaffected.** Automation (Flow) passes
@@ -46,7 +46,7 @@ Be logged into every edge at once; switch with a flag, env, or a default.
 - `~/.beamd/profiles/<name>` — one file per profile, the existing client
   config YAML (`server`, `token`, …).
 - `~/.beamd/config` — top-level: `current: <name>` + global defaults
-  (e.g. `name_from`).
+  (e.g. a default `from:` / `name:`).
 - Per-profile agent socket lives at `~/.beamd/agents/<name>.sock` (used by §5).
 - **Backward compat:** a legacy `~/.beamd/config` containing `server`/`token`
   is migrated to profile `default` (and `current: default`) on first run —
@@ -76,32 +76,25 @@ Be logged into every edge at once; switch with a flag, env, or a default.
 
 ---
 
-## 2. Tunnel naming — one `--as` flag, no DSL  `[P1]`
+## 2. Tunnel naming — `--as` (literal) + `--from` (derive), no DSL  `[P1]`
 
-The label is set by, in precedence order: `--as` → project `.beamd` →
-global default → built-in `port`.
+Precedence: `--as` / `--from` → project `.beamd` → global default → `port`.
 
-**`--as <value>`** accepts either a **reserved keyword** (derives the
-label) or anything else (used **literally**):
+- **`--as <label>`** — an explicit literal label (e.g. `web-api`).
+- **`--from <source>`** — derive the label from a fixed menu:
+  - `port` — the port number (the built-in default)
+  - `dir` — basename of cwd (covers pwd *and* worktree dirs)
+  - `repo` — git repo name (`basename` of `git rev-parse --show-toplevel`)
+  - `branch` — current git branch, sanitized (`feat/x` → `feat-x`)
 
-| `--as` value | result |
-|---|---|
-| *(omitted)* | `port` — the port number (default) |
-| `port` | the port number |
-| `dir` | basename of the current directory (covers pwd *and* worktree dirs) |
-| `repo` | git repo name (`basename` of `git rev-parse --show-toplevel`) |
-| `branch` | current git branch, sanitized (`feat/x` → `feat-x`) |
-| `web-api` (anything else) | used **literally** |
-
-One flag, short and idiomatic (cf. `docker --restart always|no`). The
-config key is a single `name:` (same keyword-or-literal rule) in both the
-global config and `.beamd`. The 4 keywords are words no one uses as an app
-name, so the literal-vs-keyword ambiguity is theoretical; `--help` and
-`beamd init` make it explicit.
+Two crisp, **unambiguous** flags: `--from repo` always derives, `--as repo`
+always means the literal "repo". `--from` is short enough to type;
+`--help` / `beamd init` document the menu. If both are given, `--as`
+(explicit) wins. Config keys mirror them — `name:` (literal) or `from:`
+(source) — in both `.beamd` and the global config.
 
 **Tasks**
-- [ ] `--as` on `open` and `run`, interpreting the reserved keywords vs a
-      literal.
+- [ ] `--as` and `--from` on `open` and `run` (mutually exclusive; `--as` wins).
 - [ ] Derivation functions for `dir` / `repo` / `branch` (+ `port`), each
       run from the invocation's cwd, then **sanitized to a single valid
       RFC 1123 label** (lowercase, alnum+hyphen, ≤63, collapse/strip
@@ -109,9 +102,9 @@ name, so the literal-vs-keyword ambiguity is theoretical; `--help` and
       valid (e.g. detached HEAD for `branch`, not in a git repo for
       `repo`), fail with a clear, actionable error.
 - [ ] Name resolution helper wired into `open`/`run` following the ladder
-      (flag → `.beamd` `name:` → global `name:` → `port`).
-- **Acceptance:** in `~/work/myapp`, `beamd open 3000 --as dir` →
-  `myapp.<slug>.<base>`; `--as branch` on `feat/x` → `feat-x.…`; `--as
+      (`--as`/`--from` → `.beamd` `name:`/`from:` → global → `port`).
+- **Acceptance:** in `~/work/myapp`, `beamd open 3000 --from dir` →
+  `myapp.<slug>.<base>`; `--from branch` on `feat/x` → `feat-x.…`; `--from
   repo` outside a git repo errors clearly; with nothing set the label is
   the port; `--as web-api` yields exactly `web-api`.
 
@@ -126,12 +119,12 @@ naming default, found by **walking up from cwd** to the first `.beamd`
 ```yaml
 # personal .beamd — gitignore it, like .env
 profile: acme             # references a global profile by name
-name: repo                # keyword or literal (see §2)
+from: repo                # a derive source, or `name: <literal>` (see §2)
 ```
 ```yaml
 # shared/committed .beamd — references the edge canonically
 server: tunnel.acme.com   # globally unique; matched against your profiles
-name: repo
+from: repo
 ```
 
 - [ ] **(P1)** Discover `.beamd` by walking up from cwd; parse
@@ -149,10 +142,10 @@ name: repo
       tunnel through `tunnel.acme.com` — allow? [y/N]") and remember the
       answer. A committed file silently redirecting your local ports to an
       arbitrary edge is a real risk; one y/n closes it without nagging.
-- **Acceptance (P1):** a personal `.beamd` `{profile: acme, name: repo}` →
+- **Acceptance (P1):** a personal `.beamd` `{profile: acme, from: repo}` →
   bare `beamd open 3000` anywhere in the tree uses `acme` + the repo name;
   flags override; outside the tree it's `current` + `port`.
-- **Acceptance (P2):** a committed `.beamd` `{server: tunnel.acme.com, name:
+- **Acceptance (P2):** a committed `.beamd` `{server: tunnel.acme.com, from:
   repo}` → a teammate already logged into that edge (under any profile name)
   gets the right edge + repo-named tunnel after one trust prompt; someone
   not logged in is guided to log in.
@@ -265,7 +258,7 @@ and `server:` (committed/team, P2) — see §3.)*
 ## Why this stays simple (the anti-tunnel-vision checks)
 
 - **Pain-first:** §1 alone removes the login churn; §2–§5 are additive.
-- **No DSL:** naming is the one `--as` flag — 4 reserved keywords or a
-  literal. `beamd init` teaches it; nothing to memorize.
+- **No DSL:** naming is two crisp flags — `--as` (literal) or `--from` (a
+  4-source menu). `beamd init` teaches it; nothing to memorize.
 - **Secrets never leave the global store**, so project files are shareable.
 - **Automation is untouched** — Flow keeps using `--config` + `--as`.
