@@ -36,7 +36,9 @@ result through the same code path (see "Convergence" below).
   profiles / `.beamd` / strategies are human-CLI ergonomics. (`--config`
   takes precedence over `--profile`.)
 
-**Suggested order:** §1 → §2 → §3 → §4 → §5.
+**Suggested order:** §1 → §2 → §3 → Convergence (incl. the
+framework-reachability work) → §4 → §5. The edge-hardening appendix is a
+**separate track** (it touches `serve`, not the client) and can land anytime.
 
 ---
 
@@ -103,6 +105,20 @@ always means the literal "repo". `--from` is short enough to type;
       invalid). Reuse `naming.ValidateLabel`; if a source can't be made
       valid (e.g. detached HEAD for `branch`, not in a git repo for
       `repo`), fail with a clear, actionable error.
+  - **Truncate with a hash suffix, not a hard cut.** When a derived label
+    exceeds 63 chars, drop to `name[:56] + "-" + sha256(name)[:6]` so two
+    long-but-distinct names don't collide on the same truncation. (Pattern
+    from portless `auto.ts` `truncateLabel`.)
+  - **`repo` strips the npm scope** when sourced from a package name
+    (`@org/app` → `app`), matching portless `inferProjectName`.
+  - **Worktree caveat — beamd is one DNS label deep.** Portless gives linked
+    worktrees a *subdomain* prefix (`feat-x.myapp.localhost`). beamd's
+    wildcard is `*.<slug>.<base>` — a single label — so a worktree can't add
+    a DNS level. If we want the same ergonomic, compose into **one** label
+    (`feat-x-myapp`), and only when in a *linked* worktree (detect via `git
+    rev-parse --git-dir` ≠ `--git-common-dir`, skip `main`/`master`) — never
+    in the primary checkout. Treat this as an optional `--from worktree`
+    source, not a change to `dir`/`repo`/`branch`.
 - [ ] Name resolution helper wired into `open`/`run` following the ladder
       (`--as`/`--from` → `.beamd` `name:`/`from:` → global → `port`).
 - **Acceptance:** in `~/work/myapp`, `beamd open 3000 --from dir` →
@@ -139,7 +155,9 @@ from: repo
       login: "this project tunnels through `tunnel.acme.com` — run `beamd
       login`" (offer the browser/device-code flow when the edge advertises
       it).
-- [ ] **(P2) First-use trust.** The first time a `.beamd` points your client
+- [ ] **(P2) First-use trust.** *(DEFERRED — hosted-era; interactive y/N +
+      `trusted_servers` in the global config. Server-matching that this gates
+      is implemented; the prompt is not.)* The first time a `.beamd` points your client
       at a **new** server, confirm before connecting ("This project wants to
       tunnel through `tunnel.acme.com` — allow? [y/N]") and remember the
       answer. A committed file silently redirecting your local ports to an
@@ -208,7 +226,64 @@ $ npm run dev:tunnel
   run -- <cmd>` (no name, no flags) brings the command up on the right edge
   with the right label; `-p`/`--as`/`--from` override exactly as for `open`.
 
-## 4. Guided setup `beamd init`  `[P2]`
+### `run` makes any framework reachable  `[P1 — the portless lessons]`
+
+`run` resolving the right edge + name (above) is wasted if the wrapped dev
+server then **rejects the tunnel's Host** or **never binds the port we
+expose**. Today `runCmd` only sets `PORT=<n>` and `exec.Command`s directly —
+which silently fails for a whole class of apps. These tasks make `beamd run
+-- <framework>` actually work, end to end. (Derived from a full read of
+portless; see `ignore/portless-deep-dive.md` §5.)
+
+- [ ] **Allowed-hosts injection (the must-fix).** A tunnel surfaces a remote
+      Host (`<label>.<slug>.<base>`); Vite answers `Blocked request. This
+      host is not allowed.` and Next dev warns on cross-origin. Inject the
+      env that opens this up, keyed to the resolved tunnel domain:
+      `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.<slug>.<base>` for Vite. Next's
+      `allowedDevOrigins` is config-only (no env) — detect a Next project and
+      **print a one-line hint** with the exact value to add. This bites beamd
+      harder than portless (portless's child is reached at localhost; ours is
+      a fully remote host), so it's the single highest-value item here.
+- [ ] **Framework flag table for the `PORT`-ignorers.** Most apps honor
+      `PORT` (we already set it). The holdouts —
+      `vite`, `vp`, `react-router`, `rsbuild`, `astro`, `ng`,
+      `react-native`, `expo` — ignore it. For those, append `--port <n>`
+      (+ `--strictPort` for the Vite family so it *hard-fails* instead of
+      drifting to a port we're not tunneling) and `--host 127.0.0.1`.
+      **Runner-aware**: look past `npx`/`bunx`/`pnpx`/`yarn dlx`/`pnpm exec`
+      and their flags to find the real binary. **Idempotent**: skip if the
+      user already passed `--port`/`--host`. (Expo's `--host` is a mode, not a
+      bind addr — special-case or just inject `--port`.)
+- [ ] **Resolve project-local binaries.** Spawn through a shell with
+      `./node_modules/.bin` prepended to `PATH` (and node's own dir), so
+      `beamd run -- vite` finds the project's vite instead of erroring. Keep
+      spawning in the child's own process group so Ctrl-C tears down the whole
+      tree (already done).
+- [ ] **Inject `BEAMD_URL`** (the public `https://<label>.<slug>.<base>`) into
+      the child, so apps can self-reference for OAuth callbacks, absolute
+      links, and webhooks — the direct fix for the "I hardcoded localhost"
+      class of bug.
+- [ ] **Fail fast, before spawning.** Validate the resolved profile (auth
+      present) and dial the edge *before* launching the wrapped command, so a
+      bad profile / unreachable edge errors immediately instead of starting
+      the dev server and then 502-ing. (Pattern from portless's
+      `ensureTailscaleReady`, which validates everything before touching the
+      child.) Keep `waitListening` — advertising a URL only once the child is
+      actually up is better than portless's serve-502-until-ready.
+- **Acceptance:** `beamd run web --from dir -- npm run dev` against a Vite app
+  serves through `https://web.<slug>.<base>` with **no** "host not allowed"
+  error and the page live; `beamd run -- vite` (project-local, no global vite)
+  resolves the binary; the child sees `BEAMD_URL`; an invalid `-p bad`
+  errors before the dev server starts.
+
+## 4. Guided setup `beamd init`  `[P2]`  — DEFERRED
+
+> **DEFERRED: `beamd init` already exists** as the *edge* setup command
+> (writes `beamd.yaml`, used in docs/setup.md). The client `init` here (write
+> `.beamd`) collides with it. Resolve the verb before building — e.g. client
+> project setup under a different name (`beamd setup` / `beamd project init`),
+> or move edge init under `beamd serve init`. Not built to avoid breaking the
+> documented edge command.
 
 So the first run is taught, not looked up.
 
@@ -282,6 +357,14 @@ never in a repo.
    the label, potentially orphaning the old tunnel. Fine for ephemeral
    foreground previews; flag it in docs. Worth a guard (warn/auto-close on
    branch change) or just documentation? (Not a blocker.)
+   - **Leaning: reclaim, don't guard.** Portless's answer to the same problem
+     is PID-liveness + a `prune` command (see deep-dive §8): each detached
+     tunnel records the owning PID; `list`/`status` mark entries whose process
+     is gone, and `beamd prune` reaps them (and closes their tunnels). That's
+     simpler and more general than watching for branch changes — it handles
+     crashes and reboots too. Treat "branch switch orphans a tunnel" as one
+     case of the broader "owner is gone" problem and solve it once with
+     `prune` (a small P2 add to §5).
 
 *(Resolved: `.beamd` supports **both** `profile:` (personal/gitignored, P1)
 and `server:` (committed/team, P2) — see §3.)*
@@ -295,3 +378,31 @@ and `server:` (committed/team, P2) — see §3.)*
   4-source menu). `beamd init` teaches it; nothing to memorize.
 - **Secrets never leave the global store**, so project files are shareable.
 - **Automation is untouched** — Flow keeps using `--config` + `--as`.
+
+---
+
+## Appendix — edge hardening  `[separate track, not profiles/naming]`
+
+From the same portless read (deep-dive §4, §10). These touch `beamd serve`
+(the edge), not the client, so they're independent of §1–§6 and can land
+whenever. Captured here so they aren't lost.
+
+- [ ] **HTTP/2 stream-reset tolerance.** If the edge terminates H2, a tunneled
+      HMR/dev server triggers a flood of `RST_STREAM`s; Node-style servers send
+      `GOAWAY INTERNAL_ERROR` after ~1000 and the session dies, surfacing as
+      `ERR_HTTP2_PROTOCOL_ERROR` in Chrome. Confirm our edge's H2 settings
+      tolerate high reset rates (portless sets `streamResetBurst:10000,
+      streamResetRate:100`). Likely the first bug a real Vite user hits.
+- [ ] **Loop guard.** Increment a hop header (e.g. `beam-hops`) on each pass;
+      reject at a small ceiling (portless uses 5) with a page explaining the
+      `changeOrigin: true` fix. Stops an app that fetches its own public URL
+      from looping the tunnel to death.
+- [ ] **Socket-error absorption.** Swallow ECONNRESET/EPIPE from abrupt client
+      disconnects (tab close, reload, HMR) so they don't crash the edge; on a
+      mid-stream upstream failure, `RST` the stream rather than half-closing
+      (avoids a content-length mismatch Chrome treats as a session error).
+- [ ] **Branded edge error pages.** Replace bare gateway errors with: a **404**
+      that lists the caller's active tunnels + the `beamd open …` to start the
+      missing one; a **502** that distinguishes "backend crashed" (connection
+      refused) from "no backend yet." This is the highest-visibility UX polish —
+      it's what a developer sees when something's wrong. (portless `pages.ts`.)

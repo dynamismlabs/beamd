@@ -12,3 +12,4 @@ tokens.json
 .beamd/
 .idea/
 .vscode/
+/ignore

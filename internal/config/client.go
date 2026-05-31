@@ -8,10 +8,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Client is one identity: which edge + the bearer token. It's the shape of a
+// profile file (~/.beamd/profiles/<name>) and of an explicit --config file
+// (the automation path). AgentSocket is only set on the --config path; for
+// profiles the socket is derived from the profile name (AgentSocketFor).
 type Client struct {
 	Server      string `yaml:"server"`
 	Token       string `yaml:"token"`
-	AgentSocket string `yaml:"agent_socket"`
+	AgentSocket string `yaml:"agent_socket,omitempty"`
 }
 
 func DefaultClientPath() (string, error) {

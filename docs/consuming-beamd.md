@@ -30,16 +30,22 @@ Spawn it via the package's bin (`node_modules/.bin/beamd`) or
 
 ## 2. Configure (once)
 
-Point the client at your edge. Either write `~/.beamd/config`:
+Point the client at your edge. For a host app, the clean path is a
+**dedicated config file** you pass with `--config <path>` to every command —
+it bypasses beamd's profile store entirely, so your app keeps its own
+`{server, token}` out of the user's `$HOME` and never collides with their
+interactive `beamd` profiles:
 
 ```yaml
+# my-app-beamd.yaml — referenced via `--config my-app-beamd.yaml`
 server: tunnel.example.com:443
 token: <the developer token your operator issued>
 ```
 
-…or pass `--config <path>` to every command (handy for keeping per-app
-config out of `$HOME`). The token maps to a **slug**; all of this app's
-tunnels live under `*.<slug>.<base_domain>`.
+(Interactive users instead run `beamd login`, which saves a named *profile*
+under `~/.beamd/profiles/`. Automation should prefer `--config` and stay out
+of that store.) The token maps to a **slug**; all of this app's tunnels live
+under `*.<slug>.<base_domain>`.
 
 ## 3. Bring a tunnel up (detached + JSON)
 
@@ -70,7 +76,7 @@ The agent isn't a persistent registry — after a reboot it isn't running and
 holds nothing. On startup, reconcile against your own desired state:
 
 ```
-beamd status --json   # {"agentRunning":bool,"server":...,"slug":...,"healthy":bool}
+beamd status --json   # {"profile":...,"agentRunning":bool,"server":...,"slug":...,"healthy":bool}
 beamd list --json     # [{"name","url","port","healthy"}, …]
 ```
 

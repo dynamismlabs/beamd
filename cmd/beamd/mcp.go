@@ -12,11 +12,12 @@ import (
 
 func mcpCmd(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(args)
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
 
-	cfg := mustLoadConfig(*configPath)
-	lc := ensureAgent(cfg, *configPath)
+	rc := resolveContext(cf)
+	rc.mustAuth()
+	lc := ensureAgent(rc.ConfigPath, rc.AgentSocket)
 
 	srv := mcp.New(lc, os.Stdin, os.Stdout, "beamd", Version)
 	if err := srv.Run(context.Background()); err != nil && err != io.EOF {

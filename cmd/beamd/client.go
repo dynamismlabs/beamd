@@ -70,8 +70,10 @@ func loginCmd(args []string) {
 	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com (port defaults to 443)")
 	token := fs.String("token", "", "bearer token (copy-paste flow); omit for device-code login")
 	insecure := fs.Bool("insecure", false, "skip TLS verification for the discovery + device-code calls (dev/self-signed setups)")
-	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(args)
+	profileFlag := fs.String("profile", "", "profile to create/update (default: \"default\")")
+	fs.StringVar(profileFlag, "p", "", "shorthand for --profile")
+	configPath := fs.String("config", "", "write to an explicit config path instead of a profile (automation)")
+	_ = fs.Parse(hoistFlags(args, map[string]bool{"server": true, "token": true, "profile": true, "p": true, "config": true}))
 
 	// In an interactive terminal, prompt for anything missing (with hints)
 	// instead of erroring — friendlier than re-typing the whole command.
@@ -106,18 +108,50 @@ func loginCmd(args []string) {
 		*token = got
 	}
 
-	sock, err := config.DefaultAgentSocket()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "resolve agent socket:", err)
-		os.Exit(1)
+	cfg := &config.Client{Server: *server, Token: *token}
+
+	// Explicit --config writes a standalone config (the automation path),
+	// bypassing the profile store entirely.
+	if *configPath != "" {
+		if err := config.SaveClient(cfg, *configPath); err != nil {
+			fmt.Fprintln(os.Stderr, "save config:", err)
+			os.Exit(1)
+		}
+		fmt.Println("logged in")
+		return
 	}
 
-	cfg := &config.Client{Server: *server, Token: *token, AgentSocket: sock}
-	if err := config.SaveClient(cfg, *configPath); err != nil {
-		fmt.Fprintln(os.Stderr, "save config:", err)
+	// Profile path: create/update profiles/<name> without clobbering others;
+	// the first profile created becomes current.
+	name := *profileFlag
+	if name == "" {
+		name = "default"
+	}
+	if err := naming.ValidateLabel(name); err != nil {
+		fmt.Fprintln(os.Stderr, "invalid profile name:", err)
+		os.Exit(2)
+	}
+	if err := config.SaveProfile(name, cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "save profile:", err)
 		os.Exit(1)
 	}
-	fmt.Println("logged in")
+	g, err := config.LoadGlobal()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load global config:", err)
+		os.Exit(1)
+	}
+	firstProfile := g.Current == ""
+	if firstProfile {
+		g.Current = name
+		if err := config.SaveGlobal(g); err != nil {
+			fmt.Fprintln(os.Stderr, "save global config:", err)
+			os.Exit(1)
+		}
+	}
+	fmt.Printf("logged in (profile %q)\n", name)
+	if !firstProfile && g.Current != name {
+		fmt.Printf("current profile is %q — run `beamd use %s` to switch\n", g.Current, name)
+	}
 }
 
 // deviceCodeLogin runs the no-token login flow: ask beamd for its
@@ -182,15 +216,16 @@ type openResult struct {
 
 func openCmd(args []string) {
 	fs := flag.NewFlagSet("open", flag.ExitOnError)
-	name := fs.String("as", "", "subdomain label (defaults to port number)")
+	asFlag := fs.String("as", "", "literal subdomain label (defaults to the port number)")
+	fromFlag := fs.String("from", "", "derive the label from: port | dir | repo | branch | worktree")
 	detach := fs.Bool("detach", false, "run in the background agent and return immediately (the path automation uses)")
 	fs.BoolVar(detach, "d", false, "shorthand for --detach")
 	jsonOut := fs.Bool("json", false, "print exactly one JSON object describing the tunnel, and nothing else")
-	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(hoistFlags(args, map[string]bool{"as": true, "config": true}))
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames("as", "from")))
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beamd open <port> [--as name] [-d] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: beamd open <port> [--as name | --from src] [-p profile] [-d] [--json]")
 		os.Exit(2)
 	}
 	port, err := strconv.Atoi(fs.Arg(0))
@@ -199,35 +234,37 @@ func openCmd(args []string) {
 		os.Exit(2)
 	}
 
-	cfg := mustLoadConfig(*configPath)
+	ctx := resolveContext(cf)
+	cfg := ctx.mustAuth()
+	label, err := resolveLabel(*asFlag, *fromFlag, ctx, port)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "name:", err)
+		os.Exit(2)
+	}
+
 	if *detach {
-		openDetached(cfg, *configPath, port, *name, *jsonOut)
+		openDetached(ctx, port, label, *jsonOut)
 		return
 	}
-	openForeground(cfg, port, *name, *jsonOut)
+	openForeground(cfg, port, label, *jsonOut)
 }
 
 // openForeground holds the tunnel in *this* process (the default, like
 // ngrok): it opens its own connection to the edge, registers, prints the
 // URL, and blocks until interrupted — then tears the tunnel down. No
-// agent is involved.
-func openForeground(cfg *config.Client, port int, name string, jsonOut bool) {
+// agent is involved. `label` is the already-resolved tunnel name.
+func openForeground(cfg *config.Client, port int, label string, jsonOut bool) {
 	quietClientLogs()
 
-	c, url, err := dialAndRegister(cfg, port, name)
+	c, url, err := dialAndRegister(cfg, port, label)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open failed:", err)
 		os.Exit(1)
 	}
 	defer c.Close()
 
-	resolved := name
-	if resolved == "" {
-		resolved = naming.LabelFromPort(port)
-	}
-
 	if jsonOut {
-		printOpenResult(openResult{URL: url, Name: resolved, Port: port, Slug: c.Slug(), BaseDomain: c.BaseDomain()})
+		printOpenResult(openResult{URL: url, Name: label, Port: port, Slug: c.Slug(), BaseDomain: c.BaseDomain()})
 	} else {
 		fmt.Printf("%s  →  http://127.0.0.1:%d\n\ntunnel live — press Ctrl-C to stop\n", url, port)
 	}
@@ -245,15 +282,15 @@ func openForeground(cfg *config.Client, port int, name string, jsonOut bool) {
 	_ = c.Close()
 }
 
-// openDetached hands the tunnel to the background agent and returns
-// immediately. This is the path automation (e.g. Flow) uses.
-func openDetached(cfg *config.Client, configPath string, port int, name string, jsonOut bool) {
-	lc := ensureAgent(cfg, configPath)
+// openDetached hands the tunnel to the selected profile's background agent
+// and returns immediately. This is the path automation (e.g. Flow) uses.
+func openDetached(tc *tunnelContext, port int, label string, jsonOut bool) {
+	lc := ensureAgent(tc.ConfigPath, tc.AgentSocket)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	resp, err := lc.Open(ctx, port, name)
+	resp, err := lc.Open(ctx, port, label)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open failed:", err)
 		os.Exit(1)
@@ -297,16 +334,9 @@ func dialAndRegister(cfg *config.Client, port int, name string) (*client.Client,
 	return c, url, nil
 }
 
-// runCmd wraps a command as a tunnel: it picks a free local port, runs the
-// command with $PORT set, waits for it to start listening, opens a
-// foreground tunnel to it, then cleans up (tunnel + the command's whole
-// process group) on Ctrl-C or when the command exits. Mirrors the loved
-// `portless <name> <cmd>` ergonomic.
-//
-// Usage: beamd run <name> [--port N] [--json] -- <command> [args...]
 // splitRunArgs splits `run` args on the first "--": the part before is
-// run's own flags + name, the part after is the command to execute. ok is
-// false when there's no "--" or nothing follows it.
+// run's own flags + optional name, the part after is the command to execute.
+// ok is false when there's no "--" or nothing follows it.
 func splitRunArgs(args []string) (runArgs, cmdArgs []string, ok bool) {
 	for i, a := range args {
 		if a == "--" {
@@ -319,41 +349,90 @@ func splitRunArgs(args []string) (runArgs, cmdArgs []string, ok bool) {
 	return nil, nil, false
 }
 
+// runCmd wraps a command as a tunnel: it resolves the edge + name like
+// `open` (profiles, .beamd, --as/--from), connects to the edge *first*
+// (fail fast on a bad token before booting the dev server), then runs the
+// command with $PORT/$HOST/$BEAMD_URL set and any framework flags injected,
+// waits for it to listen, registers, and cleans up (tunnel + the command's
+// whole process group) on Ctrl-C or when the command exits. The name is
+// optional — it falls through the naming ladder when omitted.
+//
+// Usage: beamd run [name] [--as L|--from S] [-p prof] [--port N] [--json] -- <cmd...>
 func runCmd(args []string) {
 	runArgs, cmdArgs, ok := splitRunArgs(args)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "usage: beamd run <name> [--port N] [--json] -- <command> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: beamd run [name] [--as label | --from src] [-p profile] [--port N] [--json] -- <command> [args...]")
 		os.Exit(2)
 	}
 
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	asFlag := fs.String("as", "", "literal subdomain label")
+	fromFlag := fs.String("from", "", "derive the label from: port | dir | repo | branch | worktree")
 	portFlag := fs.Int("port", 0, "local port to expose (0 = pick a free one and set $PORT)")
 	jsonOut := fs.Bool("json", false, "print one JSON object describing the tunnel, and nothing else")
-	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(hoistFlags(runArgs, map[string]bool{"port": true, "config": true}))
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(runArgs, clientFlagValueNames("as", "from", "port")))
 
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beamd run <name> [--port N] [--json] -- <command> [args...]")
-		os.Exit(2)
-	}
-	name := fs.Arg(0)
-	if err := naming.ValidateLabel(name); err != nil {
-		fmt.Fprintln(os.Stderr, "invalid name:", err)
+	if fs.NArg() > 1 {
+		fmt.Fprintln(os.Stderr, "usage: beamd run [name] ... -- <command> [args...]")
 		os.Exit(2)
 	}
 
-	cfg := mustLoadConfig(*configPath)
-	quietClientLogs()
+	ctx := resolveContext(cf)
+	cfg := ctx.mustAuth() // fail fast on a bad/absent profile
 
 	port := *portFlag
 	if port == 0 {
 		port = freePort()
 	}
 
-	// Spawn the command with $PORT set, in its own process group so we can
-	// signal the whole tree (the command may fork workers) on teardown.
-	child := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	child.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
+	// A positional name is an explicit literal (like --as); otherwise walk
+	// the naming ladder (--as/--from → .beamd → global → port).
+	var label string
+	if fs.NArg() == 1 {
+		label = fs.Arg(0)
+		if err := naming.ValidateLabel(label); err != nil {
+			fmt.Fprintln(os.Stderr, "invalid name:", err)
+			os.Exit(2)
+		}
+	} else {
+		l, err := resolveLabel(*asFlag, *fromFlag, ctx, port)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "name:", err)
+			os.Exit(2)
+		}
+		label = l
+	}
+
+	quietClientLogs()
+
+	// Connect BEFORE spawning the child, so a bad token / unreachable edge
+	// fails immediately rather than after the dev server boots. Slug + base
+	// are known right after Connect, so the child can be handed its public
+	// URL up front (BEAMD_URL, allowed-hosts) even though we register later.
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 30*time.Second)
+	c, err := client.Connect(dialCtx, cfg.Server, cfg.Token)
+	cancelDial()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "run: connect to edge:", err)
+		os.Exit(1)
+	}
+	defer c.Close()
+
+	host := naming.Hostname(label, c.Slug(), c.BaseDomain())
+	publicURL := "https://" + host
+	baseSuffix := "." + c.Slug() + "." + c.BaseDomain()
+
+	// Make any framework reachable: inject --port/--host for the $PORT-ignorers.
+	cmdArgs, _ = injectFrameworkFlags(cmdArgs, port)
+	if hint := nextAllowedOriginsHint(cmdArgs, host); hint != "" && !*jsonOut {
+		fmt.Fprintln(os.Stderr, hint)
+	}
+
+	// Run via sh so node_modules/.bin (on the augmented PATH) resolves the
+	// command; its own process group lets us tear down the whole tree.
+	child := exec.Command("sh", append([]string{"-c", `exec "$0" "$@"`}, cmdArgs...)...)
+	child.Env = childEnv(port, publicURL, baseSuffix, ctx.Cwd)
 	child.Stdin = os.Stdin
 	child.Stderr = os.Stderr
 	if *jsonOut {
@@ -372,7 +451,24 @@ func runCmd(args []string) {
 	var childErr error
 	go func() { childErr = child.Wait(); close(childExited) }()
 
-	// Wait for the command to bind $PORT (or bail if it exits first).
+	// Install the teardown handler *now*, before the (up-to-30s) wait — so a
+	// Ctrl-C during startup still tears down the child instead of orphaning
+	// the dev server. The child is in its own process group, so the terminal's
+	// SIGINT reaches beamd, not the child; we forward it explicitly.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		if !*jsonOut {
+			fmt.Fprintln(os.Stderr, "\nshutting down…")
+		}
+		_ = c.Close()
+		killChild(child, childExited)
+		os.Exit(0)
+	}()
+
+	// Wait for the child to bind $PORT, then register — so the URL only goes
+	// live once the backend is actually up.
 	if !waitListening(port, 30*time.Second, childExited) {
 		select {
 		case <-childExited:
@@ -384,38 +480,28 @@ func runCmd(args []string) {
 		os.Exit(1)
 	}
 
-	c, url, err := dialAndRegister(cfg, port, name)
+	url, err := c.Register(label, port)
 	if err != nil {
 		killChild(child, childExited)
-		fmt.Fprintln(os.Stderr, "run: open tunnel:", err)
+		fmt.Fprintln(os.Stderr, "run: register tunnel:", err)
 		os.Exit(1)
 	}
-	defer c.Close()
 
 	if *jsonOut {
-		printOpenResult(openResult{URL: url, Name: name, Port: port, Slug: c.Slug(), BaseDomain: c.BaseDomain()})
+		printOpenResult(openResult{URL: url, Name: label, Port: port, Slug: c.Slug(), BaseDomain: c.BaseDomain()})
 	} else {
 		fmt.Printf("%s  →  http://127.0.0.1:%d  (running: %s)\n\ntunnel live — Ctrl-C to stop\n", url, port, strings.Join(cmdArgs, " "))
 	}
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case <-sigs:
-		if !*jsonOut {
-			fmt.Fprintln(os.Stderr, "\nshutting down…")
-		}
-		_ = c.Close()
-		killChild(child, childExited)
-	case <-childExited:
-		if !*jsonOut {
-			fmt.Fprintf(os.Stderr, "\ncommand exited: %v\n", childErr)
-		}
-		_ = c.Close()
-		if ee, ok := childErr.(*exec.ExitError); ok {
-			os.Exit(ee.ExitCode())
-		}
+	// Block until the command exits on its own (Ctrl-C is handled by the
+	// goroutine above, which exits the process).
+	<-childExited
+	if !*jsonOut {
+		fmt.Fprintf(os.Stderr, "\ncommand exited: %v\n", childErr)
+	}
+	_ = c.Close()
+	if ee, ok := childErr.(*exec.ExitError); ok {
+		os.Exit(ee.ExitCode())
 	}
 }
 
@@ -474,16 +560,16 @@ func killChild(cmd *exec.Cmd, exited <-chan struct{}) {
 func listCmd(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "print a JSON array of tunnels and nothing else")
-	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(hoistFlags(args, map[string]bool{"config": true}))
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
 
-	cfg := loadClientConfig(*configPath)
+	rc := resolveContext(cf)
 
 	items := []daemon.ListItem{}
-	if daemon.IsRunning(cfg.AgentSocket) {
+	if rc.AgentSocket != "" && daemon.IsRunning(rc.AgentSocket) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		got, err := daemon.NewLocalClient(cfg.AgentSocket).List(ctx)
+		got, err := daemon.NewLocalClient(rc.AgentSocket).List(ctx)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "list failed:", err)
 			os.Exit(1)
@@ -516,21 +602,21 @@ func listCmd(args []string) {
 func closeCmd(args []string) {
 	fs := flag.NewFlagSet("close", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "print a JSON object {name,removed} and nothing else")
-	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(hoistFlags(args, map[string]bool{"config": true}))
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beamd close <name> [--json]")
+		fmt.Fprintln(os.Stderr, "usage: beamd close <name> [-p profile] [--json]")
 		os.Exit(2)
 	}
 	name := fs.Arg(0)
-	cfg := loadClientConfig(*configPath)
+	rc := resolveContext(cf)
 
 	removed := false
-	if daemon.IsRunning(cfg.AgentSocket) {
+	if rc.AgentSocket != "" && daemon.IsRunning(rc.AgentSocket) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		r, err := daemon.NewLocalClient(cfg.AgentSocket).Close(ctx, name)
+		r, err := daemon.NewLocalClient(rc.AgentSocket).Close(ctx, name)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "close failed:", err)
 			os.Exit(1)
@@ -558,17 +644,22 @@ func closeCmd(args []string) {
 func statusCmd(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "print a JSON status object and nothing else")
-	configPath := fs.String("config", defaultConfigPath(), "client config path")
-	_ = fs.Parse(hoistFlags(args, map[string]bool{"config": true}))
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
 
-	cfg := loadClientConfig(*configPath)
+	rc := resolveContext(cf)
 
-	running := daemon.IsRunning(cfg.AgentSocket)
+	server := ""
+	if rc.Client != nil {
+		server = rc.Client.Server
+	}
+
+	running := rc.AgentSocket != "" && daemon.IsRunning(rc.AgentSocket)
 	slug := ""
 	healthy := false
 	if running {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		if h, err := daemon.NewLocalClient(cfg.AgentSocket).Ping(ctx); err == nil {
+		if h, err := daemon.NewLocalClient(rc.AgentSocket).Ping(ctx); err == nil {
 			slug = h.Slug
 			healthy = h.Healthy
 		}
@@ -577,17 +668,21 @@ func statusCmd(args []string) {
 
 	if *jsonOut {
 		_ = json.NewEncoder(os.Stdout).Encode(struct {
+			Profile      string `json:"profile"`
 			AgentRunning bool   `json:"agentRunning"`
 			Server       string `json:"server"`
 			Slug         string `json:"slug"`
 			Healthy      bool   `json:"healthy"`
-		}{running, cfg.Server, slug, healthy})
+		}{rc.Profile, running, server, slug, healthy})
 		return
 	}
 
+	if rc.Profile != "" {
+		fmt.Printf("profile: %s\n", rc.Profile)
+	}
 	fmt.Printf("agent:   %s\n", boolWord(running, "running", "not running"))
-	if cfg.Server != "" {
-		fmt.Printf("server:  %s\n", cfg.Server)
+	if server != "" {
+		fmt.Printf("server:  %s\n", server)
 	}
 	if slug != "" {
 		fmt.Printf("slug:    %s\n", slug)
@@ -604,36 +699,12 @@ func boolWord(b bool, yes, no string) string {
 	return no
 }
 
-func mustLoadConfig(path string) *config.Client {
-	cfg, err := config.LoadClient(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "load config:", err)
-		os.Exit(1)
-	}
-	if cfg.Server == "" || cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "missing server or token — run `beamd login` first")
-		os.Exit(2)
-	}
-	return cfg
-}
-
-// loadClientConfig loads config without requiring login — it only needs
-// the agent socket path. Used by list/down/status, which operate on a
-// possibly-absent agent and must not hard-fail when the user hasn't
-// logged in yet.
-func loadClientConfig(path string) *config.Client {
-	cfg, err := config.LoadClient(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "load config:", err)
-		os.Exit(1)
-	}
-	return cfg
-}
-
-// ensureAgent makes sure the background agent (the long-lived worker that
-// holds the tunnel session) is running, spawning it on demand, and
-// returns a client to its local socket API.
-func ensureAgent(cfg *config.Client, configPath string) *daemon.LocalClient {
+// ensureAgent makes sure the selected profile's background agent (the
+// long-lived worker that holds the tunnel session) is running, spawning it
+// on demand against its own socket, and returns a client to that socket.
+// configPath is the profile file (or explicit --config) the agent loads its
+// server/token from.
+func ensureAgent(configPath, socket string) *daemon.LocalClient {
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "locate executable:", err)
@@ -641,13 +712,13 @@ func ensureAgent(cfg *config.Client, configPath string) *daemon.LocalClient {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := daemon.EnsureRunning(ctx, exe, cfg.AgentSocket, []string{
+	if err := daemon.EnsureRunning(ctx, exe, socket, []string{
 		"BEAMD_CONFIG=" + configPath,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "agent not available:", err)
 		os.Exit(1)
 	}
-	return daemon.NewLocalClient(cfg.AgentSocket)
+	return daemon.NewLocalClient(socket)
 }
 
 // agentCmd runs the background worker. It is spawned internally by the

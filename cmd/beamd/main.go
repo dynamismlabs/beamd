@@ -50,6 +50,12 @@ func main() {
 	// client role
 	case "login":
 		loginCmd(os.Args[2:])
+	case "logout":
+		logoutCmd(os.Args[2:])
+	case "use":
+		useCmd(os.Args[2:])
+	case "profiles":
+		profilesCmd(os.Args[2:])
 	case "open":
 		openCmd(os.Args[2:])
 	case "close":
@@ -90,13 +96,18 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  provision-dev   write DNS + pre-warm cert for a slug (low-level — add-developer wraps this)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "client:")
-	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd edge")
+	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd edge (login [--profile <name>])")
+	fmt.Fprintln(os.Stderr, "  logout          remove a profile (logout [--profile <name>])")
+	fmt.Fprintln(os.Stderr, "  use             set the current profile (use <name>)")
+	fmt.Fprintln(os.Stderr, "  profiles        list profiles, marking the current one")
 	fmt.Fprintln(os.Stderr, "  open            expose a local port as a public URL (foreground; -d to detach)")
 	fmt.Fprintln(os.Stderr, "  close           remove a detached tunnel")
-	fmt.Fprintln(os.Stderr, "  run             run a command and expose its port: run <name> -- <cmd...>")
+	fmt.Fprintln(os.Stderr, "  run             run a command and expose its port: run [name] -- <cmd...>")
 	fmt.Fprintln(os.Stderr, "  list            list detached tunnels")
-	fmt.Fprintln(os.Stderr, "  status          show agent + connection status")
+	fmt.Fprintln(os.Stderr, "  status          show profile + agent + connection status")
 	fmt.Fprintln(os.Stderr, "  mcp             run the MCP stdio server")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  most client commands accept -p/--profile <name> to pick an edge")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  version         print version and exit")
 }

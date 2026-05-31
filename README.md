@@ -178,13 +178,69 @@ output (one object/array, nothing else) — see
 [`docs/agent-api.md`](docs/agent-api.md) for driving beamd from another
 program.
 
-Or wrap a command and expose it in one step (sets `$PORT`, waits for it to
-listen, opens the tunnel, and cleans up on exit):
+### Naming the tunnel
+
+The subdomain label defaults to the port number. Set it explicitly, or
+derive it from your project:
 
 ```
-beamd run myapp -- npm run dev
-# → https://myapp.turing.beam.example.com
+beamd open 3001 --as api      # literal label  → api.turing.<base>
+beamd open 3001 --from dir     # derive it      → <cwd-name>.turing.<base>
 ```
+
+`--from` sources: `port` (default), `dir` (folder name), `repo` (git repo
+name), `branch` (current git branch). `--as` (literal) wins if you pass both.
+
+### Profiles — many edges, no logout churn
+
+Stay logged into several edges at once and switch with a flag (the
+kubectl / `gh auth` model):
+
+```
+beamd login --server acme.com:443  --token <T> --profile acme
+beamd login --server other.com:443 --token <T> --profile personal
+beamd profiles                 # list them; * marks the current
+beamd use acme                 # set the default
+beamd open 3001 -p personal    # one-off override (any command takes -p)
+beamd logout --profile acme    # remove one
+```
+
+The first profile created becomes current; `BEAMD_PROFILE=<name>` overrides
+per-shell. (No `--profile` at all? `beamd login` just uses a profile named
+`default`.)
+
+### Project config (`.beamd`)
+
+Commit a `.beamd` so the right edge + name come from context — `open` /
+`run` then need zero flags:
+
+```yaml
+# .beamd
+profile: acme      # which edge (a profile name); or `server: acme.com`
+from: repo         # how to name the tunnel (or `name: <literal>`)
+```
+
+beamd walks up from the cwd to find it; a gitignored `.beamd.local` overrides
+it (like `.env` / `.env.local`). A `.beamd` references a profile or edge —
+**never a token** — so it's safe to commit.
+
+### Wrap a command (`beamd run`)
+
+Run a dev server and expose it in one step — picks a free port, sets `$PORT`,
+waits for it to listen, opens the tunnel, and tears everything (tunnel +
+process tree) down on exit:
+
+```
+beamd run -- npm run dev       # name from .beamd / --from / port
+beamd run api -- npm run dev    # explicit name
+```
+
+`run` resolves the edge + name exactly like `open` (profiles, `.beamd`,
+`--as` / `--from`) and makes **any** framework reachable through the tunnel:
+it sets `$BEAMD_URL` (the public URL, for OAuth callbacks / absolute links),
+injects the allowed-host env so Vite/Next don't reject the tunnel domain,
+adds `--port` / `--host` for frameworks that ignore `$PORT` (Vite, Astro,
+Angular, …), and resolves project-local binaries via `node_modules/.bin`.
 
 ### MCP server (AI agents)
 

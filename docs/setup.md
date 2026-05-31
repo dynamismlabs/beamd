@@ -401,7 +401,11 @@ beamd version
 beamd login --server YOUR_DOMAIN:443 --token YOUR_TOKEN
 ```
 
-Should print `logged in`. This saves to `~/.beamd/config`.
+Should print `logged in (profile "default")`. This saves a profile under
+`~/.beamd/profiles/` and marks it current. To stay logged into more than one
+edge at once, pass `--profile <name>` and switch with `beamd use <name>`
+(see the README's "Profiles" section); every client command takes
+`-p/--profile`.
 
 ---
 
