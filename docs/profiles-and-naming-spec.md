@@ -15,9 +15,11 @@ beamd's client today logs into **one** edge (`~/.beamd/config` = a single
 2. **Naming is rigid.** People want the label to come from the port, the
    folder, the git repo, or the branch — and have project-level defaults.
 
-**Unifying idea.** Every `beamd open` resolves two contexts — *which edge*
-(→ `<slug>.<base>`) and *what name* (→ `<label>`). They're the same shape of
-problem, so they share **one precedence ladder** and one project file.
+**Unifying idea.** Every `beamd open` (and `beamd run`, which wraps it)
+resolves two contexts — *which edge* (→ `<slug>.<base>`) and *what name*
+(→ `<label>`). They're the same shape of problem, so they share **one
+precedence ladder** and one project file — and both commands consume the
+result through the same code path (see "Convergence" below).
 
 **Decisions locked (apply throughout):**
 - **One ladder** (highest wins): `CLI flag` → `env` → project `.beamd`
@@ -174,6 +176,37 @@ device-code login means each teammate who clones becomes a signed-in,
 attributable user on the org's account.
 
 ---
+
+## Convergence — how `open` / `run` consume it  `[P0/P1, no new code path]`
+
+`open` and `run` resolve the **same** context — `{profile (server+token),
+label}` — via the one ladder above, and consume it through the **shared
+`dialAndRegister` path** (already factored out, so there's nothing to
+duplicate). `run` is just `open` wrapped around a child process; everything
+in §1–§3 applies to it identically:
+
+- [ ] `beamd run` resolves profile (§1) and name (§2/§3) exactly like
+      `open` — same resolver, same `dialAndRegister`, no separate path.
+- [ ] Let `beamd run` **omit the `<name>` positional** and derive the label
+      from the ladder (`--as`/`--from` → `.beamd` → default). Today `run`
+      requires a name; after this, `beamd run -- npm run dev` works whenever
+      a `.beamd` or `--from` supplies the name.
+
+This is the **payoff the whole spec builds toward** — the seamless
+end-state lives in `run`:
+
+```
+# package.json:  "dev:tunnel": "beamd run -- npm run dev"
+# repo has a committed .beamd { server: tunnel.acme.com, from: repo }
+
+$ npm run dev:tunnel
+→ right account (acme) + right name (the repo) + a working preview URL,
+  zero flags, cleans up on exit.
+```
+
+- **Acceptance:** with a `.beamd` supplying profile + `from`, a bare `beamd
+  run -- <cmd>` (no name, no flags) brings the command up on the right edge
+  with the right label; `-p`/`--as`/`--from` override exactly as for `open`.
 
 ## 4. Guided setup `beamd init`  `[P2]`
 
