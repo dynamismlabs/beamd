@@ -57,8 +57,8 @@ func NewFileStore(path string) (*FileStore, error) {
 //   - "file:<path>"     — JSON map on disk (OSS default)
 //   - "memory:"         — empty in-memory store (mostly for tests)
 //   - "http(s)://..."   — call out to a remote verify endpoint (hosted).
-//                         The shared secret must be set in the
-//                         `BEAMD_AUTH_VERIFY_SECRET` env var.
+//     The shared secret must be set in the
+//     `BEAMD_AUTH_VERIFY_SECRET` env var.
 func Open(spec string) (Store, error) {
 	switch {
 	case strings.HasPrefix(spec, "file:"):

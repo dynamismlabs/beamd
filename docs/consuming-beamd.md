@@ -40,7 +40,18 @@ interactive `beamd` profiles:
 # my-app-beamd.yaml — referenced via `--config my-app-beamd.yaml`
 server: tunnel.example.com:443
 token: <the developer token your operator issued>
+agent_socket: /path/to/your-app/beamd-agent.sock  # pin a dedicated socket
+# insecure_skip_verify: true   # ONLY for a self-signed dev edge
 ```
+
+**Pin a dedicated `agent_socket`.** The detached agent is keyed by its socket
+path; without one your app shares the default socket with the user's own
+`beamd`, and an agent already running there keeps serving its *original*
+credentials even after you change `server`/`token` here. A per-app socket
+isolates you — and if you do rotate creds in this file, run `beamd reload
+--config <path>` to restart the agent with them. (Don't set
+`insecure_skip_verify` against a real edge; the cert is verified by default so
+the token only rides a trusted connection.)
 
 (Interactive users instead run `beamd login`, which saves a named *profile*
 under `~/.beamd/profiles/`. Automation should prefer `--config` and stay out

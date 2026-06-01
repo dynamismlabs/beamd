@@ -13,9 +13,15 @@ import (
 // (the automation path). AgentSocket is only set on the --config path; for
 // profiles the socket is derived from the profile name (AgentSocketFor).
 type Client struct {
-	Server      string `yaml:"server"`
-	Token       string `yaml:"token"`
-	AgentSocket string `yaml:"agent_socket,omitempty"`
+	Server string `yaml:"server"`
+	Token  string `yaml:"token"`
+	// InsecureSkipVerify disables TLS verification of the edge's control
+	// connection. Default (false) verifies the edge cert, so the bearer
+	// token only ever rides a trusted connection. Set true ONLY for a
+	// self-signed dev edge — it's the automation/agent equivalent of the
+	// `--insecure` flag an interactive caller can pass instead.
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"`
+	AgentSocket        string `yaml:"agent_socket,omitempty"`
 }
 
 func DefaultClientPath() (string, error) {

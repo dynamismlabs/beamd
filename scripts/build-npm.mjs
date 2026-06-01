@@ -4,13 +4,14 @@
 //   node scripts/build-npm.mjs <version> [--publish]
 //
 // Produces, under npm/build/:
-//   - beamd-<os>-<cpu>  — one per platform, each shipping the matching
-//                          native binary, gated by "os"/"cpu".
-//   - beamd             — the user-facing package: a JS shim (npm/shim.cjs)
-//                          plus the platform packages as optionalDependencies.
+//   - @beamd/cli-<os>-<cpu>  — one per platform, each shipping the matching
+//                              native binary, gated by "os"/"cpu".
+//   - @beamd/cli             — the user-facing package: a JS shim (npm/shim.cjs)
+//                              plus the platform packages as optionalDependencies,
+//                              exposing the `beamd` bin via bin/beamd.cjs.
 //
-// On `npm i beamd`, npm installs only the platform package matching the host
-// (~one binary, not four). Version comes from the git tag (without the "v").
+// On `npm i @beamd/cli`, npm installs only the platform package matching the
+// host (~one binary, not four). Version comes from the git tag (without "v").
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync, copyFileSync, chmodSync } from "node:fs";

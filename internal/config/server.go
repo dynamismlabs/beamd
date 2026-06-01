@@ -9,20 +9,20 @@ import (
 )
 
 type Server struct {
-	BaseDomain         string `yaml:"base_domain"`
-	EdgeIPv4           string `yaml:"edge_ipv4"`
-	EdgeIPv6           string `yaml:"edge_ipv6"`
-	ListenHTTPS        string `yaml:"listen_https"`
-	ACMEEmail          string `yaml:"acme_email"`
-	ACMECA             string `yaml:"acme_ca"`
-	DNSProvider        string `yaml:"dns_provider"`
-	DNSProviderCreds   string `yaml:"dns_provider_creds"`
+	BaseDomain       string `yaml:"base_domain"`
+	EdgeIPv4         string `yaml:"edge_ipv4"`
+	EdgeIPv6         string `yaml:"edge_ipv6"`
+	ListenHTTPS      string `yaml:"listen_https"`
+	ACMEEmail        string `yaml:"acme_email"`
+	ACMECA           string `yaml:"acme_ca"`
+	DNSProvider      string `yaml:"dns_provider"`
+	DNSProviderCreds string `yaml:"dns_provider_creds"`
 
 	// DNSZone is the registered DNS zone to manage records in. Leave
 	// blank to auto-detect from base_domain (recommended). Set it
 	// explicitly only to skip the provider's zone lookup, e.g.
 	// base_domain=tunnel.dynami.sm with dns_zone=dynami.sm.
-	DNSZone string `yaml:"dns_zone"`
+	DNSZone            string `yaml:"dns_zone"`
 	TokenStore         string `yaml:"token_store"`
 	MaxTunnelsPerToken int    `yaml:"max_tunnels_per_token"`
 

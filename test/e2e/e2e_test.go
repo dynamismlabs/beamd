@@ -370,7 +370,7 @@ func TestHello_RejectsBadToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := client.Connect(ctx, edgeAddr, "wrong-token")
+	_, err := client.Connect(ctx, edgeAddr, "wrong-token", client.Options{InsecureSkipVerify: true})
 	if err == nil {
 		t.Fatal("connect with wrong token should fail")
 	}
@@ -388,10 +388,11 @@ func TestHeartbeat_TimeoutDropsSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	c, err := client.Connect(ctx, edgeAddr, "T1", client.Options{
-		HeartbeatInterval: 10 * time.Second,
-		RegisterTimeout:   2 * time.Second,
-		ReconnectInitial:  10 * time.Second,
-		ReconnectMax:      10 * time.Second,
+		HeartbeatInterval:  10 * time.Second,
+		RegisterTimeout:    2 * time.Second,
+		InsecureSkipVerify: true,
+		ReconnectInitial:   10 * time.Second,
+		ReconnectMax:       10 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -700,10 +701,11 @@ func TestClient_ReconnectReplaysRegistrationsKeepsURLs(t *testing.T) {
 	e, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
 
 	c := connectClientWithOpts(t, edgeAddr, "T1", client.Options{
-		HeartbeatInterval: 100 * time.Millisecond,
-		RegisterTimeout:   2 * time.Second,
-		ReconnectInitial:  50 * time.Millisecond,
-		ReconnectMax:      200 * time.Millisecond,
+		HeartbeatInterval:  100 * time.Millisecond,
+		RegisterTimeout:    2 * time.Second,
+		InsecureSkipVerify: true,
+		ReconnectInitial:   50 * time.Millisecond,
+		ReconnectMax:       200 * time.Millisecond,
 	})
 
 	if _, err := c.Register("api", port); err != nil {
@@ -1206,8 +1208,9 @@ func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {
 	waitForTCP(t, edgeAddr, 2*time.Second)
 
 	c, err := client.Connect(context.Background(), edgeAddr, "T1", client.Options{
-		HeartbeatInterval: 200 * time.Millisecond,
-		RegisterTimeout:   2 * time.Second,
+		HeartbeatInterval:  200 * time.Millisecond,
+		RegisterTimeout:    2 * time.Second,
+		InsecureSkipVerify: true,
 		// Long backoff so we'd never reconnect inside the test window —
 		// the `error{code:"shutdown"}` should still flip the client
 		// unhealthy immediately.

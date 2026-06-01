@@ -68,6 +68,7 @@ func resolveContext(cf *clientFlags) *tunnelContext {
 			fmt.Fprintln(os.Stderr, "load config:", err)
 			os.Exit(1)
 		}
+		c.Server = normalizeServerAddr(c.Server) // tolerate a port-less server:
 		ctx.Client = c
 		ctx.ConfigPath = *cf.config
 		ctx.AgentSocket = c.AgentSocket
@@ -119,6 +120,7 @@ func resolveContext(cf *clientFlags) *tunnelContext {
 		fmt.Fprintln(os.Stderr, "load profile:", err)
 		os.Exit(1)
 	}
+	c.Server = normalizeServerAddr(c.Server) // tolerate a port-less server:
 	ctx.Client = c
 	ctx.AgentSocket, _ = config.AgentSocketFor(name)
 	return ctx

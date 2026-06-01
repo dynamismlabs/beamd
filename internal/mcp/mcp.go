@@ -39,11 +39,11 @@ type jsonRPCError struct {
 }
 
 type Server struct {
-	LC          *daemon.LocalClient
-	In          io.Reader
-	Out         io.Writer
-	ServerName  string
-	ServerVer   string
+	LC         *daemon.LocalClient
+	In         io.Reader
+	Out        io.Writer
+	ServerName string
+	ServerVer  string
 }
 
 func New(lc *daemon.LocalClient, in io.Reader, out io.Writer, serverName, serverVer string) *Server {

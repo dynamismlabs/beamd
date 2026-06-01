@@ -1,0 +1,105 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/dynamismlabs/beamd/internal/client"
+	"github.com/dynamismlabs/beamd/internal/daemon"
+)
+
+// checkCmd authenticates against the edge and reports identity WITHOUT
+// registering a tunnel or spawning the long-lived agent — a cheap
+// "test connection" (vs opening a throwaway probe tunnel).
+func checkCmd(args []string) {
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print one JSON object {ok,server,slug,baseDomain} and nothing else")
+	insecure := fs.Bool("insecure", false, "skip edge TLS verification (self-signed dev edges only)")
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
+
+	rc := resolveContext(cf)
+	cfg := rc.mustAuth()
+	ins := *insecure || cfg.InsecureSkipVerify
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: ins})
+	cancel()
+	if err != nil {
+		if *jsonOut {
+			_ = json.NewEncoder(os.Stdout).Encode(struct {
+				Ok     bool   `json:"ok"`
+				Server string `json:"server"`
+				Error  string `json:"error"`
+			}{false, cfg.Server, err.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, "check failed:", err)
+		}
+		os.Exit(1)
+	}
+	slug, base := c.Slug(), c.BaseDomain()
+	_ = c.Close() // no tunnel was registered; just drop the control session
+
+	if *jsonOut {
+		_ = json.NewEncoder(os.Stdout).Encode(struct {
+			Ok         bool   `json:"ok"`
+			Server     string `json:"server"`
+			Slug       string `json:"slug"`
+			BaseDomain string `json:"baseDomain"`
+		}{true, cfg.Server, slug, base})
+		return
+	}
+	fmt.Printf("ok\nserver:  %s\nslug:    %s\nbase:    %s\n", cfg.Server, orDash(slug), base)
+}
+
+// reloadCmd restarts the selected profile's background agent so a changed
+// server/token takes effect immediately (a long-lived agent caches its creds
+// for its lifetime). Stops any agent on the socket, then spawns a fresh one.
+func reloadCmd(args []string) {
+	fs := flag.NewFlagSet("reload", flag.ExitOnError)
+	insecure := fs.Bool("insecure", false, "skip edge TLS verification (self-signed dev edges only)")
+	cf := addClientFlags(fs)
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
+
+	rc := resolveContext(cf)
+	cfg := rc.mustAuth()
+
+	if rc.AgentSocket != "" && daemon.IsRunning(rc.AgentSocket) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = daemon.NewLocalClient(rc.AgentSocket).Shutdown(ctx)
+		cancel()
+		deadline := time.Now().Add(5 * time.Second)
+		for daemon.IsRunning(rc.AgentSocket) && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if daemon.IsRunning(rc.AgentSocket) {
+			fmt.Fprintln(os.Stderr, "reload: previous agent did not stop in time")
+			os.Exit(1)
+		}
+	}
+
+	ins := *insecure || cfg.InsecureSkipVerify
+	lc := ensureAgent(rc.ConfigPath, rc.AgentSocket, ins)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	slug := ""
+	if h, err := lc.Ping(ctx); err == nil {
+		slug = h.Slug
+	}
+	if rc.Profile != "" {
+		fmt.Printf("agent reloaded (profile %q, slug %s)\n", rc.Profile, orDash(slug))
+	} else {
+		fmt.Printf("agent reloaded (slug %s)\n", orDash(slug))
+	}
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}

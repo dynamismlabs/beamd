@@ -142,8 +142,9 @@ func connectClient(t *testing.T, edgeAddr, token string) *client.Client {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	c, err := client.Connect(ctx, edgeAddr, token, client.Options{
-		HeartbeatInterval: 200 * time.Millisecond,
-		RegisterTimeout:   2 * time.Second,
+		HeartbeatInterval:  200 * time.Millisecond,
+		RegisterTimeout:    2 * time.Second,
+		InsecureSkipVerify: true, // test edges are self-signed
 	})
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
@@ -157,6 +158,7 @@ func connectClient(t *testing.T, edgeAddr, token string) *client.Client {
 // "observe a disconnected state" tests).
 func connectClientWithOpts(t *testing.T, edgeAddr, token string, opts client.Options) *client.Client {
 	t.Helper()
+	opts.InsecureSkipVerify = true // test edges are self-signed
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	c, err := client.Connect(ctx, edgeAddr, token, opts)

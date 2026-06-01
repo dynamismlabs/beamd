@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/dynamismlabs/beamd/internal/client"
 	"github.com/dynamismlabs/beamd/internal/naming"
@@ -64,6 +65,7 @@ func (d *Daemon) Serve() error {
 	mux.HandleFunc("/close", d.handleClose)
 	mux.HandleFunc("/list", d.handleList)
 	mux.HandleFunc("/healthz", d.handleHealthz)
+	mux.HandleFunc("/shutdown", d.handleShutdown)
 
 	srv := &http.Server{Handler: mux}
 
@@ -184,6 +186,22 @@ func (d *Daemon) handleList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+// handleShutdown stops the agent process (used by `beamd reload` to restart
+// it with fresh credentials). It replies first, then shuts the server down
+// asynchronously so Serve() unblocks and the agent process exits.
+func (d *Daemon) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "shutting down"})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.Shutdown(ctx)
+	}()
 }
 
 func (d *Daemon) handleHealthz(w http.ResponseWriter, r *http.Request) {

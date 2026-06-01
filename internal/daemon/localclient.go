@@ -96,6 +96,19 @@ func (c *LocalClient) Close(ctx context.Context, name string) (bool, error) {
 	return out.Removed, nil
 }
 
+// Shutdown asks the agent to stop. The agent replies then exits, so the
+// HTTP round-trip may error as the connection drops mid-response — that's
+// still a successful shutdown, so callers treat any result as best-effort
+// and poll IsRunning to confirm the socket has freed.
+func (c *LocalClient) Shutdown(ctx context.Context) error {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/shutdown", nil)
+	resp, err := c.http.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	return err
+}
+
 func (c *LocalClient) List(ctx context.Context) ([]ListItem, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/list", nil)
 	resp, err := c.http.Do(req)

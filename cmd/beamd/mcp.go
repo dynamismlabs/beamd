@@ -17,7 +17,7 @@ func mcpCmd(args []string) {
 
 	rc := resolveContext(cf)
 	rc.mustAuth()
-	lc := ensureAgent(rc.ConfigPath, rc.AgentSocket)
+	lc := ensureAgent(rc.ConfigPath, rc.AgentSocket, rc.Client.InsecureSkipVerify)
 
 	srv := mcp.New(lc, os.Stdin, os.Stdout, "beamd", Version)
 	if err := srv.Run(context.Background()); err != nil && err != io.EOF {

@@ -134,7 +134,7 @@ org's package settings for anonymous `docker pull`.
 
 - **npm:** within 72h and if nothing depends on it, `npm unpublish
   @beamd/cli@X.Y.Z` (and the `@beamd/cli-*` platform packages). Otherwise
-  `npm deprecate beamd@X.Y.Z "use X.Y.Z+1"` and publish a fixed bump.
+  `npm deprecate @beamd/cli@X.Y.Z "use X.Y.Z+1"` and publish a fixed bump.
 - **git tag:** `git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z` to
   remove it (only safe before anyone has fetched it — once it's on the Go
   proxy it's effectively permanent, so prefer a bump).

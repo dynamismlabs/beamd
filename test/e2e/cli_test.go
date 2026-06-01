@@ -72,7 +72,7 @@ func writeCLIConfig(t *testing.T, server, token string) (configPath, socketPath 
 	t.Cleanup(func() { _ = os.Remove(socketPath) })
 
 	configPath = filepath.Join(t.TempDir(), "config")
-	body := fmt.Sprintf("server: %s\ntoken: %s\nagent_socket: %s\n", server, token, socketPath)
+	body := fmt.Sprintf("server: %s\ntoken: %s\nagent_socket: %s\ninsecure_skip_verify: true\n", server, token, socketPath)
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

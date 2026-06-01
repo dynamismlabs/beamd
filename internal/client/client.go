@@ -46,14 +46,16 @@ const (
 // Options tune client behavior. Zero values fall back to sensible
 // defaults; tests typically override heartbeat / reconnect cadence so
 // they finish in well under a second.
-//
-// Server TLS verification is unconditionally skipped in M5 — we're on
-// self-signed certs until the deferred `certs.MagicManager` lands.
 type Options struct {
 	HeartbeatInterval time.Duration
 	RegisterTimeout   time.Duration
 	ReconnectInitial  time.Duration
 	ReconnectMax      time.Duration
+
+	// InsecureSkipVerify disables verification of the edge's TLS cert.
+	// Default false: the edge cert is verified, so the bearer token only
+	// rides a trusted connection. Set true only for a self-signed dev edge.
+	InsecureSkipVerify bool
 }
 
 func (o *Options) applyDefaults() {
@@ -286,13 +288,19 @@ func (c *Client) Intended() map[string]int {
 // hello_ok results populate c.slug / c.baseDomain; subsequent reconnects
 // must return the same slug (token didn't change).
 func (c *Client) connectOnce(ctx context.Context, first bool) error {
-	conn, err := tls.Dial("tcp", c.serverAddr, &tls.Config{
-		InsecureSkipVerify: true, // M5: self-signed; MagicManager flips this off
+	// DialContext (not tls.Dial) so the caller's ctx deadline actually bounds
+	// the dial + handshake — a black-hole network can't hang past it. The
+	// dialer sets SNI from c.serverAddr's host when ServerName is empty, so
+	// verification matches the edge hostname.
+	dialer := tls.Dialer{Config: &tls.Config{
+		InsecureSkipVerify: c.opts.InsecureSkipVerify, //nolint:gosec // opt-in for self-signed dev edges
 		NextProtos:         []string{ALPNBeam},
-	})
+	}}
+	rawConn, err := dialer.DialContext(ctx, "tcp", c.serverAddr)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", c.serverAddr, err)
 	}
+	conn := rawConn.(*tls.Conn)
 	if got := conn.ConnectionState().NegotiatedProtocol; got != ALPNBeam {
 		_ = conn.Close()
 		return fmt.Errorf("server did not negotiate %q (got %q)", ALPNBeam, got)
