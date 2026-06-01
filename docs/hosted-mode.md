@@ -21,7 +21,7 @@ the OSS happy path from [`setup.md`](setup.md).
 ```
                                   ┌──────────────────────────────┐
 [ developer's CLI ] ── :443 ──▶  │         beamd             │
-   `beam expose 3001`         │  (one or more droplets)      │
+   `beamd open 3001`         │  (one or more droplets)      │
                                   │                              │
                                   │  - terminates TLS            │
                                   │  - routes by Host header     │
@@ -52,6 +52,179 @@ the OSS happy path from [`setup.md`](setup.md).
 
 Authoritative source of state is **your web app's Postgres**. Beamd
 caches token lookups for ~60s and otherwise holds no user data.
+
+---
+
+## Open design decisions (revisit before launch)
+
+These shape every hosted URL, cert, and the onboarding flow, and they're a
+**breaking migration once customers exist** (baked into every URL + cert), so
+decide before the first paying customer. Below: the URL options, the one
+constraint that drives cert cost, the provisioning wait, how they tier, and
+custom domains.
+
+### URL options
+
+Every hosted tunnel is `<something>.<tunnel-domain>`. The design question is how
+customers are partitioned so names don't collide, and what that costs in certs.
+The "scope" below is a personal handle or a team slug (see org model).
+
+**1. Shared flat pool — a reserved subdomain ("no-namespace" lane).**
+`<name>.tunnel.beamd.sh` (pick the word: `tunnel` / `go` / `t` / `url` …). One
+`*.tunnel.beamd.sh` wildcard for *everyone* in the pool; `tunnel` is reserved
+(nobody can claim it as a scope). Names are one global pool → auto-hashed
+(ngrok's `cabbage-tuesday`) or first-come reservations. For users who just want
+a URL and don't care about owning names. **One cert, instant, infinite scale,
+shortest** — but no per-user name ownership, and a shared pool to keep clean.
+
+**1′. Same, on a separate domain.** `<name>.beamd-free.sh`. Identical to #1 but
+on its own registrable domain → **reputation isolation** (free-tier abuse can't
+get `beamd.sh` blocklisted) and one label shorter. The natural home for a free
+tier — buy a couple `beamd-free.<tld>` to reserve it.
+
+**2. Per-account subdomain (dot-nested).** `<name>.<scope>.beamd.sh` →
+`api.acme.beamd.sh`. A `*.<scope>.beamd.sh` wildcard **per account**. Names are
+clean, grouped, and *owned* — `api`/`web` are yours, collision-free across
+accounts. Prettiest; true per-account namespace — but a **cert per account**
+(provisioning wait + LE ceiling, below). This is beamd's current model.
+
+**3. Scope-in-label (hyphen-flattened — the Vercel shape).**
+`<name>-<scope>.beamd.sh` → `api-acme.beamd.sh`. **One shared `*.beamd.sh`**
+covers it. Names are *owned per scope* (`api-acme` ≠ `api-trey` — contained,
+collision-free) but the scope is jammed into the label, so **every URL is
+longer**. The containment of #2 with the one-cert/instant economics of #1 —
+exactly how Vercel does previews (`proj-hash-scope.vercel.app`). Needs a short
+hash to be fully collision-proof.
+
+**4. Custom domain (premium).** `<name>.acme.com` — the customer points their
+own domain at your edge. Per-hostname cert, issued on-demand (see below). Fully
+theirs, no `beamd.sh` in sight.
+
+### The one constraint that decides cert cost
+
+A wildcard is **exactly one label deep**: `*.beamd.sh` covers `x.beamd.sh`,
+never `x.y.beamd.sh`. So:
+
+- One label under the cert base (#1, #1′, #3) → **one shared wildcard**, issued
+  once, instant, unlimited accounts.
+- Two labels (#2's `api.acme.beamd.sh`) → a **wildcard per account**, with a
+  provisioning step and a rate ceiling.
+
+There is no way to get dot-nesting under a single cert — which is the whole
+reason #3 exists: it's the only way to get per-account *containment* without
+per-account *certs*. (Containment is what stops an agent ripping through names
+from exhausting a global pool — under #3 the scope partitions them; under a
+single flat pool (#1) you lean on hashes instead.)
+
+### The provisioning wait (#2 only) — and how to erase it
+
+Issuing `*.<scope>.beamd.sh` via ACME DNS-01 took **~8 seconds** in our own
+deploy (Cloudflare TXT write → LE validates → issued). One-time per account.
+
+- **Don't issue lazily at first `open`** — that puts the 8s in the user's face.
+- **Pre-warm at signup/upgrade.** `PreWarm` already exists (it's what
+  `add-developer` calls); hosted needs the admin endpoint (§6, ~30 lines) to
+  trigger it remotely. Fire it during a "setting up your namespace…" step → the
+  first tunnel is instant.
+- If #2 is a **paid** option, pre-warm only runs for paying users (low volume),
+  so LE's **~50 new certs/week per registered domain** never bites; when it
+  eventually might, you have revenue to shard tunnel domains or request an LE
+  rate-limit increase (free, granted to real services).
+
+### How they combine into tiers (leaning)
+
+Not exclusive — mix them. A reasonable shape:
+
+| Tier | URL | Mechanism |
+|---|---|---|
+| **Free** | `myapp-x7k2.beamd-free.sh` | shared flat pool (#1′), hashed names |
+| **Standard** | `api-acme.beamd.sh` | scope-in-label (#3) — contained, one cert, instant |
+| **Pro (pretty)** | `api.acme.beamd.sh` | per-account subdomain (#2), pre-warmed at upgrade |
+| **Enterprise** | `api.acme.com` | custom domain (#4) |
+
+Reframings from the design discussion:
+
+- **Namespacing isn't the free/paid gate.** Everyone gets *containment* (the
+  scope is always present — via the pool or the label); what's tiered is how
+  *pretty* it renders — hyphen (#3) → dot-subdomain (#2) → custom domain (#4) —
+  plus reputation (free domain vs the main one).
+- **"No namespace" is its own lane** (#1/#1′) for people who just want a URL — a
+  reserved subdomain (`*.tunnel.beamd.sh`) or the free domain. Some *paid* users
+  will prefer this (short, flat) over a namespace, so don't force one on them.
+- **Agents can't exhaust a global pool** under #3 — the scope partitions them —
+  which is the case for the scope being always-present, achieved without
+  per-account certs.
+
+**Still open:** whether Standard is #3 (hyphen, one cert, longer URL) or #2
+(dot, per-account cert, prettier), and the exact reserved word/domain for the
+no-namespace lane.
+
+> **Downstream:** §4 (per-slug DNS provisioning), §5 (slug-sharded droplets),
+> and the §9 recap assume the **per-account-subdomain (#2)** model. Under a
+> single-wildcard lane (#1/#1′/#3) they collapse — one `*.<base>` cert + one
+> `*.<base>` A record cover *all* tunnels (no per-account provisioning), and
+> droplet sharding keys on a hash, not the slug.
+
+### Custom domains — how, and how hard
+
+Moderately easy; certmagic is built for it:
+
+- Customer CNAMEs `tunnel.acme.com` → your edge; you verify ownership (a
+  TXT/CNAME check) and add it to an allowlist.
+- Enable certmagic **On-Demand TLS** with an authorization callback that checks
+  that allowlist per handshake. It issues a per-hostname cert via
+  **TLS-ALPN-01 / HTTP-01** — which only need the domain to *resolve to your
+  edge*, **not** access to the customer's DNS (the thing that makes DNS-01
+  impossible for domains you don't control).
+- Per-hostname (not wildcard) → back under per-cert rate limits, but custom
+  domains are premium/low-volume, so fine.
+- beamd today is DNS-01 + per-slug wildcards; this is "enable OnDemand + an
+  allowlist hook + an ownership-verify step." ~**1–2 days** — exactly what Caddy
+  does for automatic HTTPS on arbitrary domains.
+
+### Org / team model (Vercel-shaped)
+
+- An **account** (user) has a **personal scope** (a slug, e.g. `trey`) and can
+  **join multiple teams**, each its own scope (e.g. `acme`).
+- A tunnel belongs to a scope; the scope is what appears in the URL (`…-acme`
+  flat, or `.acme.` nested). The user/agent never types it — they're logged
+  into a scope and just name the tunnel.
+- **Tokens are per `(user, scope)` membership.** `verify-token` returns the
+  scope slug for that token.
+- **The client side is already built:** the **profiles** feature *is* the
+  multi-team switch — one profile per scope (`beamd use acme`, `-p acme`).
+  Joining N teams = N profiles; secrets stay in the global profile store.
+- Schema (extends §8): add `teams` + `memberships` (user↔team + role); a
+  tunnel/workspace belongs to a scope (a personal user **or** a team); tokens
+  reference the membership.
+
+### Auth-gated previews (pairs with the flat shape)
+
+Optionally **require the viewer to be authenticated** — logged into the
+dashboard, or holding a view token / signed URL — before the edge proxies a
+preview. This matters most for the **shared-pool / hyphen lanes (#1/#1′/#3)**:
+those tunnels are siblings in one scannable namespace, so a gate stops casual
+leakage of in-progress agent previews (and lets a flat lane trade obscurity for
+an actual access check).
+
+Shape: per-tunnel visibility (`public | org | private`) lives in the control
+plane and is returned to the edge; for non-public, the edge checks a session
+cookie (set by the dashboard, scoped so the edge can validate it) or a
+signed/expiring URL param before proxying — unauthenticated → 302 to login or
+403. Builds on the token/signing work in
+[`preview-auth-spec.md`](preview-auth-spec.md). (Off for OSS/self-host —
+tunnels stay public by default, as today.)
+
+### Domains & PSL
+
+- **Buy a couple `beamd-free.<tld>` now** to host the free-tier pool (#1′) —
+  reputation isolation (the ngrok-free.app split), before someone else grabs
+  them.
+- The website-domain vs tunnel-domain assignment across `beamd.{ai,sh,dev,io}`
+  is **still open** (owner's call); everything above is agnostic to which
+  becomes the tunnel base.
+- Whichever domain hosts tunnels, submit it to the **Public Suffix List** so
+  tunnels can't cookie-poison each other or the dashboard.
 
 ---
 
@@ -111,6 +284,14 @@ Content-Type: application/json
 ```
 
 (Or `404` — beamd treats both as "reject".)
+
+> **Empty slug means reject, *not* flat.** Self-hosted beamd treats a
+> `{token: ""}` file entry as a valid **flat** tunnel (`<name>.<base>`); the
+> hosted HTTP store deliberately does the opposite — an empty slug is always a
+> reject (`internal/auth/http_store.go`). So a valid hosted token must resolve
+> to a **non-empty** scope: flat routing is self-host-only, and hosted's
+> "no-namespace" lane (design notes above) still carries a non-empty reserved
+> scope like `tunnel`.
 
 **Response (bad shared secret or transient error):**
 
@@ -328,7 +509,8 @@ function newToken(): string {
 ```
 
 128 chars is long but the CLI never has to retype it — copy-paste
-once into `~/.beam/config`, then it lives there. 512 bits of
+once; `beamd login` saves it (to `~/.beamd/profiles/<name>`), or automation
+passes `--config <path>`. 512 bits of
 entropy means the search space is permanent-future-proof.
 
 **Storage:** never store raw tokens. Store SHA-256 hashes, look up by
@@ -360,7 +542,7 @@ the standard "personal access token" pattern (GitHub, Stripe, etc.).
 
 **Rotation:** users hit "regenerate" in the dashboard → revoke old,
 mint new. UI should warn that active CLIs will lose connection
-within 60s and need `beam login` again.
+within 60s and need `beamd login` again.
 
 ---
 
@@ -539,7 +721,7 @@ BEAMD_DNS_PROVIDER_CREDS=<Cloudflare token, if beamd still
                             app writes DNS and beamd doesn't need it>
 ```
 
-The CLI fetches `/.well-known/beam-auth` on `beam login` (no
+The CLI fetches `/.well-known/beam-auth` on `beamd login` (no
 `--token`) to discover the device-code endpoints. That's handled by
 [`internal/edge/edge.go:610`](../internal/edge/edge.go) — nothing
 to wire on your end beyond setting the YAML.
@@ -622,8 +804,8 @@ working tunnel:
    - Writes Cloudflare A records.
    - Inserts `workspaces` row.
 3. Web app mints a token, stores hash, shows raw token to user once.
-4. User installs CLI, runs `beam login --server beam.example.com:443 --token <token>`. CLI writes config.
-5. User runs `beam expose 3001 --as api`.
+4. User installs CLI, runs `beamd login --server beam.example.com --token <token>`. CLI saves it as a profile (automation uses `--config <path>`).
+5. User runs `beamd open 3001 --as api`.
 6. Daemon dials beamd at `:443`, ALPN `beam/1`, sends `hello`
    with the token.
 7. Beamd POSTs `/api/internal/verify-token` → web app returns
@@ -637,7 +819,7 @@ working tunnel:
     deltas. Web app inserts into `usage_events`.
 
 If you want the device-code path instead of copy-paste tokens, swap
-step 4 for `beam login --server beam.example.com:443` (no
+step 4 for `beamd login --server beam.example.com` (no
 token), which fetches `/.well-known/beam-auth`, walks the
 device-code dance against `/api/device/code` + `/api/device/token`,
 and writes the token after browser approval.
