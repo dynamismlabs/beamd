@@ -90,7 +90,7 @@ flat edge, or `*.<slug>.beam.example.com` per developer when you namespace.
 
 ```
 # npm (no Go toolchain needed; great for bundling into a Node app)
-npm i -g beamd          # or run ad-hoc: npx beamd <cmd>
+npm i -g @beamd/cli     # installs the `beamd` command; or ad-hoc: npx @beamd/cli <cmd>
 
 # Docker (for running the edge)
 docker pull ghcr.io/dynamismlabs/beamd:latest

@@ -10,15 +10,17 @@ default (no GitHub config, nothing extra to install for the common case);
 
 | Channel | Install command | Mechanism | Needs |
 |---|---|---|---|
-| **npm** | `npm i -g beamd` / `npx beamd` | `make publish-npm` (or CI) | `npm login` (or `NPM_TOKEN`) |
+| **npm** | `npm i -g @beamd/cli` / `npx @beamd/cli` | `make publish-npm` (or CI) | `npm login` (or `NPM_TOKEN`) |
 | **Go** | `go install github.com/dynamismlabs/beamd/cmd/beamd@vX.Y.Z` | **automatic from the git tag** | nothing — just push the tag |
 | **Binaries** | download from Releases | goreleaser | goreleaser + `GITHUB_TOKEN` |
 | **Docker** | `docker pull ghcr.io/dynamismlabs/beamd:X.Y.Z` | goreleaser | goreleaser + `docker login ghcr.io` |
 
 The single `beamd` binary is both the edge (`beamd serve`) and the client
-(`beamd open`/`run`/`close`/…). The npm package ships a tiny JS shim plus a
-per-platform binary (`beamd-{darwin,linux}-{arm64,x64}`) installed as
-`optionalDependencies`, so `npm i beamd` pulls only the host's binary.
+(`beamd open`/`run`/`close`/…). The npm package is **`@beamd/cli`** (the bare
+`beamd` name is blocked by npm's name-similarity guard); it installs the
+`beamd` command. It ships a tiny JS shim plus a per-platform binary
+(`@beamd/cli-{darwin,linux}-{arm64,x64}`) installed as `optionalDependencies`,
+so `npm i @beamd/cli` pulls only the host's binary.
 
 ---
 
@@ -38,8 +40,10 @@ per-platform binary (`beamd-{darwin,linux}-{arm64,x64}`) installed as
 ```
 npm login          # browser auth, once per machine
 ```
-The **first** publish claims `beamd` and the four `beamd-*` names under the
-logged-in account — make sure it's the account/org you want to own them.
+The **first** publish claims `@beamd/cli` and the four
+`@beamd/cli-{darwin,linux}-{arm64,x64}` platform packages (all under the
+`@beamd` org) — make sure you're publishing under the account/org you want to
+own them.
 
 ### Binaries + Docker image (optional — only if you want them)
 ```
@@ -102,8 +106,8 @@ also publish locally** (you'd double-publish the same version).
 ## Verify
 
 ```
-npx beamd@0.0.1 version                 # → 0.0.1
-npm view beamd version                  # → 0.0.1
+npx @beamd/cli@0.0.1 version            # → 0.0.1
+npm view @beamd/cli version             # → 0.0.1
 go install github.com/dynamismlabs/beamd/cmd/beamd@v0.0.1 && beamd version
 docker pull ghcr.io/dynamismlabs/beamd:0.0.1
 ```
@@ -129,7 +133,7 @@ org's package settings for anonymous `docker pull`.
 ## Fixing a bad release
 
 - **npm:** within 72h and if nothing depends on it, `npm unpublish
-  beamd@X.Y.Z` (and the `beamd-*` platform packages). Otherwise
+  @beamd/cli@X.Y.Z` (and the `@beamd/cli-*` platform packages). Otherwise
   `npm deprecate beamd@X.Y.Z "use X.Y.Z+1"` and publish a fixed bump.
 - **git tag:** `git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z` to
   remove it (only safe before anyone has fetched it — once it's on the Go

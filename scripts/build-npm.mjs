@@ -12,7 +12,7 @@
 // On `npm i beamd`, npm installs only the platform package matching the host
 // (~one binary, not four). Version comes from the git tag (without the "v").
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync, copyFileSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,10 +40,11 @@ mkdirSync(outDir, { recursive: true });
 
 const optionalDependencies = {};
 for (const t of targets) {
-  const name = `beamd-${t.os}-${t.cpu}`;
+  const name = `@beamd/cli-${t.os}-${t.cpu}`; // scoped, org-owned, grouped with @beamd/cli
+  const dirName = `cli-${t.os}-${t.cpu}`; // flat build dir; npm reads the name from package.json
   optionalDependencies[name] = version;
 
-  const pkgDir = join(outDir, name);
+  const pkgDir = join(outDir, dirName);
   mkdirSync(join(pkgDir, "bin"), { recursive: true });
 
   console.error(`building ${name} (${t.goos}/${t.goarch}) …`);
@@ -84,7 +85,7 @@ writeFileSync(
   join(mainDir, "package.json"),
   JSON.stringify(
     {
-      name: "beamd",
+      name: "@beamd/cli",
       version,
       description: "Self-hostable, instant-URL HTTPS tunnel for multi-app dev.",
       repository: { type: "git", url: "git+https://github.com/dynamismlabs/beamd.git" },
@@ -101,13 +102,31 @@ writeFileSync(
 
 console.error(`\nnpm packages built in ${outDir} (version ${version})`);
 
+// publishPkg publishes one package dir, treating "this version already
+// exists" as a skip rather than a failure — so a partial/interrupted publish
+// can be safely re-run (idempotent).
+function publishPkg(dir, label) {
+  console.error(`publishing ${label} …`);
+  const res = spawnSync("npm", ["publish", "--access", "public"], { cwd: dir, encoding: "utf8" });
+  if (res.stdout) process.stdout.write(res.stdout);
+  if (res.status === 0) {
+    if (res.stderr) process.stderr.write(res.stderr);
+    return;
+  }
+  const stderr = res.stderr || "";
+  if (/EPUBLISHCONFLICT|cannot publish over|previously published|already exists/i.test(stderr)) {
+    console.error(`  ↳ ${label}@${version} already published — skipping`);
+    return;
+  }
+  process.stderr.write(stderr);
+  throw new Error(`npm publish ${label} failed (exit ${res.status})`);
+}
+
 if (publish) {
   // Platform packages first, so the main package's optionalDependencies
   // resolve for anyone installing immediately after.
   for (const t of targets) {
-    console.error(`publishing beamd-${t.os}-${t.cpu} …`);
-    execFileSync("npm", ["publish", "--access", "public"], { cwd: join(outDir, `beamd-${t.os}-${t.cpu}`), stdio: "inherit" });
+    publishPkg(join(outDir, `cli-${t.os}-${t.cpu}`), `@beamd/cli-${t.os}-${t.cpu}`);
   }
-  console.error("publishing beamd …");
-  execFileSync("npm", ["publish", "--access", "public"], { cwd: mainDir, stdio: "inherit" });
+  publishPkg(mainDir, "@beamd/cli");
 }

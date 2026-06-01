@@ -21,11 +21,11 @@ Add beamd as a dependency — npm installs only the binary for the host
 platform (~4 MB):
 
 ```
-npm i beamd
+npm i @beamd/cli
 ```
 
 Spawn it via the package's bin (`node_modules/.bin/beamd`) or
-`require.resolve("beamd/bin/beamd.cjs")`. Everything below is just
+`require.resolve("@beamd/cli/bin/beamd.cjs")`. Everything below is just
 `beamd <args>`.
 
 ## 2. Configure (once)

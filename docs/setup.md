@@ -379,7 +379,7 @@ edge; `beamd open` / `login` / `close` / `list` are the client. Install it
 whichever way you like:
 
 ```
-npm i -g beamd      # or `npx beamd <cmd>` ad-hoc
+npm i -g @beamd/cli      # installs `beamd`; or `npx @beamd/cli <cmd>` ad-hoc
 ```
 
 Or grab a prebuilt binary from the
