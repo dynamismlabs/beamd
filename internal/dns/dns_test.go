@@ -58,6 +58,26 @@ func TestProvisionSlug_StubWritesExpectedRecords(t *testing.T) {
 	}
 }
 
+func TestProvisionSlug_FlatWritesBaseWildcard(t *testing.T) {
+	p := NewStubProvider()
+	ctx := context.Background()
+
+	// Empty slug → flat: only the base wildcard `*` (no per-slug records).
+	if err := ProvisionSlug(ctx, p, "beam.example.com", "beam.example.com", "", "1.2.3.4", "2001:db8::1"); err != nil {
+		t.Fatalf("ProvisionSlug flat: %v", err)
+	}
+	got := p.Records("beam.example.com")
+	if len(got) != 2 {
+		t.Fatalf("flat: got %d records, want 2 (* for v4 + v6)", len(got))
+	}
+	for _, r := range got {
+		rr := r.RR()
+		if rr.Name != "*" {
+			t.Errorf("flat should write only the base wildcard `*`, got name=%q type=%s", rr.Name, rr.Type)
+		}
+	}
+}
+
 func TestProvisionSlug_Idempotent(t *testing.T) {
 	p := NewStubProvider()
 	ctx := context.Background()

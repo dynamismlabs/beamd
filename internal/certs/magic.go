@@ -200,11 +200,10 @@ func (m *MagicManager) ensureManaged(ctx context.Context, slug string) error {
 	}
 	m.mu.Unlock()
 
-	wildcard := fmt.Sprintf("*.%s.%s", slug, m.baseDomain)
-	apex := fmt.Sprintf("%s.%s", slug, m.baseDomain)
+	names := certNamesFor(slug, m.baseDomain)
 
-	slog.Info("certs: managing wildcard via ACME", "slug", slug, "wildcard", wildcard)
-	if err := m.cm.ManageSync(ctx, []string{wildcard, apex}); err != nil {
+	slog.Info("certs: managing wildcard via ACME", "slug", slug, "names", names)
+	if err := m.cm.ManageSync(ctx, names); err != nil {
 		return err
 	}
 

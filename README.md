@@ -1,15 +1,18 @@
 # Beamd
 
 Self-hostable, instant-URL tunnel for multi-app dev. One command turns a
-locally-running app into a stable HTTPS URL on your own domain, with a
-distinct subdomain per app under a per-developer wildcard zone. Built
-for the AI-agent workflow: agent runs `npm run dev`, calls one tool,
-gets back a working URL.
+locally-running app into a stable HTTPS URL on your own domain — a distinct
+subdomain per app. Built for the AI-agent workflow: agent runs `npm run dev`,
+calls one tool, gets back a working URL.
 
 ```
 $ beamd open 3001 --as api
-https://api.turing.beam.example.com
+https://api.beam.example.com
 ```
+
+By default tunnels live at `<name>.<base>`. On a shared edge you can
+*namespace* each developer under their own `<name>.<slug>.<base>` zone — see
+[Onboarding](#5-onboard-a-developer); it's opt-in, not required.
 
 ## Status
 
@@ -36,12 +39,15 @@ for the implementation checklist + open deferred work.
 
 - You run **one** `beamd` process on a server with a public IP.
 - You point a domain (e.g. `beam.example.com`) at it.
-- You give each developer a token. The token maps to a slug (`turing`,
-  `hopper`, …).
-- The developer runs `beamd open 3001 --as api` on their laptop.
-  Beamd issues `*.turing.beam.example.com` from Let's Encrypt
-  (via DNS-01 against your DNS provider), routes
-  `api.turing.beam.example.com` to their laptop's port 3001.
+- You hand out tokens. By default a token is **flat** — its tunnels live at
+  `<name>.beam.example.com`, and beamd issues `*.beam.example.com` from
+  Let's Encrypt (DNS-01 against your provider).
+- The developer runs `beamd open 3001 --as api` and gets
+  `api.beam.example.com` routed to their laptop's port 3001.
+- **Optional — multi-tenant:** give a token a *slug* (`beamd add-developer
+  --slug turing`) and that developer's tunnels are namespaced under
+  `*.turing.beam.example.com` instead, so untrusted developers can't collide
+  on names. Most self-hosters don't need this.
 
 ## Quickstart (operator)
 
@@ -73,9 +79,9 @@ In Cloudflare:
    `base_domain` is the zone apex). Keep it **DNS only** (gray cloud),
    not proxied.
 
-Per-developer DNS (`*.turing.beam.example.com` + `turing.beam.example.com`)
-is created automatically by `beamd provision-dev` — relative to the
-detected zone, so subdomain `base_domain`s work.
+Tunnel DNS is created automatically by `beamd provision-dev`, relative to the
+detected zone (so subdomain `base_domain`s work): `*.beam.example.com` for a
+flat edge, or `*.<slug>.beam.example.com` per developer when you namespace.
 
 ### 2. Install
 
@@ -122,14 +128,19 @@ disk in the YAML:
 BEAMD_DNS_PROVIDER_CREDS=<your-Cloudflare-API-token>
 ```
 
-Create `tokens.json` with one entry per developer:
+Create `tokens.json` — one entry per token, mapping it to a **slug**. An
+empty slug `""` is flat (tunnels at `<name>.<base>`); a non-empty slug
+namespaces that token under `<name>.<slug>.<base>`:
 
 ```json
 {
-  "<long random token>": "turing",
-  "<another long random token>": "hopper"
+  "<long random token>": "",
+  "<another random token>": "turing"
 }
 ```
+
+(Or skip the manual file and use `beamd add-developer` — it mints the token
+and provisions DNS + cert in one step. See [Onboarding](#5-onboard-a-developer).)
 
 ### 4. Run
 
@@ -142,28 +153,35 @@ sudo beamd serve --config /etc/beamd/beamd.yaml
 
 ### 5. Onboard a developer
 
-For each developer slug:
+**Flat (default)** — tunnels at `<name>.beam.example.com`:
+
+```
+beamd provision-dev --config /etc/beamd/beamd.yaml
+```
+
+Writes `*.beam.example.com  A  203.0.113.10` to your DNS provider and
+pre-warms the `*.beam.example.com` cert (Let's Encrypt, DNS-01). Hand the
+developer a token from `tokens.json` (one mapped to `""`).
+
+**Namespaced (opt-in)** — give each developer their own zone, so untrusted
+developers can't collide on names:
 
 ```
 beamd provision-dev --slug turing --config /etc/beamd/beamd.yaml
 ```
 
-This:
+Writes `turing.beam.example.com` + `*.turing.beam.example.com` and pre-warms
+`*.turing.beam.example.com`. That developer's token must map to `turing`.
 
-- Writes `turing.beam.example.com  A  203.0.113.10` and
-  `*.turing.beam.example.com  A  203.0.113.10` to your DNS provider.
-- Pre-warms the `*.turing.beam.example.com` certificate (issues from
-  Let's Encrypt via DNS-01).
-
-Hand the developer their token (the long random string from
-`tokens.json`).
+> Prefer one command? `beamd add-developer [--slug <name>]` mints the token,
+> writes it to `tokens.json`, and provisions DNS + cert together.
 
 ## Quickstart (developer)
 
 ```
-beamd login --server beam.example.com:443 --token <token-from-operator>
+beamd login --server beam.example.com --token <token-from-operator>
 beamd open 3001 --as api
-# → https://api.turing.beam.example.com
+# → https://api.beam.example.com
 #   (runs in the foreground; Ctrl-C to stop — like ngrok)
 ```
 
@@ -184,8 +202,8 @@ The subdomain label defaults to the port number. Set it explicitly, or
 derive it from your project:
 
 ```
-beamd open 3001 --as api      # literal label  → api.turing.<base>
-beamd open 3001 --from dir     # derive it      → <cwd-name>.turing.<base>
+beamd open 3001 --as api      # literal label  → api.<base>
+beamd open 3001 --from dir     # derive it      → <cwd-name>.<base>
 ```
 
 `--from` sources: `port` (default), `dir` (folder name), `repo` (git repo
@@ -197,8 +215,8 @@ Stay logged into several edges at once and switch with a flag (the
 kubectl / `gh auth` model):
 
 ```
-beamd login --server acme.com:443  --token <T> --profile acme
-beamd login --server other.com:443 --token <T> --profile personal
+beamd login --server acme.com  --token <T> --profile acme
+beamd login --server other.com --token <T> --profile personal
 beamd profiles                 # list them; * marks the current
 beamd use acme                 # set the default
 beamd open 3001 -p personal    # one-off override (any command takes -p)

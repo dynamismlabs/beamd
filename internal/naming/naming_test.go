@@ -31,4 +31,8 @@ func TestHostname(t *testing.T) {
 	if got := Hostname("api", "turing", "beam.example.com"); got != "api.turing.beam.example.com" {
 		t.Errorf("Hostname = %q", got)
 	}
+	// Flat (empty slug) collapses the namespace level.
+	if got := Hostname("api", "", "beam.example.com"); got != "api.beam.example.com" {
+		t.Errorf("flat Hostname = %q, want api.beam.example.com", got)
+	}
 }

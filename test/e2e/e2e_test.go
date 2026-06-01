@@ -43,6 +43,29 @@ import (
 // Tunnel routing
 // ====================================================================
 
+func TestTunnel_FlatTokenServesAtBaseDomain(t *testing.T) {
+	dummyPort := startDummyApp(t, "dummy")
+	// Empty slug → flat routing: tunnels live directly at <name>.<base>.
+	_, edgeAddr := startEdge(t, map[string]string{"T1": ""})
+
+	c := connectClient(t, edgeAddr, "T1")
+	if c.Slug() != "" {
+		t.Errorf("flat slug = %q, want empty", c.Slug())
+	}
+	url, err := c.Register("hello", dummyPort)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if want := "https://hello." + testBaseDomain; url != want {
+		t.Errorf("flat url = %q, want %q (no slug level)", url, want)
+	}
+
+	// Public request routes through AND the *.<base> cert is served on the
+	// flat SNI (no namespace label).
+	host := "hello." + testBaseDomain
+	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/foo", "dummy: GET /foo\n")
+}
+
 func TestTunnel_SingleRegisteredAppServesPublicURL(t *testing.T) {
 	dummyPort := startDummyApp(t, "dummy")
 	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})

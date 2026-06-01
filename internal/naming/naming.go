@@ -24,7 +24,13 @@ func LabelFromPort(port int) string {
 	return strconv.Itoa(port)
 }
 
-// Hostname returns "<label>.<slug>.<base_domain>".
+// Hostname assembles a tunnel's public hostname. With a slug it is
+// "<label>.<slug>.<base_domain>" (namespaced, multi-tenant); with an empty
+// slug it collapses to "<label>.<base_domain>" (flat — the default for a
+// single-tenant edge, where the per-developer namespace is just URL tax).
 func Hostname(label, slug, baseDomain string) string {
+	if slug == "" {
+		return fmt.Sprintf("%s.%s", label, baseDomain)
+	}
 	return fmt.Sprintf("%s.%s.%s", label, slug, baseDomain)
 }

@@ -103,9 +103,7 @@ func (m *SelfSignedManager) issueOrGet(slug string) (*tls.Certificate, error) {
 	if c, ok := m.certs[slug]; ok {
 		return c, nil
 	}
-	wildcard := fmt.Sprintf("*.%s.%s", slug, m.baseDomain)
-	apex := fmt.Sprintf("%s.%s", slug, m.baseDomain)
-	cert, err := generateSelfSignedCert(wildcard, apex)
+	cert, err := generateSelfSignedCert(certNamesFor(slug, m.baseDomain)...)
 	if err != nil {
 		return nil, fmt.Errorf("issue self-signed for slug %q: %w", slug, err)
 	}
@@ -115,24 +113,45 @@ func (m *SelfSignedManager) issueOrGet(slug string) (*tls.Certificate, error) {
 	return &cert, nil
 }
 
-// extractSlug pulls the slug component out of an SNI that matches the
-// `<app>.<slug>.<base>` shape. Returns ("", false) for anything else
-// (apex hits, single-label SNIs, off-domain).
-func extractSlug(sni, baseDomain string) (string, bool) {
+// extractSlug maps an SNI to the namespace whose wildcard cert covers it:
+//
+//	<app>.<slug>.<base>  → (slug, true)  namespaced → issue *.<slug>.<base>
+//	<app>.<base>         → ("", true)    flat       → issue *.<base>
+//	<base> / off-domain / deeper → ("", false)      apex/unknown → fallback
+//
+// An empty slug ("") is a *valid* result (flat routing), distinct from the
+// not-a-tunnel case (ok=false). Callers pass the slug to certNamesFor.
+func extractSlug(sni, baseDomain string) (slug string, ok bool) {
 	if sni == "" {
 		return "", false
 	}
 	suffix := "." + baseDomain
 	if !strings.HasSuffix(sni, suffix) {
-		return "", false
+		return "", false // the apex itself, or off-domain
 	}
-	prefix := strings.TrimSuffix(sni, suffix) // "<app>.<slug>" or "<slug>" or "<a>.<b>.<slug>"
+	prefix := strings.TrimSuffix(sni, suffix)
 	parts := strings.Split(prefix, ".")
-	if len(parts) < 2 {
-		// Only "<slug>.<base>" — no app label, can't satisfy our scheme.
-		return "", false
+	switch len(parts) {
+	case 1:
+		if parts[0] == "" {
+			return "", false
+		}
+		return "", true // flat: <app>.<base>
+	case 2:
+		return parts[1], true // namespaced: <app>.<slug>.<base>
+	default:
+		return "", false // nested deeper than one label — unsupported
 	}
-	return parts[len(parts)-1], true
+}
+
+// certNamesFor returns the SAN set for a namespace's cert. Flat (slug "")
+// is the base wildcard alone — the base apex is managed separately (eagerly,
+// for /healthz etc.). Namespaced covers the wildcard plus the slug's apex.
+func certNamesFor(slug, baseDomain string) []string {
+	if slug == "" {
+		return []string{"*." + baseDomain}
+	}
+	return []string{"*." + slug + "." + baseDomain, slug + "." + baseDomain}
 }
 
 // generateSelfSignedCert returns a fresh ECDSA P-256 cert valid for

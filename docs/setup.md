@@ -21,7 +21,7 @@ them in a scratch file:
 | `YOUR_ZONE` | The registered Cloudflare zone that owns `YOUR_DOMAIN`. Same as `YOUR_DOMAIN` for an apex; the parent for a subdomain. Beamd auto-detects this. | `mydomain.com` |
 | `YOUR_SERVER_IP` | Public IPv4 of the VM you'll run beamd on | `203.0.113.42` |
 | `YOUR_EMAIL` | Contact email for Let's Encrypt registration | `you@example.com` |
-| `YOUR_SLUG` | Short label for your own developer identity (lowercase, alphanumeric, hyphens — RFC 1123 label) | `turing` |
+| `YOUR_SLUG` | *Optional* per-developer namespace (lowercase, alphanumeric, hyphens — RFC 1123 label). Omit for flat routing (`<name>.YOUR_DOMAIN`); set it only to namespace tunnels on a shared edge. | `turing` |
 | `YOUR_TOKEN` | A long random secret you'll generate in step 7 | `4f2c…` (64 hex chars) |
 | `YOUR_CF_TOKEN` | The Cloudflare API token you'll create in step 3 | `abc123…` (40 chars) |
 
@@ -156,8 +156,8 @@ In Cloudflare dashboard → `YOUR_DOMAIN` → **DNS** → **Records** →
 | **TTL** | Auto |
 
 > 🚨 **Proxy status must be "DNS only" (gray cloud).** If you set it to
-> "Proxied" (orange cloud), Cloudflare terminates TLS itself and our
-> per-developer wildcard certs stop working.
+> "Proxied" (orange cloud), Cloudflare terminates TLS itself and beamd's
+> wildcard certs stop working.
 
 Click **Save**.
 
@@ -295,30 +295,35 @@ Returns `{"status":"ok","version":"…"}`.
 ## Step 9 — Add yourself as a developer (`beamd add-developer`)
 
 One command does everything: generates a token, appends it to
-`tokens.json`, writes the DNS A records (`YOUR_SLUG.YOUR_DOMAIN` and
-`*.YOUR_SLUG.YOUR_DOMAIN`), and pre-issues your wildcard cert from
-Let's Encrypt.
+`tokens.json`, writes the DNS A record, and pre-issues your wildcard cert
+from Let's Encrypt. By default it's **flat** — your tunnels live directly at
+`<name>.YOUR_DOMAIN`:
 
 ```
 sudo docker compose exec beamd \
-  beamd add-developer --slug YOUR_SLUG --config /etc/beamd/beamd.yaml
+  beamd add-developer --config /etc/beamd/beamd.yaml
 ```
 
 It prints something like:
 
 ```
 developer added:
-  slug:   turing
-  token:  4f2c8b7d1e09…  (64 hex chars)
+  routing: flat — tunnels at <name>.YOUR_DOMAIN
+  token:   4f2c8b7d1e09…  (64 hex chars)
 
 Restart beamd to pick up the new token (the file is read at startup):
   docker restart beamd        # if running under Docker
   systemctl restart beamd     # if running as a systemd unit
 
 Developer setup (their laptop):
-  beamd login --server YOUR_DOMAIN:443 --token <token above>
-  beamd open 3001 --as api
+  beamd login --server YOUR_DOMAIN --token <token above>
+  beamd open 3001 --as api      # → https://api.YOUR_DOMAIN
 ```
+
+> **Sharing one edge with developers who shouldn't collide on names?** Add
+> `--slug YOUR_SLUG` to namespace your tunnels under
+> `<name>.YOUR_SLUG.YOUR_DOMAIN` (it provisions `*.YOUR_SLUG.YOUR_DOMAIN`
+> instead). Opt-in — skip it for a personal or trusting-team edge.
 
 **Copy the token to your password manager now.** It's only printed
 once. (You can always look it up in `/etc/beamd/tokens.json` later,
@@ -333,26 +338,27 @@ sudo docker compose restart beamd
 You should see in the logs:
 
 ```
-INFO dns provisioned     slug=YOUR_SLUG …
-INFO certs: ACME wildcard issued  slug=YOUR_SLUG issuance_count=1
+INFO dns provisioned     slug="" …
+INFO certs: ACME wildcard issued  slug="" issuance_count=1
 ```
+
+(`slug=""` is the flat default. With `--slug YOUR_SLUG` you'd see your slug there.)
 
 > If the ACME step fails: see [Troubleshooting](#troubleshooting).
 > Common cause: wrong / under-scoped CF token.
 
-**Verify DNS:**
+**Verify DNS** (flat — for namespaced, use `api.YOUR_SLUG.YOUR_DOMAIN`):
 
 ```
-dig YOUR_SLUG.YOUR_DOMAIN +short
-dig api.YOUR_SLUG.YOUR_DOMAIN +short
+dig api.YOUR_DOMAIN +short
 ```
 
-Both return `YOUR_SERVER_IP`.
+Returns `YOUR_SERVER_IP` (matched by the `*.YOUR_DOMAIN` wildcard).
 
 **Verify cert** (give it ~30 seconds after the provision finishes):
 
 ```
-echo | openssl s_client -servername api.YOUR_SLUG.YOUR_DOMAIN \
+echo | openssl s_client -servername api.YOUR_DOMAIN \
   -connect YOUR_DOMAIN:443 2>/dev/null | \
   openssl x509 -noout -issuer -subject
 ```
@@ -361,7 +367,7 @@ Issuer should be Let's Encrypt:
 
 ```
 issuer=C=US, O=Let's Encrypt, CN=R10
-subject=CN=*.YOUR_SLUG.YOUR_DOMAIN
+subject=CN=*.YOUR_DOMAIN
 ```
 
 ---
@@ -398,7 +404,7 @@ beamd version
 ## Step 11 — Log in from your laptop
 
 ```
-beamd login --server YOUR_DOMAIN:443 --token YOUR_TOKEN
+beamd login --server YOUR_DOMAIN --token YOUR_TOKEN
 ```
 
 Should print `logged in (profile "default")`. This saves a profile under
@@ -426,7 +432,7 @@ beamd open 3001 --as hello
 It prints one line:
 
 ```
-https://hello.YOUR_SLUG.YOUR_DOMAIN
+https://hello.YOUR_DOMAIN
 ```
 
 **Open that URL in a browser.** You should see Python's directory
@@ -455,7 +461,7 @@ Expected output:
 ```
 starting beam-testapp on :8765 ...
 exposing :8765 as 'smoketest' …
-tunnel URL: https://smoketest.YOUR_SLUG.YOUR_DOMAIN
+tunnel URL: https://smoketest.YOUR_DOMAIN
 
 checks:
   ✓ GET / serves the test app banner
@@ -476,15 +482,18 @@ for what to do next.
 
 ## Step 13 — Onboard a teammate
 
-One command does everything — token + tokens.json + DNS + cert pre-warm:
+One command does everything — token + tokens.json + DNS + cert pre-warm. On a
+shared edge, give each teammate a **slug** so your tunnel names can't collide
+(this is exactly what namespacing is for):
 
 ```
 sudo docker compose exec beamd \
   beamd add-developer --slug hopper --config /etc/beamd/beamd.yaml
 ```
 
-It prints `hopper`'s token. Send it to them via Slack/Signal (private
-channels). Restart beamd so the new token is loaded:
+(Drop `--slug` if you'd rather they share the flat namespace and just
+coordinate names with you.) It prints `hopper`'s token. Send it to them via
+Slack/Signal (private channels). Restart beamd so the new token is loaded:
 
 ```
 sudo docker compose restart beamd
@@ -493,7 +502,7 @@ sudo docker compose restart beamd
 Then your teammate runs on their laptop:
 
 ```
-beamd login --server YOUR_DOMAIN:443 --token <theirs>
+beamd login --server YOUR_DOMAIN --token <theirs>
 beamd open 3001 --as api
 # → https://api.hopper.YOUR_DOMAIN
 ```
@@ -517,10 +526,10 @@ DNS hasn't propagated yet. Wait a few minutes and retry
 **Browser shows "Your connection is not private" / NET::ERR_CERT_AUTHORITY_INVALID**
 Either:
 - Cert isn't issued yet (re-run `provision-dev`, watch `docker logs beamd`).
-- The SNI you're hitting doesn't match the wildcard. The cert covers
-  `*.YOUR_SLUG.YOUR_DOMAIN` (one DNS label deep). So
-  `api.YOUR_SLUG.YOUR_DOMAIN` works; `deep.nested.YOUR_SLUG.YOUR_DOMAIN`
-  doesn't.
+- The SNI you're hitting doesn't match the wildcard. The cert is one DNS
+  label deep: `*.YOUR_DOMAIN` (flat) covers `api.YOUR_DOMAIN` but not
+  `deep.nested.YOUR_DOMAIN`. (Namespaced edges are `*.YOUR_SLUG.YOUR_DOMAIN`,
+  covering `api.YOUR_SLUG.YOUR_DOMAIN`.)
 
 **`beamd open` hangs / "no client connected"**
 Check `~/.beamd/agent.log` on your laptop. The background agent is what
@@ -584,10 +593,11 @@ sudo systemctl enable --now beamd
 sudo systemctl status beamd
 ```
 
-`provision-dev` invocation in the binary path becomes:
+`provision-dev` invocation in the binary path becomes (add `--slug YOUR_SLUG`
+only if namespacing):
 
 ```
-beamd provision-dev --slug YOUR_SLUG --config /etc/beamd/beamd.yaml
+beamd provision-dev --config /etc/beamd/beamd.yaml
 ```
 
 Logs:

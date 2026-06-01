@@ -156,17 +156,23 @@ func relName(zone, baseDomain, label string) (string, error) {
 	return label + "." + sub, nil
 }
 
-// ProvisionSlug upserts the A (and optional AAAA) records that make
-// `<slug>.<base>` and `*.<slug>.<base>` resolve to the edge. `zone` is
-// the registered DNS zone (from ResolveZone); record names are written
-// relative to it so subdomain base_domains work.
-// Idempotent — re-running is a no-op if the records already match.
+// ProvisionSlug upserts the A (and optional AAAA) records that make a
+// developer's tunnels resolve to the edge. `zone` is the registered DNS zone
+// (from ResolveZone); record names are written relative to it so subdomain
+// base_domains work. Idempotent — re-running is a no-op if the records match.
+//
+// Namespaced (slug set): writes `<slug>.<base>` + `*.<slug>.<base>`.
+// Flat (slug ""): writes just `*.<base>` — the base apex already resolves to
+// the edge (it's the edge's own A record), and flat tunnels live directly at
+// `<name>.<base>`.
 func ProvisionSlug(ctx context.Context, p Provider, zone, baseDomain, slug, edgeIPv4, edgeIPv6 string) error {
-	if slug == "" {
-		return fmt.Errorf("slug is required")
-	}
 	if edgeIPv4 == "" && edgeIPv6 == "" {
 		return fmt.Errorf("at least one of edge_ipv4 or edge_ipv6 must be set")
+	}
+
+	labels := []string{"*"} // flat: the base wildcard
+	if slug != "" {
+		labels = []string{slug, "*." + slug}
 	}
 
 	var recs []libdns.Record
@@ -186,20 +192,16 @@ func ProvisionSlug(ctx context.Context, p Provider, zone, baseDomain, slug, edge
 		})
 		return nil
 	}
-	if edgeIPv4 != "" {
-		if err := addAddress(slug, edgeIPv4); err != nil {
-			return err
+	for _, label := range labels {
+		if edgeIPv4 != "" {
+			if err := addAddress(label, edgeIPv4); err != nil {
+				return err
+			}
 		}
-		if err := addAddress("*."+slug, edgeIPv4); err != nil {
-			return err
-		}
-	}
-	if edgeIPv6 != "" {
-		if err := addAddress(slug, edgeIPv6); err != nil {
-			return err
-		}
-		if err := addAddress("*."+slug, edgeIPv6); err != nil {
-			return err
+		if edgeIPv6 != "" {
+			if err := addAddress(label, edgeIPv6); err != nil {
+				return err
+			}
 		}
 	}
 

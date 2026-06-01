@@ -44,8 +44,10 @@ token: <the developer token your operator issued>
 
 (Interactive users instead run `beamd login`, which saves a named *profile*
 under `~/.beamd/profiles/`. Automation should prefer `--config` and stay out
-of that store.) The token maps to a **slug**; all of this app's tunnels live
-under `*.<slug>.<base_domain>`.
+of that store.) By default tunnels live at `<name>.<base_domain>`. If the
+operator gave your token a **slug**, they're namespaced under
+`<name>.<slug>.<base_domain>` instead — either way, read the URL from the
+`open --json` output rather than assembling it yourself.
 
 ## 3. Bring a tunnel up (detached + JSON)
 
@@ -57,8 +59,11 @@ beamd open 3000 --as my-app -d --json
 `--json` prints exactly one object and nothing else:
 
 ```json
-{ "url": "https://my-app.<slug>.<base>", "name": "my-app", "port": 3000, "slug": "<slug>", "baseDomain": "<base>" }
+{ "url": "https://my-app.<base>", "name": "my-app", "port": 3000, "slug": "", "baseDomain": "<base>" }
 ```
+
+(`slug` is `""` on a flat edge; on a namespaced one the `url` is
+`https://my-app.<slug>.<base>`. Always trust `url`.)
 
 Parse `url`, embed/open it. This is the path automation should use.
 
@@ -85,11 +90,11 @@ again (the first detached `open` spawns the agent automatically).
 
 ## 6. The one-label naming rule
 
-The per-developer wildcard cert covers `*.<slug>.<base>` — **exactly one DNS
-label deep**. So:
+The wildcard cert is **exactly one DNS label deep** — `*.<base>` (flat) or
+`*.<slug>.<base>` (namespaced). So a tunnel name must be a single label:
 
-- ✅ `my-app.<slug>.<base>`, `proj-ws-api.<slug>.<base>`
-- ❌ `a.b.<slug>.<base>` (nested labels don't get a cert and won't resolve)
+- ✅ `my-app.<base>`, `proj-ws-api.<base>` (or `my-app.<slug>.<base>`)
+- ❌ `a.b.<base>` (nested labels don't get a cert and won't resolve)
 
 Every `--as <name>` must be a single RFC 1123 label (lowercase
 alphanumeric + hyphens). Encode structure with hyphens, not dots — e.g. a

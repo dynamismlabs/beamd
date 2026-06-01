@@ -12,11 +12,13 @@ func TestExtractSlug(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"api.turing.beam.example.com", "turing", true},
-		{"web.hopper.beam.example.com", "hopper", true},
-		{"turing.beam.example.com", "", false}, // no app label
-		{"beam.example.com", "", false},      // apex
-		{"api.example.org", "", false},          // wrong base
+		{"api.turing.beam.example.com", "turing", true}, // namespaced
+		{"web.hopper.beam.example.com", "hopper", true}, // namespaced
+		{"hello.beam.example.com", "", true},            // flat: one label → *.<base>
+		{"turing.beam.example.com", "", true},           // flat (also a slug's bare apex)
+		{"beam.example.com", "", false},                 // apex itself
+		{"a.b.turing.beam.example.com", "", false},      // nested too deep
+		{"api.example.org", "", false},                  // wrong base
 		{"", "", false},
 	}
 	for _, c := range cases {
@@ -24,6 +26,38 @@ func TestExtractSlug(t *testing.T) {
 		if got != c.want || ok != c.ok {
 			t.Errorf("extractSlug(%q) = (%q, %v); want (%q, %v)", c.sni, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+func TestCertNamesFor(t *testing.T) {
+	base := "beam.example.com"
+	if got := certNamesFor("turing", base); len(got) != 2 ||
+		got[0] != "*.turing.beam.example.com" || got[1] != "turing.beam.example.com" {
+		t.Errorf("namespaced certNamesFor = %v", got)
+	}
+	if got := certNamesFor("", base); len(got) != 1 || got[0] != "*.beam.example.com" {
+		t.Errorf("flat certNamesFor = %v, want [*.beam.example.com]", got)
+	}
+}
+
+// A flat SNI (<name>.<base>) gets a real per-namespace cert, not the fallback.
+func TestSelfSignedManager_FlatIssuesWildcard(t *testing.T) {
+	m, err := NewSelfSignedManager("beam.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "hello.beam.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.IssuanceCount() != 1 {
+		t.Errorf("flat SNI should issue a cert; issuance = %d, want 1", m.IssuanceCount())
+	}
+	// A second flat tunnel reuses the same *.<base> cert — no new issuance.
+	if _, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: "world.beam.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if m.IssuanceCount() != 1 {
+		t.Errorf("second flat tunnel reused cert? issuance = %d, want 1", m.IssuanceCount())
 	}
 }
 

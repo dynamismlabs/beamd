@@ -67,7 +67,7 @@ func isInteractive() bool {
 
 func loginCmd(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com (port defaults to 443)")
+	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com")
 	token := fs.String("token", "", "bearer token (copy-paste flow); omit for device-code login")
 	insecure := fs.Bool("insecure", false, "skip TLS verification for the discovery + device-code calls (dev/self-signed setups)")
 	profileFlag := fs.String("profile", "", "profile to create/update (default: \"default\")")
@@ -83,7 +83,7 @@ func loginCmd(args []string) {
 		r := bufio.NewReader(os.Stdin)
 		if *server == "" {
 			fmt.Println("Connect this machine to a beamd edge.")
-			*server = prompt(r, "edge address (e.g. tunnel.example.com — :443 assumed)", "")
+			*server = prompt(r, "edge address (e.g. tunnel.example.com)", "")
 		}
 		if *token == "" {
 			fmt.Println("Your developer token — ask whoever runs the edge, or find it in the")
@@ -421,7 +421,13 @@ func runCmd(args []string) {
 
 	host := naming.Hostname(label, c.Slug(), c.BaseDomain())
 	publicURL := "https://" + host
-	baseSuffix := "." + c.Slug() + "." + c.BaseDomain()
+	// Vite/Next allowed-hosts: the wildcard parent of the tunnel host —
+	// `.<slug>.<base>` when namespaced, `.<base>` when flat. Derive it from
+	// the host (drop the first label) so it's correct either way.
+	baseSuffix := host
+	if i := strings.IndexByte(host, '.'); i >= 0 {
+		baseSuffix = host[i:]
+	}
 
 	// Make any framework reachable: inject --port/--host for the $PORT-ignorers.
 	cmdArgs, _ = injectFrameworkFlags(cmdArgs, port)

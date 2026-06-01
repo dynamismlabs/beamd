@@ -221,12 +221,14 @@ func resolveZone(ctx context.Context, cfg *config.Server) (string, error) {
 func provisionDevCmd(args []string) {
 	fs := flag.NewFlagSet("provision-dev", flag.ExitOnError)
 	configPath := fs.String("config", "/etc/beamd/beamd.yaml", "path to config file")
-	slug := fs.String("slug", "", "developer slug to provision (required)")
+	slug := fs.String("slug", "", "namespace tunnels under <slug> (omit for flat routing: *.<base>)")
 	_ = fs.Parse(args)
 
-	if *slug == "" {
-		fmt.Fprintln(os.Stderr, "provision-dev: --slug is required")
-		os.Exit(2)
+	if *slug != "" {
+		if err := naming.ValidateLabel(*slug); err != nil {
+			fmt.Fprintln(os.Stderr, "invalid slug:", err)
+			os.Exit(2)
+		}
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
@@ -409,17 +411,15 @@ func prompt(r *bufio.Reader, label, defaultVal string) string {
 func addDeveloperCmd(args []string) {
 	fs := flag.NewFlagSet("add-developer", flag.ExitOnError)
 	configPath := fs.String("config", "/etc/beamd/beamd.yaml", "path to beamd.yaml")
-	slug := fs.String("slug", "", "developer slug (RFC 1123 label) — required")
+	slug := fs.String("slug", "", "namespace this developer's tunnels under <slug> (omit for flat: <name>.<base>)")
 	skipProvision := fs.Bool("skip-provision", false, "skip the DNS + cert provision step (token-only)")
 	_ = fs.Parse(args)
 
-	if *slug == "" {
-		fmt.Fprintln(os.Stderr, "add-developer: --slug is required")
-		os.Exit(2)
-	}
-	if err := naming.ValidateLabel(*slug); err != nil {
-		fmt.Fprintln(os.Stderr, "invalid slug:", err)
-		os.Exit(2)
+	if *slug != "" {
+		if err := naming.ValidateLabel(*slug); err != nil {
+			fmt.Fprintln(os.Stderr, "invalid slug:", err)
+			os.Exit(2)
+		}
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
@@ -445,11 +445,16 @@ func addDeveloperCmd(args []string) {
 		}
 	}
 
-	for _, existing := range tokens {
-		if existing == *slug {
-			fmt.Fprintf(os.Stderr, "slug %q already has a token in %s — refusing to issue another\n", *slug, tokensPath)
-			fmt.Fprintln(os.Stderr, "if you need to rotate, delete the existing entry first")
-			os.Exit(2)
+	// A non-empty slug is one developer → one token; refuse a duplicate.
+	// Flat ("") tokens are the shared root namespace, so multiple are fine
+	// (e.g. several of your own machines).
+	if *slug != "" {
+		for _, existing := range tokens {
+			if existing == *slug {
+				fmt.Fprintf(os.Stderr, "slug %q already has a token in %s — refusing to issue another\n", *slug, tokensPath)
+				fmt.Fprintln(os.Stderr, "if you need to rotate, delete the existing entry first")
+				os.Exit(2)
+			}
 		}
 	}
 
@@ -502,18 +507,27 @@ func addDeveloperCmd(args []string) {
 		}
 	}
 
+	exampleHost := "api." + cfg.BaseDomain
+	if *slug != "" {
+		exampleHost = "api." + *slug + "." + cfg.BaseDomain
+	}
+
 	fmt.Println()
 	fmt.Println("developer added:")
-	fmt.Printf("  slug:   %s\n", *slug)
-	fmt.Printf("  token:  %s\n", token)
+	if *slug == "" {
+		fmt.Printf("  routing: flat — tunnels at <name>.%s\n", cfg.BaseDomain)
+	} else {
+		fmt.Printf("  slug:    %s — tunnels at <name>.%s.%s\n", *slug, *slug, cfg.BaseDomain)
+	}
+	fmt.Printf("  token:   %s\n", token)
 	fmt.Println()
 	fmt.Println("Restart beamd to pick up the new token (the file is read at startup):")
 	fmt.Println("  docker restart beamd        # if running under Docker")
 	fmt.Println("  systemctl restart beamd     # if running as a systemd unit")
 	fmt.Println()
 	fmt.Println("Developer setup (their laptop):")
-	fmt.Printf("  beamd login --server %s:443 --token <token above>\n", cfg.BaseDomain)
-	fmt.Println("  beamd open 3001 --as api")
+	fmt.Printf("  beamd login --server %s --token <token above>\n", cfg.BaseDomain)
+	fmt.Printf("  beamd open 3001 --as api      # → https://%s\n", exampleHost)
 }
 
 // atomicWrite writes data to path via a sibling tmpfile + rename, so a
