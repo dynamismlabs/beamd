@@ -18,10 +18,15 @@ import (
 // meeting a future key falls back gracefully instead of erroring
 // (forward-compatible by construction).
 type Project struct {
-	Profile string `yaml:"profile,omitempty"` // references a global profile by name (personal)
-	Server  string `yaml:"server,omitempty"`  // references an edge by hostname (committable)
-	Name    string `yaml:"name,omitempty"`    // literal label (§2)
-	From    string `yaml:"from,omitempty"`    // derive source (§2)
+	Server string `yaml:"server,omitempty"` // which edge/account, by hostname (committable)
+	Scope  string `yaml:"scope,omitempty"`  // which org/scope on that account (committable)
+	Name   string `yaml:"name,omitempty"`   // literal label (§2)
+	From   string `yaml:"from,omitempty"`   // derive source (§2)
+
+	// Profile is the superseded per-edge alias (pre-accounts). Still parsed so
+	// an old .beamd doesn't error, but no longer used for resolution — pin the
+	// edge with `server:` instead. See docs/identity-and-accounts.md.
+	Profile string `yaml:"profile,omitempty"`
 }
 
 const (
@@ -96,6 +101,9 @@ func loadProjectFile(path string, p *Project) error {
 	}
 	if overlay.Server != "" {
 		p.Server = overlay.Server
+	}
+	if overlay.Scope != "" {
+		p.Scope = overlay.Scope
 	}
 	if overlay.Name != "" {
 		p.Name = overlay.Name

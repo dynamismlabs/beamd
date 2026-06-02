@@ -90,8 +90,8 @@ func reloadCmd(args []string) {
 	if h, err := lc.Ping(ctx); err == nil {
 		slug = h.Slug
 	}
-	if rc.Profile != "" {
-		fmt.Printf("agent reloaded (profile %q, slug %s)\n", rc.Profile, orDash(slug))
+	if rc.Server != "" {
+		fmt.Printf("agent reloaded (%s, slug %s)\n", rc.Server, orDash(slug))
 	} else {
 		fmt.Printf("agent reloaded (slug %s)\n", orDash(slug))
 	}

@@ -52,10 +52,14 @@ func main() {
 		loginCmd(os.Args[2:])
 	case "logout":
 		logoutCmd(os.Args[2:])
-	case "use":
-		useCmd(os.Args[2:])
-	case "profiles":
-		profilesCmd(os.Args[2:])
+	case "default":
+		defaultCmd(os.Args[2:])
+	case "accounts":
+		accountsCmd(os.Args[2:])
+	case "orgs", "scopes":
+		orgsCmd(os.Args[2:])
+	case "whoami":
+		whoamiCmd(os.Args[2:])
 	case "check":
 		checkCmd(os.Args[2:])
 	case "reload":
@@ -100,20 +104,22 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  provision-dev   write DNS + pre-warm cert for a slug (low-level — add-developer wraps this)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "client:")
-	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd edge (login [--profile <name>])")
-	fmt.Fprintln(os.Stderr, "  logout          remove a profile (logout [--profile <name>])")
-	fmt.Fprintln(os.Stderr, "  use             set the current profile (use <name>)")
-	fmt.Fprintln(os.Stderr, "  profiles        list profiles, marking the current one")
+	fmt.Fprintln(os.Stderr, "  login           authenticate against a beamd edge (login --server <edge> [--token <t>])")
+	fmt.Fprintln(os.Stderr, "  logout          remove an account (logout [--server <edge>])")
+	fmt.Fprintln(os.Stderr, "  accounts        list the edges you're logged into, marking the current one")
+	fmt.Fprintln(os.Stderr, "  orgs            list the orgs/scopes your current account can act in")
+	fmt.Fprintln(os.Stderr, "  default         show or set your account's default scope (default [<scope>])")
+	fmt.Fprintln(os.Stderr, "  whoami          show the resolved account + scope")
 	fmt.Fprintln(os.Stderr, "  check           verify credentials against the edge (no tunnel, no agent)")
 	fmt.Fprintln(os.Stderr, "  open            expose a local port as a public URL (foreground; -d to detach)")
 	fmt.Fprintln(os.Stderr, "  close           remove a detached tunnel")
 	fmt.Fprintln(os.Stderr, "  run             run a command and expose its port: run [name] -- <cmd...>")
 	fmt.Fprintln(os.Stderr, "  list            list detached tunnels")
-	fmt.Fprintln(os.Stderr, "  status          show profile + agent + connection status")
+	fmt.Fprintln(os.Stderr, "  status          show account + scope + agent + connection status")
 	fmt.Fprintln(os.Stderr, "  reload          restart the background agent with fresh credentials")
 	fmt.Fprintln(os.Stderr, "  mcp             run the MCP stdio server")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "  most client commands accept -p/--profile <name> to pick an edge")
+	fmt.Fprintln(os.Stderr, "  most client commands accept --server <edge> and --scope <org> to pick where a tunnel lands")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  version         print version and exit")
 }

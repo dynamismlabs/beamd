@@ -68,12 +68,11 @@ func isInteractive() bool {
 func loginCmd(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com")
-	token := fs.String("token", "", "bearer token (copy-paste flow); omit for device-code login")
+	token := fs.String("token", "", "bearer token / API key (copy-paste); omit for device-code login")
+	scope := fs.String("scope", "", "default scope for this account (hosted; default: personal)")
 	insecure := fs.Bool("insecure", false, "skip TLS verification for the discovery + device-code calls (dev/self-signed setups)")
-	profileFlag := fs.String("profile", "", "profile to create/update (default: \"default\")")
-	fs.StringVar(profileFlag, "p", "", "shorthand for --profile")
-	configPath := fs.String("config", "", "write to an explicit config path instead of a profile (automation)")
-	_ = fs.Parse(hoistFlags(args, map[string]bool{"server": true, "token": true, "profile": true, "p": true, "config": true}))
+	configPath := fs.String("config", "", "write to an explicit config path instead of an account (automation)")
+	_ = fs.Parse(hoistFlags(args, map[string]bool{"server": true, "token": true, "scope": true, "config": true}))
 
 	// In an interactive terminal, prompt for anything missing (with hints)
 	// instead of erroring — friendlier than re-typing the whole command.
@@ -99,6 +98,7 @@ func loginCmd(args []string) {
 		os.Exit(2)
 	}
 
+	kind := "token"
 	if *token == "" {
 		got, err := deviceCodeLogin(*server, *insecure)
 		if err != nil {
@@ -106,13 +106,13 @@ func loginCmd(args []string) {
 			os.Exit(1)
 		}
 		*token = got
+		kind = "session"
 	}
 
-	cfg := &config.Client{Server: *server, Token: *token, InsecureSkipVerify: *insecure}
-
-	// Explicit --config writes a standalone config (the automation path),
-	// bypassing the profile store entirely.
+	// Explicit --config writes a standalone {server, token} config (the
+	// automation path), bypassing the account store entirely.
 	if *configPath != "" {
+		cfg := &config.Client{Server: *server, Token: *token, InsecureSkipVerify: *insecure}
 		if err := config.SaveClient(cfg, *configPath); err != nil {
 			fmt.Fprintln(os.Stderr, "save config:", err)
 			os.Exit(1)
@@ -121,18 +121,17 @@ func loginCmd(args []string) {
 		return
 	}
 
-	// Profile path: create/update profiles/<name> without clobbering others;
-	// the first profile created becomes current.
-	name := *profileFlag
-	if name == "" {
-		name = "default"
+	// Account path: keyed by server, one file per edge. The first account
+	// created becomes current.
+	acct := &config.Account{
+		Server:             *server,
+		Token:              *token,
+		Kind:               kind,
+		InsecureSkipVerify: *insecure,
+		DefaultScope:       *scope,
 	}
-	if err := naming.ValidateLabel(name); err != nil {
-		fmt.Fprintln(os.Stderr, "invalid profile name:", err)
-		os.Exit(2)
-	}
-	if err := config.SaveProfile(name, cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "save profile:", err)
+	if err := config.SaveAccount(acct); err != nil {
+		fmt.Fprintln(os.Stderr, "save account:", err)
 		os.Exit(1)
 	}
 	g, err := config.LoadGlobal()
@@ -140,17 +139,17 @@ func loginCmd(args []string) {
 		fmt.Fprintln(os.Stderr, "load global config:", err)
 		os.Exit(1)
 	}
-	firstProfile := g.Current == ""
-	if firstProfile {
-		g.Current = name
+	firstAccount := g.Current == ""
+	if firstAccount {
+		g.Current = *server
 		if err := config.SaveGlobal(g); err != nil {
 			fmt.Fprintln(os.Stderr, "save global config:", err)
 			os.Exit(1)
 		}
 	}
-	fmt.Printf("logged in (profile %q)\n", name)
-	if !firstProfile && g.Current != name {
-		fmt.Printf("current profile is %q — run `beamd use %s` to switch\n", g.Current, name)
+	fmt.Printf("logged in (%s)\n", *server)
+	if !firstAccount && g.Current != *server {
+		fmt.Printf("current account is %s — use `--server %s` or `beamd default` to change defaults\n", g.Current, *server)
 	}
 }
 
@@ -657,11 +656,7 @@ func statusCmd(args []string) {
 	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
 
 	rc := resolveContext(cf)
-
-	server := ""
-	if rc.Client != nil {
-		server = rc.Client.Server
-	}
+	server := rc.Server
 
 	running := rc.AgentSocket != "" && daemon.IsRunning(rc.AgentSocket)
 	slug := ""
@@ -677,22 +672,22 @@ func statusCmd(args []string) {
 
 	if *jsonOut {
 		_ = json.NewEncoder(os.Stdout).Encode(struct {
-			Profile      string `json:"profile"`
 			AgentRunning bool   `json:"agentRunning"`
 			Server       string `json:"server"`
 			Slug         string `json:"slug"`
+			Scope        string `json:"scope"`
 			Healthy      bool   `json:"healthy"`
-		}{rc.Profile, running, server, slug, healthy})
+		}{running, server, slug, rc.Scope, healthy})
 		return
 	}
 
-	if rc.Profile != "" {
-		fmt.Printf("profile: %s\n", rc.Profile)
+	if server != "" {
+		fmt.Printf("account: %s\n", server)
+	}
+	if rc.Scope != "" {
+		fmt.Printf("scope:   %s\n", rc.Scope)
 	}
 	fmt.Printf("agent:   %s\n", boolWord(running, "running", "not running"))
-	if server != "" {
-		fmt.Printf("server:  %s\n", server)
-	}
 	if slug != "" {
 		fmt.Printf("slug:    %s\n", slug)
 	}

@@ -46,57 +46,57 @@ func TestResolveLabel(t *testing.T) {
 	}
 }
 
-func TestSelectProfile_Ladder(t *testing.T) {
-	t.Setenv("BEAMD_PROFILE", "")
-	empty := ""
-	mk := func(profile string) *clientFlags {
-		p := profile
-		return &clientFlags{profile: &p, config: &empty}
+func TestSelectAccount_Ladder(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BEAMD_SERVER", "")
+	mk := func(server string) *clientFlags {
+		s, empty := server, ""
+		return &clientFlags{server: &s, scope: &empty, config: &empty}
 	}
 
-	// flag wins.
-	if n, src, _ := selectProfile(mk("work"), &config.Project{Profile: "ignored"}, &config.Global{Current: "cur"}); n != "work" || src != "flag" {
-		t.Errorf("flag: got %q/%q", n, src)
+	// flag wins, normalized to :443.
+	if srv, src := selectAccount(mk("flag.test"), &config.Project{Server: "proj.test"}, &config.Global{Current: "cur.test:443"}); srv != "flag.test:443" || src != "flag" {
+		t.Errorf("flag: got %q/%q", srv, src)
 	}
 	// env beats project + current.
-	t.Setenv("BEAMD_PROFILE", "envp")
-	if n, src, _ := selectProfile(mk(""), &config.Project{Profile: "pp"}, &config.Global{Current: "cur"}); n != "envp" || src != "env" {
-		t.Errorf("env: got %q/%q", n, src)
+	t.Setenv("BEAMD_SERVER", "env.test")
+	if srv, src := selectAccount(mk(""), &config.Project{Server: "proj.test"}, &config.Global{Current: "cur.test:443"}); srv != "env.test:443" || src != "env" {
+		t.Errorf("env: got %q/%q", srv, src)
 	}
-	t.Setenv("BEAMD_PROFILE", "")
-	// .beamd profile beats current.
-	if n, src, _ := selectProfile(mk(""), &config.Project{Profile: "pp"}, &config.Global{Current: "cur"}); n != "pp" || src != "project" {
-		t.Errorf("project: got %q/%q", n, src)
+	t.Setenv("BEAMD_SERVER", "")
+	// .beamd server beats current.
+	if srv, src := selectAccount(mk(""), &config.Project{Server: "proj.test"}, &config.Global{Current: "cur.test:443"}); srv != "proj.test:443" || src != "project" {
+		t.Errorf("project: got %q/%q", srv, src)
 	}
 	// global current is the fallback.
-	if n, src, _ := selectProfile(mk(""), nil, &config.Global{Current: "cur"}); n != "cur" || src != "current" {
-		t.Errorf("current: got %q/%q", n, src)
+	if srv, src := selectAccount(mk(""), nil, &config.Global{Current: "cur.test:443"}); srv != "cur.test:443" || src != "current" {
+		t.Errorf("current: got %q/%q", srv, src)
 	}
-	// Nothing → empty.
-	if n, _, _ := selectProfile(mk(""), nil, &config.Global{}); n != "" {
-		t.Errorf("none: got %q", n)
+	// Nothing + no accounts → empty.
+	if srv, src := selectAccount(mk(""), nil, &config.Global{}); srv != "" || src != "" {
+		t.Errorf("none: got %q/%q", srv, src)
 	}
 }
 
-func TestSelectProfile_ServerMatch(t *testing.T) {
+func TestSelectAccount_SingleAndAmbiguous(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("BEAMD_PROFILE", "")
-	if err := config.SaveProfile("acme", &config.Client{Server: "tunnel.acme.com:443", Token: "tok"}); err != nil {
+	t.Setenv("BEAMD_SERVER", "")
+	empty := ""
+	cf := &clientFlags{server: &empty, scope: &empty, config: &empty}
+
+	// Exactly one account → use it without a flag.
+	if err := config.SaveAccount(&config.Account{Server: "solo.test:443", Token: "T"}); err != nil {
 		t.Fatal(err)
 	}
-	empty := ""
-	cf := &clientFlags{profile: &empty, config: &empty}
-
-	// A committed `.beamd { server: tunnel.acme.com }` (no port) resolves to
-	// the local profile whose server matches, whatever it's named.
-	n, src, unmatched := selectProfile(cf, &config.Project{Server: "tunnel.acme.com"}, &config.Global{})
-	if n != "acme" || src != "project-server" || unmatched != "" {
-		t.Errorf("server match: got %q/%q/%q, want acme/project-server/\"\"", n, src, unmatched)
+	if srv, src := selectAccount(cf, nil, &config.Global{}); srv != "solo.test:443" || src != "only" {
+		t.Errorf("single account: got %q/%q, want solo.test:443/only", srv, src)
 	}
 
-	// No matching profile → signals the unmatched server for messaging.
-	n, _, unmatched = selectProfile(cf, &config.Project{Server: "tunnel.nope.com"}, &config.Global{})
-	if n != "" || unmatched != "tunnel.nope.com" {
-		t.Errorf("server unmatched: got name=%q unmatched=%q", n, unmatched)
+	// A second account, nothing selecting → ambiguous (no silent guess).
+	if err := config.SaveAccount(&config.Account{Server: "two.test:443", Token: "T2"}); err != nil {
+		t.Fatal(err)
+	}
+	if srv, src := selectAccount(cf, nil, &config.Global{}); srv != "" || src != "ambiguous" {
+		t.Errorf("ambiguous: got %q/%q, want \"\"/ambiguous", srv, src)
 	}
 }

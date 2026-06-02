@@ -1,10 +1,15 @@
 package main
 
 // Identity + naming resolution shared by every client command. One
-// resolveContext() returns a concrete {server, token} + agent socket + the
-// project/global context for naming — commands consume *that*, never a
-// profile name, so the personal→shared (profile→server) expansion in the
-// spec is additive (see "Evolving personal → shared").
+// resolveContext() returns a concrete {server, token} credential + the
+// resolved scope + agent socket + project/global context for naming —
+// commands consume *that*, never an account/profile name.
+//
+// Two axes resolve the same way (CLI flag > project .beamd > default):
+//   - which server (→ which account)   via selectAccount
+//   - which scope (org, within a login) via resolveScope
+// An explicit --config bypasses all of it (the automation path). See
+// docs/identity-and-accounts.md.
 
 import (
 	"flag"
@@ -16,25 +21,26 @@ import (
 )
 
 // clientFlags are the identity-selection flags common to client commands.
-// An explicit --config bypasses profiles entirely (the automation path);
-// otherwise -p/--profile selects among ~/.beamd/profiles.
+// --config bypasses accounts entirely (automation); otherwise --server picks
+// which account (edge) and --scope picks the org within it.
 type clientFlags struct {
-	profile *string
-	config  *string
+	server *string
+	scope  *string
+	config *string
 }
 
 func addClientFlags(fs *flag.FlagSet) *clientFlags {
 	cf := &clientFlags{}
-	cf.profile = fs.String("profile", "", "profile to use (default: the current profile)")
-	fs.StringVar(cf.profile, "p", "", "shorthand for --profile")
-	cf.config = fs.String("config", "", "explicit client config path (bypasses profiles; the automation path)")
+	cf.server = fs.String("server", "", "edge server to target (default: your current account)")
+	cf.scope = fs.String("scope", "", "org/scope for the tunnel (hosted; default: your default scope)")
+	cf.config = fs.String("config", "", "explicit client config path (bypasses accounts; the automation path)")
 	return cf
 }
 
 // clientFlagValueNames are the value-consuming flags to hoist so they can
-// appear after positionals (e.g. `beamd open 3000 -p work`).
+// appear after positionals (e.g. `beamd open 3000 --server x`).
 func clientFlagValueNames(extra ...string) map[string]bool {
-	m := map[string]bool{"profile": true, "p": true, "config": true}
+	m := map[string]bool{"server": true, "scope": true, "config": true}
 	for _, e := range extra {
 		m[e] = true
 	}
@@ -42,12 +48,14 @@ func clientFlagValueNames(extra ...string) map[string]bool {
 }
 
 // tunnelContext is the resolved identity + context. Client is nil when no
-// usable profile was found; commands that need auth call mustAuth().
+// usable account was found; commands that need auth call mustAuth().
 type tunnelContext struct {
-	Client      *config.Client  // {server, token} — nil if unresolved
-	Profile     string          // selected profile name ("" when --config was used)
-	ConfigPath  string          // path to hand the detached agent (profile file or --config)
-	AgentSocket string          // this profile's detached-agent socket
+	Account     *config.Account // the selected account (nil on --config or unresolved)
+	Client      *config.Client  // {server, token} credential — nil if unresolved
+	Server      string          // resolved server (for display/messaging)
+	Scope       string          // resolved requested scope ("" = personal/default)
+	ConfigPath  string          // path to hand the detached agent (account file or --config)
+	AgentSocket string          // this account's detached-agent socket
 	Project     *config.Project // nearest .beamd (may be nil)
 	Global      *config.Global  // global config (current + naming defaults)
 	Cwd         string
@@ -55,7 +63,7 @@ type tunnelContext struct {
 }
 
 // resolveContext runs the full identity ladder. It never exits for an
-// unresolved profile (so read-only commands can operate on an absent agent);
+// unresolved account (so read-only commands can operate on an absent agent);
 // commands needing credentials call mustAuth().
 func resolveContext(cf *clientFlags) *tunnelContext {
 	ctx := &tunnelContext{}
@@ -70,65 +78,58 @@ func resolveContext(cf *clientFlags) *tunnelContext {
 		}
 		c.Server = normalizeServerAddr(c.Server) // tolerate a port-less server:
 		ctx.Client = c
+		ctx.Server = c.Server
 		ctx.ConfigPath = *cf.config
 		ctx.AgentSocket = c.AgentSocket
+		ctx.Scope = *cf.scope // honored if set; an API key's scope is fixed regardless
 		ctx.loadProjectAndGlobal()
 		return ctx
 	}
 
 	ctx.loadProjectAndGlobal()
 
-	name, source, serverUnmatched := selectProfile(cf, ctx.Project, ctx.Global)
-	ctx.Profile = name
+	server, source := selectAccount(cf, ctx.Project, ctx.Global)
+	ctx.Server = server
 
-	if name == "" {
-		if serverUnmatched != "" {
-			ctx.authErr = fmt.Sprintf(
-				"this project tunnels through %q, but you're not logged into it — run `beamd login`",
-				serverUnmatched)
+	if server == "" {
+		if source == "ambiguous" {
+			ctx.authErr = "you have multiple accounts — pass --server <edge>, add a .beamd, or set a current one with `beamd login`"
 		} else {
-			ctx.authErr = "no profile configured — run `beamd login`"
+			ctx.authErr = "no account configured — run `beamd login`"
 		}
+		ctx.Scope = *cf.scope
 		return ctx
 	}
 
-	// A profile name becomes a filename under ~/.beamd; reject anything that
-	// isn't a clean label so `-p ../x` can't escape the profiles dir.
-	if err := naming.ValidateLabel(name); err != nil {
-		ctx.authErr = fmt.Sprintf("invalid profile name %q (must be a simple name like `work`)", name)
-		return ctx
-	}
-
-	pp, _ := config.ProfilePath(name)
-	ctx.ConfigPath = pp
-	if !config.ProfileExists(name) {
+	if !config.AccountExists(server) {
 		if source == "project" {
 			ctx.authErr = fmt.Sprintf(
-				"this project uses profile %q, which isn't set up here — run `beamd login --profile %s`",
-				name, name)
+				"this project tunnels through %q, but you're not logged into it — run `beamd login --server %s`",
+				server, server)
 		} else {
-			ctx.authErr = fmt.Sprintf(
-				"profile %q not found — run `beamd login --profile %s` (or `beamd profiles` to list)",
-				name, name)
+			ctx.authErr = fmt.Sprintf("not logged into %q — run `beamd login --server %s`", server, server)
 		}
-		ctx.AgentSocket, _ = config.AgentSocketFor(name) // best-effort for read-only cmds
+		ctx.AgentSocket, _ = config.AgentSocketFor(server) // best-effort for read-only cmds
+		ctx.Scope = *cf.scope
 		return ctx
 	}
 
-	c, err := config.LoadProfile(name)
+	a, err := config.LoadAccount(server)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "load profile:", err)
+		fmt.Fprintln(os.Stderr, "load account:", err)
 		os.Exit(1)
 	}
-	c.Server = normalizeServerAddr(c.Server) // tolerate a port-less server:
-	ctx.Client = c
-	ctx.AgentSocket, _ = config.AgentSocketFor(name)
+	a.Server = normalizeServerAddr(a.Server) // tolerate a port-less server:
+	ctx.Account = a
+	ctx.Client = a.Client()
+	ctx.ConfigPath, _ = config.AccountPath(server)
+	ctx.AgentSocket, _ = config.AgentSocketFor(server)
+	ctx.Scope = resolveScope(cf, ctx.Project, a)
 	return ctx
 }
 
 // loadProjectAndGlobal populates ctx.Project + ctx.Global, surfacing a parse
-// error in either file rather than silently falling back (a corrupt config is
-// a user error worth reporting, not hiding behind "no profile configured").
+// error in either file rather than silently falling back.
 func (ctx *tunnelContext) loadProjectAndGlobal() {
 	p, _, perr := config.DiscoverProject(ctx.Cwd)
 	if perr != nil {
@@ -144,46 +145,46 @@ func (ctx *tunnelContext) loadProjectAndGlobal() {
 	ctx.Global = g
 }
 
-// selectProfile walks the profile ladder: -p/--profile → BEAMD_PROFILE →
-// .beamd profile: → .beamd server: (matched to a local profile) →
-// global current. Returns the chosen name, where it came from (for
-// messaging), and — when a .beamd server: matched nothing — that server.
-func selectProfile(cf *clientFlags, project *config.Project, global *config.Global) (name, source, serverUnmatched string) {
-	if *cf.profile != "" {
-		return *cf.profile, "flag", ""
+// selectAccount walks the server ladder: --server → BEAMD_SERVER → .beamd
+// server: → global current → the only account. Returns the chosen server
+// (normalized) and where it came from. "" with source "ambiguous" means
+// multiple accounts and nothing selected one.
+func selectAccount(cf *clientFlags, project *config.Project, global *config.Global) (server, source string) {
+	if *cf.server != "" {
+		return normalizeServerAddr(*cf.server), "flag"
 	}
-	if e := os.Getenv("BEAMD_PROFILE"); e != "" {
-		return e, "env", ""
-	}
-	if project != nil && project.Profile != "" {
-		return project.Profile, "project", ""
+	if e := os.Getenv("BEAMD_SERVER"); e != "" {
+		return normalizeServerAddr(e), "env"
 	}
 	if project != nil && project.Server != "" {
-		if n := findProfileByServer(project.Server); n != "" {
-			return n, "project-server", ""
-		}
-		return "", "project-server", project.Server
+		return normalizeServerAddr(project.Server), "project"
 	}
 	if global != nil && global.Current != "" {
-		return global.Current, "current", ""
+		return normalizeServerAddr(global.Current), "current"
 	}
-	return "", "", ""
+	accts, _ := config.ListAccounts()
+	switch len(accts) {
+	case 0:
+		return "", ""
+	case 1:
+		return normalizeServerAddr(accts[0].Server), "only"
+	default:
+		return "", "ambiguous"
+	}
 }
 
-// findProfileByServer returns the name of the local profile whose server
-// matches `server` (so a committed `.beamd { server: … }` resolves for any
-// teammate regardless of what they named their profile). "" if none match.
-func findProfileByServer(server string) string {
-	want := normalizeServerAddr(server)
-	names, _ := config.ListProfiles()
-	for _, n := range names {
-		c, err := config.LoadProfile(n)
-		if err != nil {
-			continue
-		}
-		if normalizeServerAddr(c.Server) == want {
-			return n
-		}
+// resolveScope walks the scope ladder: --scope → .beamd scope: → the account's
+// default scope → personal (""). An empty result means "the server picks"
+// (personal for a session, the fixed slug for an OSS/key account).
+func resolveScope(cf *clientFlags, project *config.Project, a *config.Account) string {
+	if *cf.scope != "" {
+		return *cf.scope
+	}
+	if project != nil && project.Scope != "" {
+		return project.Scope
+	}
+	if a != nil && a.DefaultScope != "" {
+		return a.DefaultScope
 	}
 	return ""
 }
