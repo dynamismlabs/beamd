@@ -207,39 +207,55 @@ beamd open 3001 --from dir     # derive it      → <cwd-name>.<base>
 ```
 
 `--from` sources: `port` (default), `dir` (folder name), `repo` (git repo
-name), `branch` (current git branch). `--as` (literal) wins if you pass both.
+name), `branch` (current git branch), `worktree` (`<branch>-<repo>` when in a
+linked git worktree on a non-`main`/`master` branch, else the repo name).
+`--as` (literal) wins if you pass both.
 
-### Profiles — many edges, no logout churn
+### Accounts — many edges, no logout churn
 
-Stay logged into several edges at once and switch with a flag (the
-kubectl / `gh auth` model):
+Stay logged into several edges at once; each is an **account**, keyed by its
+server (the kubectl / `gh auth` model):
 
 ```
-beamd login --server acme.com  --token <T> --profile acme
-beamd login --server other.com --token <T> --profile personal
-beamd profiles                 # list them; * marks the current
-beamd use acme                 # set the default
-beamd open 3001 -p personal    # one-off override (any command takes -p)
-beamd logout --profile acme    # remove one
+beamd login --server acme.com   --token <T>
+beamd login --server other.com  --token <T>
+beamd accounts                  # list them; * marks the current
+beamd open 3001 --server other.com   # one-off override (any command takes --server)
+beamd logout --server acme.com  # remove one
 ```
 
-The first profile created becomes current; `BEAMD_PROFILE=<name>` overrides
-per-shell. (No `--profile` at all? `beamd login` just uses a profile named
-`default`.)
+The first account becomes current; `BEAMD_SERVER=<edge>` overrides per-shell.
+
+### Scope (org) — one login, many orgs
+
+On a hosted edge you belong to one or more **scopes** — your personal namespace
+plus any teams. Scope is a *selector*, not a separate login: pick it per
+command, per project, or set a standing default.
+
+```
+beamd orgs                      # list the orgs your account can act in
+beamd default acme              # your standing default scope (personal until set)
+beamd open 3001 --scope beta    # one-off override
+beamd whoami                    # show the resolved account + scope
+```
+
+Precedence: `--scope` > a project `.beamd` `scope:` > `beamd default` > personal.
+A self-hosted OSS edge has no scopes — your token fixes the namespace.
 
 ### Project config (`.beamd`)
 
-Commit a `.beamd` so the right edge + name come from context — `open` /
+Commit a `.beamd` so the right edge + scope + name come from context — `open` /
 `run` then need zero flags:
 
 ```yaml
 # .beamd
-profile: acme      # which edge (a profile name); or `server: acme.com`
+server: acme.com   # which edge (account)
+scope: acme        # which org (hosted; omit for an OSS edge)
 from: repo         # how to name the tunnel (or `name: <literal>`)
 ```
 
 beamd walks up from the cwd to find it; a gitignored `.beamd.local` overrides
-it (like `.env` / `.env.local`). A `.beamd` references a profile or edge —
+it (like `.env` / `.env.local`). A `.beamd` references an edge + scope —
 **never a token** — so it's safe to commit.
 
 ### Wrap a command (`beamd run`)
@@ -253,7 +269,7 @@ beamd run -- npm run dev       # name from .beamd / --from / port
 beamd run api -- npm run dev    # explicit name
 ```
 
-`run` resolves the edge + name exactly like `open` (profiles, `.beamd`,
+`run` resolves the edge + scope + name exactly like `open` (accounts, `.beamd`,
 `--as` / `--from`) and makes **any** framework reachable through the tunnel:
 it sets `$BEAMD_URL` (the public URL, for OAuth callbacks / absolute links),
 injects the allowed-host env so Vite/Next don't reject the tunnel domain,
@@ -294,6 +310,7 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `token_store` | yes | `file:<path>` (JSON `{token: slug}` map), or `memory:` for tests |
 | `data_dir` | defaults to `/var/lib/beamd` | Where beamd persists state — cert cache, ACME account, and per-tunnel bandwidth totals (`bandwidth.json`) |
 | `max_tunnels_per_token` | defaults to 25 | Cap on concurrent tunnels per developer |
+| `max_request_body_bytes` | defaults to 32 MiB (`33554432`) | Per-request public body cap; oversized requests get HTTP 413. Set `-1` to disable |
 | `preview_embed` | defaults to false | Strip `X-Frame-Options` + CSP `frame-ancestors` from tunnel responses so previews embed cross-origin in an iframe |
 
 ## DNS providers

@@ -9,6 +9,11 @@
 > **We are the only consumers — no migration shim.** Existing
 > `~/.beamd/profiles/*` are not auto-converted; a one-line re-login recreates
 > them as accounts. (Per the sole-user / robustness-over-compat stance.)
+>
+> **Status:** Phase 0 ✅, Phase 1 ✅, Phase 3 ✅ shipped on `main`. **Phase 2
+> (device-code *session* login + org discovery) is pending** — it needs the
+> reference web app to issue a session + return the scope set. Token and
+> `--config` login work today.
 
 ## Consumer contract — must not break (guardrails for every phase)
 

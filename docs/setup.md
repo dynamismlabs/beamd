@@ -407,11 +407,11 @@ beamd version
 beamd login --server YOUR_DOMAIN --token YOUR_TOKEN
 ```
 
-Should print `logged in (profile "default")`. This saves a profile under
-`~/.beamd/profiles/` and marks it current. To stay logged into more than one
-edge at once, pass `--profile <name>` and switch with `beamd use <name>`
-(see the README's "Profiles" section); every client command takes
-`-p/--profile`.
+Should print `logged in (YOUR_DOMAIN)`. This saves an **account** under
+`~/.beamd/accounts/` (keyed by server) and marks it current. To stay logged
+into more than one edge at once, just `beamd login` to each; every client
+command takes `--server <edge>` to pick one (see the README's "Accounts"
+section), and `beamd accounts` lists them.
 
 ---
 

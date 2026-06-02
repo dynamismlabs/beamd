@@ -44,6 +44,8 @@ type Server struct {
 	Out        io.Writer
 	ServerName string
 	ServerVer  string
+	Account    string // resolved account (edge server) — reported by whoami
+	Scope      string // resolved scope (org) — reported by whoami
 }
 
 func New(lc *daemon.LocalClient, in io.Reader, out io.Writer, serverName, serverVer string) *Server {
@@ -150,6 +152,14 @@ func tools() []map[string]any {
 				"properties": map[string]any{},
 			},
 		},
+		{
+			"name":        "whoami",
+			"description": "Report where beamd is pointed: the account (edge server), the resolved scope (org), and the live tunnel slug. Equivalent to the `beamd whoami` CLI command.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
 	}
 }
 
@@ -202,6 +212,19 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *jsonR
 			return toolError(err.Error()), nil
 		}
 		body, _ := json.Marshal(items)
+		return toolText(string(body)), nil
+
+	case "whoami":
+		slug, healthy := "", false
+		if h, err := s.LC.Ping(ctx); err == nil { // best-effort: agent may be down
+			slug, healthy = h.Slug, h.Healthy
+		}
+		body, _ := json.Marshal(map[string]any{
+			"server":  s.Account,
+			"scope":   s.Scope,
+			"slug":    slug,
+			"healthy": healthy,
+		})
 		return toolText(string(body)), nil
 
 	default:

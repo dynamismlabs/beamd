@@ -6,8 +6,11 @@
 > contract that backs it; `profiles-and-naming-spec.md`'s identity half is
 > **superseded** by this doc (its naming / `.beamd` / `run` half still stands).
 >
-> The CLI as shipped today still implements the older *profiles + `beamd use`*
-> model. The migration to what's below is tracked in
+> **Implemented:** the CLI ships the account store + `--server`/`--scope` +
+> `default`/`accounts`/`orgs`/`whoami` (no `beamd use`), and scope is carried on
+> the wire and authorized by the edge. **Still pending:** interactive
+> *device-code session* login + org discovery against the hosted web app (token
+> and `--config` login work today). Progress is tracked in
 > [`cli-identity-plan.md`](cli-identity-plan.md).
 
 ## The model in one sentence

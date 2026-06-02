@@ -20,6 +20,8 @@ func mcpCmd(args []string) {
 	lc := ensureAgent(rc.ConfigPath, rc.AgentSocket, rc.Scope, rc.Client.InsecureSkipVerify)
 
 	srv := mcp.New(lc, os.Stdin, os.Stdout, "beamd", Version)
+	srv.Account = rc.Server
+	srv.Scope = rc.Scope
 	if err := srv.Run(context.Background()); err != nil && err != io.EOF {
 		fmt.Fprintln(os.Stderr, "mcp:", err)
 		os.Exit(1)

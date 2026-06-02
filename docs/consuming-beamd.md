@@ -32,9 +32,10 @@ Spawn it via the package's bin (`node_modules/.bin/beamd`) or
 
 Point the client at your edge. For a host app, the clean path is a
 **dedicated config file** you pass with `--config <path>` to every command —
-it bypasses beamd's profile store entirely, so your app keeps its own
+it bypasses beamd's account store entirely, so your app keeps its own
 `{server, token}` out of the user's `$HOME` and never collides with their
-interactive `beamd` profiles:
+interactive `beamd` accounts. The `token` here is a **workspace API key**
+(hosted) or an operator-issued token (OSS) — not an interactive login session:
 
 ```yaml
 # my-app-beamd.yaml — referenced via `--config my-app-beamd.yaml`
@@ -53,9 +54,11 @@ isolates you — and if you do rotate creds in this file, run `beamd reload
 `insecure_skip_verify` against a real edge; the cert is verified by default so
 the token only rides a trusted connection.)
 
-(Interactive users instead run `beamd login`, which saves a named *profile*
-under `~/.beamd/profiles/`. Automation should prefer `--config` and stay out
-of that store.) By default tunnels live at `<name>.<base_domain>`. If the
+(Interactive users instead run `beamd login`, which saves an *account* keyed
+by server under `~/.beamd/accounts/`. Automation should prefer `--config` and
+stay out of that store — and skip scope selection: an API key's scope is fixed,
+so `--scope` and `beamd default` don't apply to you.) By default tunnels live
+at `<name>.<base_domain>`. If the
 operator gave your token a **slug**, they're namespaced under
 `<name>.<slug>.<base_domain>` instead — either way, read the URL from the
 `open --json` output rather than assembling it yourself.
@@ -92,7 +95,7 @@ The agent isn't a persistent registry — after a reboot it isn't running and
 holds nothing. On startup, reconcile against your own desired state:
 
 ```
-beamd status --json   # {"profile":...,"agentRunning":bool,"server":...,"slug":...,"healthy":bool}
+beamd status --json   # {"agentRunning":bool,"server":...,"slug":...,"scope":...,"healthy":bool}
 beamd list --json     # [{"name","url","port","healthy"}, …]
 ```
 

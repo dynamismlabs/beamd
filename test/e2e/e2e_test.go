@@ -785,20 +785,20 @@ func TestMCP_InitializeListAndToolLifecycle(t *testing.T) {
 		t.Errorf("serverInfo.name = %v, want beamd", server["name"])
 	}
 
-	// tools/list: exactly the three tools, asserted by name (guards the
-	// open/close ↔ expose_port/remove_tunnel/list_tunnels mapping).
+	// tools/list: exactly the four tools, asserted by name (guards the
+	// open/close ↔ expose_port/remove_tunnel/list_tunnels mapping + whoami).
 	toolList := resps[1]["result"].(map[string]any)["tools"].([]any)
 	gotNames := map[string]bool{}
 	for _, tl := range toolList {
 		gotNames[tl.(map[string]any)["name"].(string)] = true
 	}
-	for _, want := range []string{"expose_port", "remove_tunnel", "list_tunnels"} {
+	for _, want := range []string{"expose_port", "remove_tunnel", "list_tunnels", "whoami"} {
 		if !gotNames[want] {
 			t.Errorf("tools/list missing tool %q; got %v", want, gotNames)
 		}
 	}
-	if len(toolList) != 3 {
-		t.Errorf("tools/list returned %d tools, want 3", len(toolList))
+	if len(toolList) != 4 {
+		t.Errorf("tools/list returned %d tools, want 4", len(toolList))
 	}
 
 	// expose_port → the public URL
