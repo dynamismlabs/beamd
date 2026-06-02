@@ -1,14 +1,21 @@
 # Hosted mode — building the web app side
 
 Beamd has hooks for "hosted mode": a web app issues and revokes
-tokens, owns the customer dashboard, runs the device-code login flow,
-and receives usage events for billing. Beamd itself stays stateless
-— it just validates tokens against your web app on each connection.
+credentials, owns the customer dashboard, runs the interactive
+(device-code) login flow, mints workspace API keys, and receives usage
+events for billing. Beamd itself stays stateless — it just validates a
+bearer credential against your web app on each connection.
 
 This doc specifies **what your web app has to expose** for those hooks
 to work, so you can build it in any stack you like (the reference
 hosted product is Next.js + better-auth + Drizzle + Postgres, but the
 contract is framework-agnostic).
+
+> **Read [`identity-and-accounts.md`](identity-and-accounts.md) first** for the
+> canonical identity model — the two credential kinds (interactive **user
+> session** vs headless **workspace API key**), how the CLI stores accounts
+> per-server, and how scope is resolved. This doc defines the server-side
+> contract (verify-token, device-code, token format, schema) that backs it.
 
 Read [`prd.md`](../prd.md) first if you haven't — this doc assumes
 you understand the slug model, the wildcard-cert-per-slug rule, and
@@ -184,19 +191,29 @@ Moderately easy; certmagic is built for it:
 
 ### Org / team model (Vercel-shaped)
 
-- An **account** (user) has a **personal scope** (a slug, e.g. `trey`) and can
-  **join multiple teams**, each its own scope (e.g. `acme`).
+- A **user** has a **personal scope** (a slug, e.g. `trey`) and can **join
+  multiple teams**, each its own scope (e.g. `acme`).
 - A tunnel belongs to a scope; the scope is what appears in the URL (`…-acme`
-  flat, or `.acme.` nested). The user/agent never types it — they're logged
-  into a scope and just name the tunnel.
-- **Tokens are per `(user, scope)` membership.** `verify-token` returns the
-  scope slug for that token.
-- **The client side is already built:** the **profiles** feature *is* the
-  multi-team switch — one profile per scope (`beamd use acme`, `-p acme`).
-  Joining N teams = N profiles; secrets stay in the global profile store.
-- Schema (extends §8): add `teams` + `memberships` (user↔team + role); a
-  tunnel/workspace belongs to a scope (a personal user **or** a team); tokens
-  reference the membership.
+  flat, or `.acme.` nested). The user/agent never types it — it's resolved from
+  the project `.beamd`, a `--scope` flag, or their default (see
+  [`identity-and-accounts.md`](identity-and-accounts.md)).
+- **Scope is carried by the credential — two ways, not "per membership":**
+  - a **user session** (interactive login) authorizes the user's **whole set**
+    of scopes; `verify-token` returns that set, and the edge authorizes the
+    *requested* scope against it. This is what makes "log in once, act across
+    all your orgs" work without re-auth.
+  - a **workspace API key** authorizes **exactly one** scope; `verify-token`
+    returns that single slug. This is the headless/automation credential, and
+    its narrow blast radius is the point.
+- **Client side:** one login per *server* spans all your orgs; the org is a
+  lightweight **selector** (`--scope` / `.beamd` / `beamd default`), never a
+  separate login. (The old per-org `beamd use` / `beamd profiles` model is
+  replaced — see the canonical doc.)
+- Schema (extends §8): add `teams` + `memberships` (user↔team + role) — these
+  drive a session's scope set and gate *who may mint a key in a scope*. A
+  tunnel/workspace belongs to a scope (a personal user **or** a team).
+  `api_tokens` stays **workspace-scoped** (one slug) with a `created_by_user_id`
+  for attribution only — the key's authority is the workspace, not the person.
 
 ### Auth-gated previews (pairs with the flat shape)
 
@@ -234,9 +251,9 @@ Four HTTP endpoints, all called by beamd. None are user-facing.
 
 | Endpoint | Caller | Purpose |
 |---|---|---|
-| `POST /api/internal/verify-token` | beamd, per session | Resolve a bearer token to a slug |
+| `POST /api/internal/verify-token` | beamd, per session | Resolve a bearer credential to its scope(s) — a **set** for a user session, a single slug for an API key |
 | `POST /api/device/code` | beam CLI, once per login | Issue a device + user code |
-| `POST /api/device/token` | beam CLI, polling | Return the token once the user approves |
+| `POST /api/device/token` | beam CLI, polling | Return the **user session** once the user approves |
 | `POST /api/internal/usage` | beamd, every 60s | Receive per-slug byte/tunnel deltas for billing |
 
 Plus one user-facing page:
@@ -269,21 +286,42 @@ Content-Type: application/json
 {"token": "<the beam bearer token>"}
 ```
 
-**Response (valid token):**
+**Response — a user session** (interactive login; authorizes the user's whole
+scope set):
 
 ```
 200 OK
-{"slug": "turing"}
+{
+  "kind":   "session",
+  "user":   "trey@example.com",
+  "scopes": [
+    {"slug": "trey", "role": "owner"},
+    {"slug": "acme", "role": "member"}
+  ]
+}
 ```
 
-**Response (unknown or revoked token):**
+The edge caches this and, when a tunnel registers naming a scope, authorizes
+that scope against the set. A request for a scope not in the set is rejected at
+connect (the user was removed, or never a member).
+
+**Response — a workspace API key** (headless/automation; one scope):
 
 ```
 200 OK
-{"slug": ""}
+{"kind": "key", "slug": "acme"}
 ```
 
-(Or `404` — beamd treats both as "reject".)
+A bare `{"slug": "acme"}` with no `kind` is still accepted and treated as a
+single-scope key, so the pre-session contract (and the OSS FileStore shape)
+keeps working unchanged.
+
+**Response (unknown or revoked credential):**
+
+```
+200 OK
+{"slug": ""}        # empty slug, empty scopes, or 404 — all mean "reject"
+```
 
 > **Empty slug means reject, *not* flat.** Self-hosted beamd treats a
 > `{token: ""}` file entry as a valid **flat** tunnel (`<name>.<base>`); the
@@ -318,11 +356,22 @@ revocation latency.
 ```ts
 export async function verifyToken(rawToken: string) {
   const hashed = sha256(rawToken);
-  const row = await db.query.apiTokens.findFirst({
+
+  // 1. Workspace API key → one scope.
+  const key = await db.query.apiTokens.findFirst({
     where: and(eq(apiTokens.tokenHash, hashed), isNull(apiTokens.revokedAt)),
     with: { workspace: true },
   });
-  return row?.workspace.slug ?? "";
+  if (key) return { kind: "key", slug: key.workspace.slug };
+
+  // 2. User session → the user's whole scope set (personal + every team).
+  const session = await verifySessionToken(rawToken); // better-auth
+  if (session) {
+    const scopes = await scopesForUser(session.userId); // personal + memberships
+    return { kind: "session", user: session.email, scopes };
+  }
+
+  return { slug: "" }; // reject
 }
 ```
 
@@ -350,7 +399,9 @@ which is RFC 8628-shaped.
 ```
 
 **State to persist:** create a `device_codes` row with
-`(device_code, user_code, expires_at, status: 'pending', approved_user_id: null, slug: null, issued_token_id: null)`.
+`(device_code, user_code, expires_at, status: 'pending', approved_user_id: null, issued_session_id: null)`.
+(No per-row `slug` — interactive login issues a **user session** that spans
+every scope, not a single-workspace token.)
 
 **User-code format.** Short, human-typeable. RFC 8628 suggests 8 chars
 with a hyphen. `ABCD-1234` is fine. Make sure it's case-insensitive
@@ -387,8 +438,12 @@ Content-Type: application/json
 
 ```
 200 OK
-{"access_token": "<the bearer token>"}
+{"access_token": "<the user-session token>"}
 ```
+
+The `access_token` is a **user session** (§3), not a single-workspace token —
+it authorizes the user's whole scope set. The CLI stores it as the account for
+this server; scope is then chosen per-command (`--scope` / `.beamd` / default).
 
 **Response (denied / expired):**
 
@@ -428,25 +483,25 @@ UX:
    types `ABCD-1234`.
 3. Look up the `device_codes` row by `user_code`. If missing,
    expired, or already-consumed, show an error.
-4. Show a confirm screen: "Approve **beam** to act as your
-   workspace **turing**? (Click confirm.)" Include device fingerprint
-   if you have it, IP, geolocation hint — same shape as GitHub's
-   device-code flow.
+4. Show a confirm screen: "Approve **beamd** to sign in as **you** on this
+   device? It will be able to act across your orgs. (Click confirm.)" Include
+   device fingerprint if you have it, IP, geolocation hint — same shape as
+   GitHub's device-code flow.
 5. On confirm:
-   - Find the user's workspace + a valid API token (mint one if they
-     don't have one — see §3 for token format).
+   - Issue a **user session** for the approved user (better-auth) — this is the
+     bearer the CLI stores; it spans every scope they belong to. (API keys are
+     not minted here; those are created explicitly in the dashboard, §3.)
    - Update the `device_codes` row:
-     `status: 'approved'`, `approved_user_id`, `slug`, `issued_token_id`.
-   - The CLI's next poll picks up the token.
+     `status: 'approved'`, `approved_user_id`, `issued_session_id`.
+   - The CLI's next poll picks up the session token.
 6. On deny: `status: 'denied'`. The CLI's next poll returns
    `access_denied`.
 
-**Auto-claim slug at this point if they don't have one yet.** If the
-user has no workspace, this is the moment to take a slug from them
-(small text field on the confirm screen) and run the provisioning
-flow from §4 before issuing the token. Otherwise the CLI receives a
-token mapped to a slug whose DNS doesn't exist yet, and their first
-`expose` will hang on DNS resolution.
+**Auto-claim a personal scope here if they don't have one yet.** If the user
+has no workspace, this is the moment to take a slug from them (small text field
+on the confirm screen) and run the provisioning flow from §4 before issuing the
+session. Otherwise the session's personal scope has no DNS yet, and their first
+`open` hangs on DNS resolution.
 
 ---
 
@@ -496,7 +551,21 @@ the request, write to a durable queue, and process asynchronously.
 
 ---
 
-## 3. Token format and storage
+## 3. Credentials: user sessions & API keys
+
+Two credential kinds back the two `verify-token` responses (see
+[`identity-and-accounts.md`](identity-and-accounts.md) for the why):
+
+- **User session** — minted by the device-code flow (§2.3), it *is* a
+  better-auth session/refresh token. It represents **the user** and authorizes
+  their whole scope set. Better-auth owns its storage (§8); you don't put it in
+  `api_tokens`. `verify-token` validates it and derives the scope set from the
+  user's memberships.
+- **Workspace API key** — the headless/automation credential below. It
+  represents **a workspace** (one scope), is the "personal access token"
+  pattern, and is what goes in a `--config` file or a CI secret.
+
+The rest of this section is the **API key**.
 
 **Format:** 64 random bytes, hex-encoded. That's 128 hex characters.
 
@@ -508,10 +577,15 @@ function newToken(): string {
 }
 ```
 
-128 chars is long but the CLI never has to retype it — copy-paste
-once; `beamd login` saves it (to `~/.beamd/profiles/<name>`), or automation
-passes `--config <path>`. 512 bits of
-entropy means the search space is permanent-future-proof.
+128 chars is long but it's copy-pasted once — into a `--config` file or
+`beamd login --token <key>`. 512 bits of entropy means the search space is
+permanent-future-proof.
+
+**Headless issuance.** API keys are created in the dashboard ("Create API key"
+→ name + workspace), **not** via device-code — that's the whole point: CI and
+agents have no browser. A workspace can have **multiple named keys** (`ci`,
+`flow-prod`, `laptop`), each independently revocable. The `label` column is
+what makes them nameable.
 
 **Storage:** never store raw tokens. Store SHA-256 hashes, look up by
 hash.
@@ -520,16 +594,20 @@ hash.
 import { sha256 } from "node:crypto"; // or @noble/hashes/sha256
 
 export const apiTokens = pgTable("api_tokens", {
-  id:           uuid("id").primaryKey().defaultRandom(),
-  workspaceId:  uuid("workspace_id").references(() => workspaces.id).notNull(),
-  tokenHash:    text("token_hash").notNull().unique(),
-  label:        text("label"),
-  createdAt:    timestamp("created_at").defaultNow().notNull(),
-  lastUsedAt:   timestamp("last_used_at"),
-  revokedAt:    timestamp("revoked_at"),
+  id:              uuid("id").primaryKey().defaultRandom(),
+  workspaceId:     uuid("workspace_id").references(() => workspaces.id).notNull(),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id), // attribution only
+  tokenHash:       text("token_hash").notNull().unique(),
+  label:           text("label"),
+  createdAt:       timestamp("created_at").defaultNow().notNull(),
+  lastUsedAt:      timestamp("last_used_at"),
+  revokedAt:       timestamp("revoked_at"),
 }, (t) => ({
   hashIdx: uniqueIndex("api_tokens_hash_idx").on(t.tokenHash),
 }));
+
+// The key's *authority* is `workspaceId`; `createdByUserId` is for the audit
+// trail and "revoke when they leave", never for what the key can do.
 ```
 
 **On creation:** show the user the raw token **exactly once**. After
@@ -540,9 +618,11 @@ the standard "personal access token" pattern (GitHub, Stripe, etc.).
 `isNull(revoked_at)`. Effective propagation time: up to ~60s
 (beamd's positive cache TTL).
 
-**Rotation:** users hit "regenerate" in the dashboard → revoke old,
-mint new. UI should warn that active CLIs will lose connection
-within 60s and need `beamd login` again.
+**Rotation:** revoke the old key, create a new one, update the consumer's
+`--config` (or `beamd login --token <new>`) and run `beamd reload` so the
+detached agent picks up the new credential. With multiple named keys you rotate
+*one* (e.g. `ci`) without disturbing the others. A revoked key keeps working for
+up to ~60s (the positive-cache TTL).
 
 ---
 
@@ -557,7 +637,7 @@ issuing them a token:
   This is enforced again server-side in beamd
   ([`internal/naming/`](../internal/naming/)) — match it in your web
   app so users see "invalid name" client-side, not after their first
-  `expose`.
+  `open`.
 - Unique in your `workspaces` table. Take an advisory lock or use a
   unique constraint to prevent two simultaneous signups racing for
   the same slug.
@@ -611,14 +691,14 @@ success. Cloudflare returns code `81057` for duplicates.
 ### 4.3 Pre-warm the certificate (optional)
 
 Beamd will lazily issue `*.acme.beam.example.com` on the
-workspace's first connection. The first `expose` then takes ~10s
+workspace's first connection. The first `open` then takes ~10s
 while ACME completes — visible to the user.
 
 To eliminate that delay, hit a hosted-mode admin endpoint on
 beamd that triggers issuance immediately. **That endpoint does
 not exist today** — see §6 "Open work."
 
-Workaround until then: have new users tolerate the first-expose
+Workaround until then: have new users tolerate the first-open
 delay, or shell out to `beamd add-developer --slug acme` from
 your signup handler if your web app and a beamd droplet share
 a host (most won't).
@@ -748,14 +828,31 @@ export const workspaces = pgTable("workspaces", {
 });
 
 export const apiTokens = pgTable("api_tokens", {
+  id:              uuid("id").primaryKey().defaultRandom(),
+  workspaceId:     uuid("workspace_id").references(() => workspaces.id).notNull(),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id), // attribution only
+  tokenHash:       text("token_hash").notNull().unique(),
+  label:           text("label"),
+  createdAt:       timestamp("created_at").defaultNow().notNull(),
+  lastUsedAt:      timestamp("last_used_at"),
+  revokedAt:       timestamp("revoked_at"),
+});
+
+// Org model: a workspace's scope is either personal (owner is a user) or a
+// team. `memberships` is what a user session's scope set is built from, and
+// what gates who may mint a key in a team's workspace.
+export const teams = pgTable("teams", {
   id:          uuid("id").primaryKey().defaultRandom(),
   workspaceId: uuid("workspace_id").references(() => workspaces.id).notNull(),
-  tokenHash:   text("token_hash").notNull().unique(),
-  label:       text("label"),
-  createdAt:   timestamp("created_at").defaultNow().notNull(),
-  lastUsedAt:  timestamp("last_used_at"),
-  revokedAt:   timestamp("revoked_at"),
+  name:        text("name").notNull(),
 });
+
+export const memberships = pgTable("memberships", {
+  id:      uuid("id").primaryKey().defaultRandom(),
+  userId:  uuid("user_id").references(() => users.id).notNull(),
+  teamId:  uuid("team_id").references(() => teams.id).notNull(),
+  role:    text("role").notNull().default("member"), // owner | admin | member
+}, (t) => ({ uniq: uniqueIndex("memberships_user_team_idx").on(t.userId, t.teamId) }));
 
 export const deviceCodes = pgTable("device_codes", {
   id:              uuid("id").primaryKey().defaultRandom(),
@@ -763,7 +860,7 @@ export const deviceCodes = pgTable("device_codes", {
   userCode:        text("user_code").notNull().unique(),
   status:          text("status").notNull().default("pending"),
   approvedUserId:  uuid("approved_user_id").references(() => users.id),
-  issuedTokenId:   uuid("issued_token_id").references(() => apiTokens.id),
+  issuedSessionId: text("issued_session_id"), // the better-auth session handed to the CLI
   expiresAt:       timestamp("expires_at").notNull(),
   createdAt:       timestamp("created_at").defaultNow().notNull(),
 });
@@ -786,8 +883,11 @@ export const usageEvents = pgTable("usage_events", {
 });
 ```
 
-Better-auth manages its own session/account tables on top of
-`users`; follow its docs.
+Better-auth manages its own session/account tables on top of `users`; follow
+its docs. **The user-session credential that `verify-token` validates is one of
+those better-auth sessions** — interactive login is just the device-code flow
+(§2.2–2.4) handing the CLI a session it can replay. API keys (above) are
+separate and workspace-scoped; sessions are user-scoped.
 
 ---
 
@@ -803,23 +903,23 @@ working tunnel:
    - Picks a droplet (round-robin).
    - Writes Cloudflare A records.
    - Inserts `workspaces` row.
-3. Web app mints a token, stores hash, shows raw token to user once.
-4. User installs CLI, runs `beamd login --server beam.example.com --token <token>`. CLI saves it as a profile (automation uses `--config <path>`).
-5. User runs `beamd open 3001 --as api`.
-6. Daemon dials beamd at `:443`, ALPN `beam/1`, sends `hello`
-   with the token.
-7. Beamd POSTs `/api/internal/verify-token` → web app returns
-   `{"slug":"acme"}`. Cached 60s.
-8. Beamd registers `api.acme.beam.example.com` → routes to
-   this session.
-9. First request to that URL: beamd issues
-   `*.acme.beam.example.com` from Let's Encrypt via DNS-01 (~10s,
-   one-time). Subsequent connects are instant.
-10. Every 60s, beamd POSTs `/api/internal/usage` with byte
-    deltas. Web app inserts into `usage_events`.
+3. User installs the CLI and runs `beamd login --server beam.example.com`
+   → device-code: they approve in the browser, and the CLI stores a **user
+   session** as the account for that server (it spans every scope they belong
+   to; `acme` becomes their default).
+4. User runs `beamd open 3001 --as api` — it lands in scope `acme` (their
+   default; `--scope` or a project `.beamd` would pick another).
+5. Client dials beamd at `:443`, ALPN `beam/1`, sends `hello` with the
+   session token and the requested scope `acme`.
+6. Beamd POSTs `/api/internal/verify-token` → web app returns the session's
+   **scope set**; beamd checks `acme` is in it. Cached 60s.
+7. Beamd registers `api.acme.beam.example.com` → routes to this session.
+8. First request to that URL: beamd issues `*.acme.beam.example.com` from
+   Let's Encrypt via DNS-01 (~10s, one-time). Subsequent connects are instant.
+9. Every 60s, beamd POSTs `/api/internal/usage` with byte deltas. Web app
+   inserts into `usage_events`.
 
-If you want the device-code path instead of copy-paste tokens, swap
-step 4 for `beamd login --server beam.example.com` (no
-token), which fetches `/.well-known/beam-auth`, walks the
-device-code dance against `/api/device/code` + `/api/device/token`,
-and writes the token after browser approval.
+**Automation / CI / agents** swap steps 3–4: create a workspace **API key** in
+the dashboard and pass it via `beamd open --config <path>` (an `{server, token}`
+file). No browser, no scope selection — the key *is* the scope, so verify-token
+returns a single `{"slug":"acme"}` instead of a scope set.

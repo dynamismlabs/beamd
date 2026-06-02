@@ -3,6 +3,18 @@
 > Self-contained build plan. Each item is a checkbox with concrete
 > acceptance. You shouldn't need anything beyond this file + the codebase.
 
+> ⚠️ **Identity half superseded.** §1 (Profiles), the "many identities" framing
+> in §0, and every `beamd use` / `beamd profiles` reference below describe the
+> *original* per-edge-**profile** design — which **shipped**, but is now
+> replaced by the accounts + scope model in
+> [`identity-and-accounts.md`](identity-and-accounts.md): credentials are keyed
+> per **server** (an *account*, not a "profile"), orgs are a **scope selector**
+> (`--scope` / `.beamd` / `beamd default`), and there is **no `beamd use`**.
+> The **naming half is current and accurate** — §2 (`--as`/`--from`), §3
+> (`.beamd`), Convergence, and the `run` framework-reachability work all stand
+> as shipped. The CLI migration from profiles→accounts is tracked in
+> [`cli-identity-plan.md`](cli-identity-plan.md).
+
 ## 0. Background & goal
 
 beamd's client today logs into **one** edge (`~/.beamd/config` = a single
