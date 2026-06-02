@@ -27,7 +27,7 @@ func checkCmd(args []string) {
 	ins := *insecure || cfg.InsecureSkipVerify
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: ins})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: ins, Scope: rc.Scope})
 	cancel()
 	if err != nil {
 		if *jsonOut {
@@ -83,7 +83,7 @@ func reloadCmd(args []string) {
 	}
 
 	ins := *insecure || cfg.InsecureSkipVerify
-	lc := ensureAgent(rc.ConfigPath, rc.AgentSocket, ins)
+	lc := ensureAgent(rc.ConfigPath, rc.AgentSocket, rc.Scope, ins)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	slug := ""

@@ -13,7 +13,11 @@ import (
 )
 
 type Store interface {
-	Resolve(token string) (slug string, ok bool)
+	// Resolve authorizes a (token, requestedScope) and returns the slug a
+	// tunnel registers under. requestedScope is "" when the client didn't ask
+	// for a specific scope — use the credential's default. ok=false rejects:
+	// an unknown/revoked token, or a scope this credential can't act in.
+	Resolve(token, requestedScope string) (slug string, ok bool)
 }
 
 type MemoryStore struct {
@@ -28,9 +32,18 @@ func NewMemoryStore(tokens map[string]string) *MemoryStore {
 	return &MemoryStore{tokens: cp}
 }
 
-func (s *MemoryStore) Resolve(token string) (string, bool) {
+func (s *MemoryStore) Resolve(token, requestedScope string) (string, bool) {
 	slug, ok := s.tokens[token]
-	return slug, ok
+	if !ok {
+		return "", false
+	}
+	// A single-scope credential (OSS token / API key): honor an empty request
+	// and an exact match; reject a request for a different scope so a tunnel is
+	// never misrouted to a namespace the token can't use.
+	if requestedScope != "" && requestedScope != slug {
+		return "", false
+	}
+	return slug, true
 }
 
 // FileStore loads {token: slug} JSON once at construction. Reload on

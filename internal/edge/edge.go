@@ -369,10 +369,14 @@ func (e *Edge) handleClient(c net.Conn) {
 		return
 	}
 
-	slug, ok := e.tokens.Resolve(hello.Token)
+	slug, ok := e.tokens.Resolve(hello.Token, hello.Scope)
 	if !ok {
+		msg := "invalid token"
+		if hello.Scope != "" {
+			msg = fmt.Sprintf("invalid token, or scope %q not available to this login", hello.Scope)
+		}
 		_ = proto.Write(control, &proto.Error{
-			Type: proto.TypeError, Code: proto.CodeBadToken, Message: "invalid token",
+			Type: proto.TypeError, Code: proto.CodeBadToken, Message: msg,
 		})
 		return
 	}

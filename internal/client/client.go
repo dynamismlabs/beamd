@@ -56,6 +56,12 @@ type Options struct {
 	// Default false: the edge cert is verified, so the bearer token only
 	// rides a trusted connection. Set true only for a self-signed dev edge.
 	InsecureSkipVerify bool
+
+	// Scope is the requested org/scope, sent in the hello. Empty means "the
+	// credential's default" (the edge picks personal for a session, the fixed
+	// slug for an OSS token / API key). The resolved scope comes back as the
+	// hello_ok slug and must stay stable across reconnects.
+	Scope string
 }
 
 func (o *Options) applyDefaults() {
@@ -319,7 +325,7 @@ func (c *Client) connectOnce(ctx context.Context, first bool) error {
 	}
 
 	if err := proto.Write(control, &proto.Hello{
-		Type: proto.TypeHello, Token: c.token, ProtoVersion: proto.ProtoVersion,
+		Type: proto.TypeHello, Token: c.token, Scope: c.opts.Scope, ProtoVersion: proto.ProtoVersion,
 	}); err != nil {
 		_ = yamuxSess.Close()
 		return fmt.Errorf("send hello: %w", err)

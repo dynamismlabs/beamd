@@ -247,17 +247,17 @@ func openCmd(args []string) {
 		openDetached(ctx, port, label, *jsonOut, ins)
 		return
 	}
-	openForeground(cfg, port, label, *jsonOut, ins)
+	openForeground(cfg, port, label, ctx.Scope, *jsonOut, ins)
 }
 
 // openForeground holds the tunnel in *this* process (the default, like
 // ngrok): it opens its own connection to the edge, registers, prints the
 // URL, and blocks until interrupted — then tears the tunnel down. No
 // agent is involved. `label` is the already-resolved tunnel name.
-func openForeground(cfg *config.Client, port int, label string, jsonOut, insecure bool) {
+func openForeground(cfg *config.Client, port int, label, scope string, jsonOut, insecure bool) {
 	quietClientLogs()
 
-	c, url, err := dialAndRegister(cfg, port, label, insecure)
+	c, url, err := dialAndRegister(cfg, port, label, scope, insecure)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open failed:", err)
 		os.Exit(1)
@@ -286,7 +286,7 @@ func openForeground(cfg *config.Client, port int, label string, jsonOut, insecur
 // openDetached hands the tunnel to the selected profile's background agent
 // and returns immediately. This is the path automation (e.g. Flow) uses.
 func openDetached(tc *tunnelContext, port int, label string, jsonOut, insecure bool) {
-	lc := ensureAgent(tc.ConfigPath, tc.AgentSocket, insecure)
+	lc := ensureAgent(tc.ConfigPath, tc.AgentSocket, tc.Scope, insecure)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -320,9 +320,9 @@ func quietClientLogs() {
 // dialAndRegister opens a foreground connection to the edge and registers
 // name→port, returning the live client and its public URL. The caller
 // owns closing the client.
-func dialAndRegister(cfg *config.Client, port int, name string, insecure bool) (*client.Client, string, error) {
+func dialAndRegister(cfg *config.Client, port int, name, scope string, insecure bool) (*client.Client, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope})
 	cancel()
 	if err != nil {
 		return nil, "", fmt.Errorf("connect to edge: %w", err)
@@ -413,7 +413,7 @@ func runCmd(args []string) {
 	// are known right after Connect, so the child can be handed its public
 	// URL up front (BEAMD_URL, allowed-hosts) even though we register later.
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), 30*time.Second)
-	c, err := client.Connect(dialCtx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: *insecure || cfg.InsecureSkipVerify})
+	c, err := client.Connect(dialCtx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: *insecure || cfg.InsecureSkipVerify, Scope: ctx.Scope})
 	cancelDial()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "run: connect to edge:", err)
@@ -708,13 +708,19 @@ func boolWord(b bool, yes, no string) string {
 // on demand against its own socket, and returns a client to that socket.
 // configPath is the profile file (or explicit --config) the agent loads its
 // server/token from.
-func ensureAgent(configPath, socket string, insecure bool) *daemon.LocalClient {
+func ensureAgent(configPath, socket, scope string, insecure bool) *daemon.LocalClient {
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "locate executable:", err)
 		os.Exit(1)
 	}
 	env := []string{"BEAMD_CONFIG=" + configPath}
+	if scope != "" {
+		// Propagate the resolved scope so the detached agent requests the same
+		// org the foreground command would have (the account file holds a
+		// default, but a one-off --scope / .beamd scope: must reach the agent).
+		env = append(env, "BEAMD_SCOPE="+scope)
+	}
 	if insecure {
 		// Propagate a one-off --insecure to the spawned agent (the config
 		// field would otherwise be the only way to set it for detached use).
@@ -764,8 +770,9 @@ func agentCmd(args []string) {
 	}
 
 	insecure := cfg.InsecureSkipVerify || os.Getenv("BEAMD_INSECURE") == "1"
+	scope := os.Getenv("BEAMD_SCOPE")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope})
 	cancel()
 	if err != nil {
 		slog.Error("connect to edge failed", "err", err.Error())

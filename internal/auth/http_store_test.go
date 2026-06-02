@@ -26,11 +26,11 @@ func TestHTTPStore_ValidToken(t *testing.T) {
 	defer srv.Close()
 
 	s := NewHTTPStore(srv.URL, "s3cret")
-	slug, ok := s.Resolve("T1")
+	slug, ok := s.Resolve("T1", "")
 	if !ok || slug != "turing" {
 		t.Errorf("Resolve(T1) = (%q, %v); want (turing, true)", slug, ok)
 	}
-	if slug, ok := s.Resolve("garbage"); ok {
+	if slug, ok := s.Resolve("garbage", ""); ok {
 		t.Errorf("Resolve(garbage) = (%q, %v); want (_, false)", slug, ok)
 	}
 }
@@ -46,7 +46,7 @@ func TestHTTPStore_BadSecretRejected(t *testing.T) {
 	defer srv.Close()
 
 	s := NewHTTPStore(srv.URL, "wrong")
-	if _, ok := s.Resolve("T1"); ok {
+	if _, ok := s.Resolve("T1", ""); ok {
 		t.Error("wrong secret should fail Resolve")
 	}
 }
@@ -61,7 +61,7 @@ func TestHTTPStore_CachesPositiveResult(t *testing.T) {
 
 	s := NewHTTPStore(srv.URL, "")
 	for i := 0; i < 5; i++ {
-		slug, ok := s.Resolve("T1")
+		slug, ok := s.Resolve("T1", "")
 		if !ok || slug != "turing" {
 			t.Fatalf("iter %d: Resolve = (%q, %v)", i, slug, ok)
 		}
@@ -82,7 +82,7 @@ func TestHTTPStore_CachesNegativeResult(t *testing.T) {
 	s := NewHTTPStore(srv.URL, "")
 	s.SetTTLs(time.Hour, time.Hour) // long enough to verify reuse
 	for i := 0; i < 3; i++ {
-		if _, ok := s.Resolve("missing"); ok {
+		if _, ok := s.Resolve("missing", ""); ok {
 			t.Fatalf("Resolve(missing) should be false")
 		}
 	}
@@ -101,11 +101,64 @@ func TestHTTPStore_TransientErrorNotCached(t *testing.T) {
 
 	s := NewHTTPStore(srv.URL, "")
 	for i := 0; i < 3; i++ {
-		if _, ok := s.Resolve("T1"); ok {
+		if _, ok := s.Resolve("T1", ""); ok {
 			t.Fatal("500 should not authorize")
 		}
 	}
 	if got := calls.Load(); got != 3 {
 		t.Errorf("expected 3 verify calls (no caching on 5xx), got %d", got)
+	}
+}
+
+// A user-session response carries a scope SET: an empty request resolves to
+// the first (default/personal) scope, a member scope is allowed, a non-member
+// is rejected — and one verify call serves all of them (cached set).
+func TestHTTPStore_SessionScopeSet(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"kind": "session",
+			"user": "trey@example.com",
+			"scopes": []map[string]string{
+				{"slug": "trey", "role": "owner"},
+				{"slug": "acme", "role": "member"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	s := NewHTTPStore(srv.URL, "")
+
+	if slug, ok := s.Resolve("SESS", ""); !ok || slug != "trey" {
+		t.Errorf("Resolve(SESS, \"\") = (%q, %v); want (trey, true) — default is first scope", slug, ok)
+	}
+	if slug, ok := s.Resolve("SESS", "acme"); !ok || slug != "acme" {
+		t.Errorf("Resolve(SESS, acme) = (%q, %v); want (acme, true)", slug, ok)
+	}
+	if _, ok := s.Resolve("SESS", "other"); ok {
+		t.Error("Resolve(SESS, other) should reject — not a member of that scope")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("expected 1 verify call for the session (set cached), got %d", got)
+	}
+}
+
+// A bare {slug} (no kind) stays back-compatible: it's a single-scope key.
+func TestHTTPStore_BareSlugIsSingleScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"slug": "turing"})
+	}))
+	defer srv.Close()
+
+	s := NewHTTPStore(srv.URL, "")
+	if slug, ok := s.Resolve("T1", ""); !ok || slug != "turing" {
+		t.Errorf("bare slug, empty scope = (%q, %v); want (turing, true)", slug, ok)
+	}
+	if slug, ok := s.Resolve("T1", "turing"); !ok || slug != "turing" {
+		t.Errorf("bare slug, matching scope = (%q, %v); want (turing, true)", slug, ok)
+	}
+	if _, ok := s.Resolve("T1", "elsewhere"); ok {
+		t.Error("bare slug, mismatched scope should reject")
 	}
 }

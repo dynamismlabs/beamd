@@ -29,19 +29,19 @@ const (
 //	Content-Type: application/json
 //	Body:  {"token": "<the beam bearer token>"}
 //
-//	200 OK     {"slug": "turing"}      → valid, allow
-//	200 OK     {"slug": ""}          → unknown, reject
-//	404        (any body)            → unknown, reject
-//	401        (any body)            → unknown, reject (also: maybe the
-//	                                   shared secret was wrong; the
-//	                                   beamd operator should fix it)
+//	200 OK  {"kind":"key","slug":"turing"}                  → API key: one scope
+//	200 OK  {"slug":"turing"}                               → same (bare; no kind)
+//	200 OK  {"kind":"session","scopes":[{"slug":"trey"},…]} → user session: a scope SET
+//	200 OK  {"slug":""} / {"scopes":[]}                     → unknown, reject
+//	404 / 401                                               → unknown, reject
 //
-// Anything else is treated as a transient error: the result is NOT
-// cached and the validation fails (deny by default).
+// For a session the requested scope is authorized against the set; an empty
+// request resolves to the first scope (the default/personal one). Anything
+// non-2xx is a transient error: NOT cached, validation denies.
 //
-// Successful lookups are cached for ~60s; negatives for ~5s.
-// Cache TTL trades freshness for load: a longer TTL means a revoked
-// token may keep working briefly after revocation. Tune to taste.
+// The verify *result* (single slug, or the scope set) is cached per token
+// (~60s positive / ~5s negative); the requested scope is authorized locally on
+// each call, so switching scope under one session needs no extra round trip.
 type HTTPStore struct {
 	url    string
 	secret string
@@ -54,9 +54,18 @@ type HTTPStore struct {
 	cache map[string]httpStoreCacheEntry
 }
 
+// httpStoreResult is the cached verify outcome for one token: either a
+// single-scope credential (key/OSS) or a user session carrying a scope set.
+type httpStoreResult struct {
+	kind      string          // "session" | "key"
+	slug      string          // key: the one slug
+	scopeSet  map[string]bool // session: membership, for O(1) authorization
+	scopeList []string        // session: ordered; [0] is the default (personal)
+	ok        bool            // false = reject (unknown/revoked)
+}
+
 type httpStoreCacheEntry struct {
-	slug    string
-	ok      bool
+	result  httpStoreResult
 	expires time.Time
 }
 
@@ -80,33 +89,58 @@ func (s *HTTPStore) SetTTLs(positive, negative time.Duration) {
 	s.negTTL = negative
 }
 
-func (s *HTTPStore) Resolve(token string) (string, bool) {
+func (s *HTTPStore) Resolve(token, requestedScope string) (string, bool) {
+	res := s.lookup(token)
+	if !res.ok {
+		return "", false
+	}
+	switch res.kind {
+	case "session":
+		if requestedScope == "" {
+			if len(res.scopeList) == 0 {
+				return "", false
+			}
+			return res.scopeList[0], true // default = first (personal)
+		}
+		if res.scopeSet[requestedScope] {
+			return requestedScope, true
+		}
+		return "", false // a member-of check failed: not in this user's scopes
+	default: // "key" / bare {slug}
+		if requestedScope == "" || requestedScope == res.slug {
+			return res.slug, true
+		}
+		return "", false
+	}
+}
+
+// lookup returns the cached verify result for a token, fetching on a miss.
+// Transient fetch errors are not cached (next call retries) and deny.
+func (s *HTTPStore) lookup(token string) httpStoreResult {
 	s.mu.Lock()
 	if e, ok := s.cache[token]; ok && time.Now().Before(e.expires) {
-		slug, allowed := e.slug, e.ok
+		res := e.result
 		s.mu.Unlock()
-		return slug, allowed
+		return res
 	}
 	s.mu.Unlock()
 
-	slug, ok, err := s.fetch(token)
+	res, err := s.fetch(token)
 	if err != nil {
 		slog.Warn("auth: HTTPStore verify failed", "err", err.Error())
-		// Don't cache a transient error — next request retries.
-		return "", false
+		return httpStoreResult{ok: false}
 	}
-
 	ttl := s.ttl
-	if !ok {
+	if !res.ok {
 		ttl = s.negTTL
 	}
 	s.mu.Lock()
-	s.cache[token] = httpStoreCacheEntry{slug: slug, ok: ok, expires: time.Now().Add(ttl)}
+	s.cache[token] = httpStoreCacheEntry{result: res, expires: time.Now().Add(ttl)}
 	s.mu.Unlock()
-	return slug, ok
+	return res
 }
 
-func (s *HTTPStore) fetch(token string) (slug string, ok bool, err error) {
+func (s *HTTPStore) fetch(token string) (httpStoreResult, error) {
 	body, _ := json.Marshal(struct {
 		Token string `json:"token"`
 	}{Token: token})
@@ -116,7 +150,7 @@ func (s *HTTPStore) fetch(token string) (slug string, ok bool, err error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(body))
 	if err != nil {
-		return "", false, err
+		return httpStoreResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if s.secret != "" {
@@ -125,27 +159,48 @@ func (s *HTTPStore) fetch(token string) (slug string, ok bool, err error) {
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return "", false, err
+		return httpStoreResult{}, err
 	}
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusNotFound, http.StatusUnauthorized:
-		return "", false, nil
+		return httpStoreResult{ok: false}, nil
 	case http.StatusOK:
 		// fall through
 	default:
-		return "", false, fmt.Errorf("verify endpoint returned %s", resp.Status)
+		return httpStoreResult{}, fmt.Errorf("verify endpoint returned %s", resp.Status)
 	}
 
 	var out struct {
-		Slug string `json:"slug"`
+		Kind   string `json:"kind"`
+		Slug   string `json:"slug"`
+		Scopes []struct {
+			Slug string `json:"slug"`
+			Role string `json:"role"`
+		} `json:"scopes"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", false, fmt.Errorf("decode: %w", err)
+		return httpStoreResult{}, fmt.Errorf("decode: %w", err)
 	}
+
+	// A user session carries a scope set (explicit kind, or scopes present).
+	if out.Kind == "session" || len(out.Scopes) > 0 {
+		set := make(map[string]bool, len(out.Scopes))
+		list := make([]string, 0, len(out.Scopes))
+		for _, sc := range out.Scopes {
+			if sc.Slug == "" || set[sc.Slug] {
+				continue
+			}
+			set[sc.Slug] = true
+			list = append(list, sc.Slug)
+		}
+		return httpStoreResult{kind: "session", scopeSet: set, scopeList: list, ok: len(list) > 0}, nil
+	}
+
+	// Otherwise a single-scope credential (key / bare {slug}).
 	if out.Slug == "" {
-		return "", false, nil
+		return httpStoreResult{ok: false}, nil
 	}
-	return out.Slug, true, nil
+	return httpStoreResult{kind: "key", slug: out.Slug, ok: true}, nil
 }

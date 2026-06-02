@@ -40,6 +40,7 @@ const (
 type Hello struct {
 	Type          string `json:"type"` // "hello"
 	Token         string `json:"token"`
+	Scope         string `json:"scope,omitempty"` // requested org/scope; "" = the credential's default
 	ClientVersion string `json:"client_version,omitempty"`
 	ProtoVersion  int    `json:"proto_version"`
 }
