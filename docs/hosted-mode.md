@@ -26,39 +26,44 @@ the OSS happy path from [`setup.md`](setup.md).
 ## 1. Architecture
 
 ```
-                                  ┌──────────────────────────────┐
-[ developer's CLI ] ── :443 ──▶  │         beamd             │
-   `beamd open 3001`         │  (one or more droplets)      │
-                                  │                              │
-                                  │  - terminates TLS            │
-                                  │  - routes by Host header     │
-                                  │  - proxies through yamux     │
-                                  └──────────────────────────────┘
-                                          │      ▲    │
-                       verify-token POST  │      │    │ usage POST
-                       device-code POSTs  │      │    │ (every 60s)
-                                          ▼      │    ▼
-                                  ┌──────────────────────────────┐
-[ developer's browser ] ────────▶│         your web app         │
-   sign-up / dashboard           │  (Next.js + better-auth +    │
-   device-code approval          │   Drizzle + Postgres)        │
-                                  │                              │
-                                  │  - users, tokens, slugs      │
-                                  │  - device-code state machine │
-                                  │  - usage rollups + billing   │
-                                  │  - DNS + cert provisioning   │
-                                  │    on slug claim             │
-                                  └──────────────────────────────┘
-                                                 │
-                                       Cloudflare│ API (write A records
-                                                 ▼ per slug at signup)
-                                  ┌──────────────────────────────┐
-                                  │           DNS                │
-                                  └──────────────────────────────┘
+   [ browser ] ── sign-up / dashboard / approve device-code ──┐
+                                                              ▼
+   [ CLI ] ── beamd login (device-code) ──────▶ ┌──────────────────────────────────┐
+                                                │  CONTROL PLANE — your web app    │
+                                                │  one domain, e.g. app.example.com │
+                                                │   · /.well-known/beam-auth +     │
+                                                │     device-code (CLI logs in here)│
+                                                │   · verify-token   ◀── each edge  │
+                                                │   · usage (60s)    ◀── each edge  │
+                                                │   · DNS + cert provisioning       │
+                                                └─────┬────────────────────▲────────┘
+                                       Cloudflare API │                     │
+                                                      ▼          verify-token + usage
+                                                 ┌─────────┐               │
+                                                 │   DNS   │               │
+                                                 └─────────┘               │
+                                                                           │
+   [ CLI ] ── beamd open · tunnel :443 (ALPN beam/1) ──┐                   │
+   [ public visitor ] ── HTTPS :443 ───────────────────┼──▶ ┌──────────────┴───────────┐
+                                                       └────│  EDGE(S) — `beamd serve` │
+                                                            │  SEPARATE domain per tier:│
+                                                            │   paid  edge.example.com  │
+                                                            │   free  edge-free.example │
+                                                            │  TLS · route Host · yamux │
+                                                            └───────────────────────────┘
 ```
 
-Authoritative source of state is **your web app's Postgres**. Beamd
-caches token lookups for ~60s and otherwise holds no user data.
+Authoritative source of state is **your web app's Postgres**. Beamd caches token
+lookups for ~60s and otherwise holds no user data.
+
+**Control plane vs edges.** The host the CLI *logs in against* — the **control
+plane**, your dashboard/api domain, baked into the published CLI — is **not**
+where tunnels *flow*. Login assigns each account an **edge**, and paid vs free
+tunnels live on **separate registrable domains** (reputation isolation; a
+tunneled app is never same-site with your dashboard). You run one `beamd serve`
+per edge domain, each pointing back at the control plane for verify-token +
+usage. See [`identity-and-accounts.md`](identity-and-accounts.md) and the build
+brief in [`web-app-handoff.md`](web-app-handoff.md).
 
 ---
 
@@ -252,8 +257,8 @@ Four HTTP endpoints, all called by beamd. None are user-facing.
 | Endpoint | Caller | Purpose |
 |---|---|---|
 | `POST /api/internal/verify-token` | beamd, per session | Resolve a bearer credential to its scope(s) — a **set** for a user session, a single slug for an API key |
-| `POST /api/device/code` | beam CLI, once per login | Issue a device + user code |
-| `POST /api/device/token` | beam CLI, polling | Return the **user session** once the user approves |
+| `POST /api/device/code` | beamd CLI, once per login | Issue a device + user code |
+| `POST /api/device/token` | beamd CLI, polling | Return the **user session** once the user approves |
 | `POST /api/internal/usage` | beamd, every 60s | Receive per-slug byte/tunnel deltas for billing |
 
 Plus one user-facing page:
@@ -283,7 +288,7 @@ POST /api/internal/verify-token
 Authorization: Bearer <shared secret>
 Content-Type: application/json
 
-{"token": "<the beam bearer token>"}
+{"token": "<the beamd bearer token>"}
 ```
 
 **Response — a user session** (interactive login; authorizes the user's whole
@@ -671,11 +676,18 @@ issuing them a token:
 
 ### 4.2 Write DNS
 
-For each new slug, write two A records (and AAAA if you serve IPv6):
+> **What you write depends on the URL shape** (see "Open design decisions"). The
+> example below is the **per-scope nested shape** — a wildcard *per slug*. If you
+> pick a flat or hyphen shape instead, you provision the edge domain's wildcard
+> **once** (`*.edge.example.com`) and write **nothing per-slug**. Match this to
+> your cert strategy ("the one constraint that decides cert cost").
+
+For the nested shape, write two A records per new slug (and AAAA if you serve
+IPv6) against that slug's assigned **edge** domain:
 
 ```
-acme.beam.example.com       A  <edge ip>
-*.acme.beam.example.com     A  <edge ip>
+acme.edge.example.com       A  <edge ip>
+*.acme.edge.example.com     A  <edge ip>
 ```
 
 Both are required. The wildcard alone won't cover the apex
@@ -715,9 +727,9 @@ success. Cloudflare returns code `81057` for duplicates.
 
 ### 4.3 Pre-warm the certificate (optional)
 
-Beamd will lazily issue `*.acme.beam.example.com` on the
-workspace's first connection. The first `open` then takes ~10s
-while ACME completes — visible to the user.
+Beamd will lazily issue the slug's wildcard (e.g. `*.acme.edge.example.com`,
+nested shape) on the workspace's first connection. The first `open` then takes
+~10s while ACME completes — visible to the user.
 
 To eliminate that delay, hit a hosted-mode admin endpoint on
 beamd that triggers issuance immediately. **That endpoint does
@@ -749,11 +761,12 @@ token in §3.
 The OSS deployment runs one beamd droplet. Hosted will eventually
 need more, sharded by slug.
 
-The sharding is **per-slug at provision time**: each new slug is
-permanently assigned to one droplet, and that droplet's IP is what
-goes into the slug's DNS records. The client connects to
-`<slug>.beam.example.com:443` — which resolves to its droplet,
-where the wildcard cert lives.
+The sharding granularity follows your URL shape. With the **nested** shape it's
+**per-slug** at provision time: each new slug is permanently assigned to one
+droplet, that droplet's IP goes into the slug's DNS, and its per-slug wildcard
+cert lives there. With a **flat/hyphen** shape it's **per edge domain**: one
+shared wildcard per edge, routed by Host within it. Either way a client connects
+to its edge on `:443`, which resolves to the droplet holding that cert.
 
 Placement strategy:
 
@@ -826,10 +839,14 @@ BEAMD_DNS_PROVIDER_CREDS=<Cloudflare token, if beamd still
                             app writes DNS and beamd doesn't need it>
 ```
 
-The CLI fetches `/.well-known/beam-auth` on `beamd login` (no
-`--token`) to discover the device-code endpoints. That's handled by
-[`internal/edge/edge.go:610`](../internal/edge/edge.go) — nothing
-to wire on your end beyond setting the YAML.
+The CLI fetches `/.well-known/beam-auth` on `beamd login` (no `--token`) to
+discover the device-code endpoints. **In the hosted multi-domain setup the
+CLI's baked-in default is the control plane, so the control plane serves
+`/.well-known/beam-auth` directly** (returning the `device_code_url` /
+`token_url` / `verification_uri` above). The `auth_discovery:` block on an
+*edge* (the YAML above) is only used when a CLI dials that edge **directly**
+(self-host); in pure hosted mode it's optional. See
+[`internal/edge`](../internal/edge/) for the edge-served path.
 
 ---
 
@@ -928,19 +945,22 @@ working tunnel:
    - Picks a droplet (round-robin).
    - Writes Cloudflare A records.
    - Inserts `workspaces` row.
-3. User installs the CLI and runs `beamd login --server beam.example.com`
-   → device-code: they approve in the browser, and the CLI stores a **user
-   session** as the account for that server (it spans every scope they belong
-   to; `acme` becomes their default).
+3. User installs the CLI and runs `beamd login` (no flags) → it hits the
+   baked-in **control plane**, does browser/device-code, and the approval
+   response assigns the account's **edge** (paid vs free domain) + scope set.
+   The CLI stores a **user session** keyed by that edge; `acme` becomes the
+   default scope. (Self-host instead passes `--server <edge> --token`.)
 4. User runs `beamd open 3001 --as api` — it lands in scope `acme` (their
    default; `--scope` or a project `.beamd` would pick another).
 5. Client dials beamd at `:443`, ALPN `beam/1`, sends `hello` with the
    session token and the requested scope `acme`.
 6. Beamd POSTs `/api/internal/verify-token` → web app returns the session's
    **scope set**; beamd checks `acme` is in it. Cached 60s.
-7. Beamd registers `api.acme.beam.example.com` → routes to this session.
-8. First request to that URL: beamd issues `*.acme.beam.example.com` from
-   Let's Encrypt via DNS-01 (~10s, one-time). Subsequent connects are instant.
+7. Beamd registers the tunnel host (nested-shape example:
+   `api.acme.edge.example.com`) → routes to this session.
+8. First request to that URL: beamd issues the slug's wildcard (e.g.
+   `*.acme.edge.example.com`) from Let's Encrypt via DNS-01 (~10s, one-time).
+   Subsequent connects are instant.
 9. Every 60s, beamd POSTs `/api/internal/usage` with byte deltas. Web app
    inserts into `usage_events`.
 
