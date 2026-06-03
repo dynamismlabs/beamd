@@ -117,6 +117,35 @@ func TestTunnel_SingleRegisteredAppServesPublicURL(t *testing.T) {
 	}
 }
 
+// A Host header carrying a port — which happens when the edge serves on a
+// non-:443 port or sits behind a proxy — must still route. The edge strips the
+// port before the route lookup (browsers omit :443, so this is invisible in
+// production but breaks local/proxied setups without the strip).
+func TestTunnel_HostHeaderWithPortRoutes(t *testing.T) {
+	dummyPort := startDummyApp(t, "ported")
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
+
+	c := connectClient(t, edgeAddr, "T1")
+	if _, err := c.Register("svc", dummyPort); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	host := "svc.turing." + testBaseDomain
+	hc := publicHTTPSClient(edgeAddr, host)
+	resp, err := hc.Get("https://" + host + ":8443/foo") // port in the Host header
+	if err != nil {
+		t.Fatalf("GET with port in Host: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (a port in Host must still route)", resp.StatusCode)
+	}
+	if want := "ported: GET /foo\n"; string(body) != want {
+		t.Errorf("body = %q, want %q", string(body), want)
+	}
+}
+
 func TestTunnel_TwoBackendsConcurrentOverOneSession(t *testing.T) {
 	port1 := startDummyApp(t, "app1")
 	port2 := startDummyApp(t, "app2")

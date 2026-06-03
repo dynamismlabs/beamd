@@ -636,16 +636,25 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(rr, r.Body, cap)
 	}
 
+	// Routes are keyed by the bare hostname. Strip any port from the Host
+	// header — present when the edge serves on a non-standard port or sits
+	// behind a proxy — so lookups don't miss. Browsers omit :443, so this is a
+	// no-op in the common production case.
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+
 	e.mu.RLock()
-	route := e.routes[r.Host]
+	route := e.routes[host]
 	e.mu.RUnlock()
 
 	var slug string
 	if route == nil {
-		http.Error(rr, "no route for host "+r.Host, http.StatusNotFound)
+		http.Error(rr, "no route for host "+host, http.StatusNotFound)
 	} else {
 		slug = route.session.slug
-		e.proxyFor(r.Host).ServeHTTP(rr, r)
+		e.proxyFor(host).ServeHTTP(rr, r)
 	}
 
 	if rr.status == 0 {
