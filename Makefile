@@ -1,4 +1,4 @@
-.PHONY: build test run-server clean tidy smoke-test npm-build publish-npm publish-binaries
+.PHONY: build test run-server clean tidy smoke-test npm-build publish-npm publish-binaries api-gen api-check
 
 BIN_DIR := bin
 VERSION ?= dev
@@ -14,6 +14,15 @@ smoke-test: build
 
 test:
 	go test ./...
+
+# Regenerate the shared-contract Go types from internal/beamdapi/openapi.json
+# (exported from the hosted web app). Commit the result.
+api-gen:
+	go generate ./internal/beamdapi/...
+
+# CI guard: fail if the committed types are stale vs the spec.
+api-check:
+	./internal/beamdapi/check-drift.sh
 
 run-server: build
 	$(BIN_DIR)/beamd serve --config example/beamd.yaml

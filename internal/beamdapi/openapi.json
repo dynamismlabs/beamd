@@ -1,0 +1,798 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Beamd API",
+    "version": "1.0.0",
+    "description": "Beamd hosted control-plane API. Covers the public REST surface (workspace API-key auth), the device-code login + discovery the CLI uses, and the edge↔control-plane machine endpoints (verify-token, usage). Auth is per-operation; see each operation's security."
+  },
+  "servers": [
+    {
+      "url": "https://beamd.localhost"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Workspace"
+    },
+    {
+      "name": "API Keys"
+    },
+    {
+      "name": "Usage"
+    },
+    {
+      "name": "Device",
+      "description": "Device-code login (no auth)."
+    },
+    {
+      "name": "Account",
+      "description": "User-session endpoints."
+    },
+    {
+      "name": "Internal",
+      "description": "Edge → control plane (shared secret)."
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A workspace API key (create one in the dashboard)."
+      },
+      "sessionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A user-session token (issued by device-code login)."
+      },
+      "edgeSecret": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The shared secret configured on each beamd edge (edge → control plane)."
+      }
+    },
+    "schemas": {
+      "BeamAuthDiscovery": {
+        "type": "object",
+        "properties": {
+          "device_code_url": {
+            "type": "string"
+          },
+          "token_url": {
+            "type": "string"
+          },
+          "verification_uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_code_url",
+          "token_url",
+          "verification_uri"
+        ]
+      },
+      "DeviceCodeResponse": {
+        "type": "object",
+        "properties": {
+          "device_code": {
+            "type": "string"
+          },
+          "user_code": {
+            "type": "string"
+          },
+          "verification_uri": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer"
+          },
+          "interval": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device_code",
+          "user_code",
+          "expires_in"
+        ]
+      },
+      "DeviceTokenResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "edge": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeRef"
+            }
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ScopeRef": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "DeviceTokenRequest": {
+        "type": "object",
+        "properties": {
+          "device_code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_code"
+        ]
+      },
+      "ScopesResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeRef"
+            }
+          }
+        },
+        "required": [
+          "scopes"
+        ]
+      },
+      "VerifyTokenResponse": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "session",
+              "key"
+            ]
+          },
+          "user": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeRef"
+            }
+          }
+        }
+      },
+      "VerifyTokenRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "UsageAccepted": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "UsageRequest": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageEvent"
+            }
+          },
+          "requests_total_delta": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "events"
+        ]
+      },
+      "UsageEvent": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "active_tunnels": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "period_start": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "bytes",
+          "active_tunnels",
+          "period_start",
+          "period_end"
+        ]
+      },
+      "Workspace": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provisioned": {
+            "type": "boolean"
+          },
+          "tunnelBase": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "provisioned",
+          "tunnelBase"
+        ]
+      },
+      "TokenList": {
+        "type": "object",
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Token"
+            }
+          }
+        },
+        "required": [
+          "tokens"
+        ]
+      },
+      "Token": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "createdAt",
+          "lastUsedAt",
+          "revokedAt"
+        ]
+      },
+      "CreatedToken": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "token",
+          "label",
+          "createdAt"
+        ]
+      },
+      "CreateTokenInput": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 80
+          }
+        }
+      },
+      "RevokeResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "revoked"
+        ]
+      },
+      "UsageSummary": {
+        "type": "object",
+        "properties": {
+          "totalBytes": {
+            "type": "number"
+          },
+          "peakTunnels": {
+            "type": "number"
+          },
+          "eventCount": {
+            "type": "number"
+          },
+          "lastSeen": {
+            "type": "string",
+            "nullable": true
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageDay"
+            }
+          }
+        },
+        "required": [
+          "totalBytes",
+          "peakTunnels",
+          "eventCount",
+          "lastSeen",
+          "series"
+        ]
+      },
+      "UsageDay": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "peakTunnels": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "day",
+          "bytes",
+          "peakTunnels"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/.well-known/beam-auth": {
+      "get": {
+        "operationId": "getBeamAuthDiscovery",
+        "summary": "Discover device-code endpoints",
+        "description": "The first thing the CLI fetches on a bare `beamd login`. Advertises the device-code URLs.",
+        "tags": [
+          "Device"
+        ],
+        "responses": {
+          "200": {
+            "description": "Discovery document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BeamAuthDiscovery"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/code": {
+      "post": {
+        "operationId": "createDeviceCode",
+        "summary": "Start a device-code login",
+        "tags": [
+          "Device"
+        ],
+        "responses": {
+          "200": {
+            "description": "Device + user code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCodeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/token": {
+      "post": {
+        "operationId": "pollDeviceToken",
+        "summary": "Poll for the user session",
+        "description": "On approval returns `access_token` + `edge` + `scopes`; otherwise an RFC 8628 error.",
+        "tags": [
+          "Device"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session or RFC-8628 error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceTokenResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scopes": {
+      "get": {
+        "operationId": "listScopes",
+        "summary": "List the session's scopes",
+        "description": "Re-fetch the scope set without re-login (backs `beamd orgs --refresh`).",
+        "tags": [
+          "Account"
+        ],
+        "security": [
+          {
+            "sessionBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's scope set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session token"
+          }
+        }
+      }
+    },
+    "/api/internal/verify-token": {
+      "post": {
+        "operationId": "verifyToken",
+        "summary": "Resolve a bearer to its scope(s)",
+        "description": "The edge's hot path. Empty slug / empty scopes means reject.",
+        "tags": [
+          "Internal"
+        ],
+        "security": [
+          {
+            "edgeSecret": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scope set, single slug, or reject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad shared secret"
+          }
+        }
+      }
+    },
+    "/api/internal/usage": {
+      "post": {
+        "operationId": "ingestUsage",
+        "summary": "Ingest per-slug usage deltas",
+        "tags": [
+          "Internal"
+        ],
+        "security": [
+          {
+            "edgeSecret": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad shared secret"
+          }
+        }
+      }
+    },
+    "/api/v1/workspace": {
+      "get": {
+        "operationId": "getWorkspace",
+        "summary": "Get the current workspace",
+        "description": "Details for the workspace the API key belongs to.",
+        "tags": [
+          "Workspace"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          }
+        }
+      }
+    },
+    "/api/v1/tokens": {
+      "get": {
+        "operationId": "listTokens",
+        "summary": "List API keys",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createToken",
+        "summary": "Create an API key",
+        "description": "Mint a new workspace-scoped key. The raw token is returned once and never again.",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTokenInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          }
+        }
+      }
+    },
+    "/api/v1/tokens/{id}": {
+      "delete": {
+        "operationId": "revokeToken",
+        "summary": "Revoke an API key",
+        "tags": [
+          "API Keys"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          }
+        }
+      }
+    },
+    "/api/v1/usage": {
+      "get": {
+        "operationId": "getUsage",
+        "summary": "Get usage for the workspace",
+        "description": "Aggregate traffic and a per-day series over the last N days.",
+        "tags": [
+          "Usage"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 30
+            },
+            "required": false,
+            "name": "days",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid API key"
+          }
+        }
+      }
+    }
+  }
+}

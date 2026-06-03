@@ -140,6 +140,20 @@ func (s *HTTPStore) lookup(token string) httpStoreResult {
 	return res
 }
 
+// verifyTokenResponse is the web app's /api/internal/verify-token body. Its
+// field set is guarded against the shared OpenAPI spec by a conformance test
+// (see conformance_test.go); `user` is modelled for completeness though the
+// edge only consumes kind/slug/scopes.
+type verifyTokenResponse struct {
+	Kind   string `json:"kind"`
+	Slug   string `json:"slug"`
+	User   string `json:"user,omitempty"`
+	Scopes []struct {
+		Slug string `json:"slug"`
+		Role string `json:"role"`
+	} `json:"scopes"`
+}
+
 func (s *HTTPStore) fetch(token string) (httpStoreResult, error) {
 	body, _ := json.Marshal(struct {
 		Token string `json:"token"`
@@ -172,14 +186,7 @@ func (s *HTTPStore) fetch(token string) (httpStoreResult, error) {
 		return httpStoreResult{}, fmt.Errorf("verify endpoint returned %s", resp.Status)
 	}
 
-	var out struct {
-		Kind   string `json:"kind"`
-		Slug   string `json:"slug"`
-		Scopes []struct {
-			Slug string `json:"slug"`
-			Role string `json:"role"`
-		} `json:"scopes"`
-	}
+	var out verifyTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return httpStoreResult{}, fmt.Errorf("decode: %w", err)
 	}

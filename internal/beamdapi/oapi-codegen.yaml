@@ -1,0 +1,8 @@
+# oapi-codegen config: generate Go types from the beamd control-plane OpenAPI
+# spec. The spec (openapi.json) is exported from the hosted web app (beamd-web)
+# and is the source of truth — see README.md. `models: true` emits types only;
+# the CLI/edge bring their own HTTP + auth, so no client is generated.
+package: beamdapi
+output: types.gen.go
+generate:
+  models: true
