@@ -178,7 +178,14 @@ func (s *HTTPStore) fetch(token string) (httpStoreResult, error) {
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusNotFound, http.StatusUnauthorized:
+	case http.StatusUnauthorized:
+		// 401 is about *beamd's* `Authorization: Bearer <shared secret>`, not the
+		// developer's token — almost always a BEAMD_AUTH_VERIFY_SECRET mismatch
+		// with the web app. Log it loudly (otherwise a misconfigured secret
+		// silently rejects every connection with no signal on this side), then deny.
+		slog.Warn("auth: verify endpoint returned 401 — check BEAMD_AUTH_VERIFY_SECRET matches the web app", "url", s.url)
+		return httpStoreResult{ok: false}, nil
+	case http.StatusNotFound:
 		return httpStoreResult{ok: false}, nil
 	case http.StatusOK:
 		// fall through
