@@ -65,54 +65,69 @@ func isInteractive() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
+// DefaultHost is the hosted control-plane address baked into the published
+// CLI at build time (`-X main.DefaultHost=…`, like Version). When set, a bare
+// `beamd login` targets it for browser/device-code login; the login then
+// assigns the actual edge (paid vs free live on different domains). Empty on
+// OSS builds, so self-host requires --server. It is the *control plane*, not an
+// edge — see docs/identity-and-accounts.md.
+var DefaultHost string
+
 func loginCmd(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	server := fs.String("server", "", "beamd edge address, e.g. beam.example.com")
+	server := fs.String("server", "", "beamd edge address (default: the hosted service; required for self-host)")
 	token := fs.String("token", "", "bearer token / API key (copy-paste); omit for device-code login")
 	scope := fs.String("scope", "", "default scope for this account (hosted; default: personal)")
 	insecure := fs.Bool("insecure", false, "skip TLS verification for the discovery + device-code calls (dev/self-signed setups)")
 	configPath := fs.String("config", "", "write to an explicit config path instead of an account (automation)")
 	_ = fs.Parse(hoistFlags(args, map[string]bool{"server": true, "token": true, "scope": true, "config": true}))
 
-	// In an interactive terminal, prompt for anything missing (with hints)
-	// instead of erroring — friendlier than re-typing the whole command.
-	// Piped/scripted use keeps the strict behavior so it fails fast rather
-	// than blocking on a prompt no one will answer.
-	if (*server == "" || *token == "") && isInteractive() {
-		r := bufio.NewReader(os.Stdin)
-		if *server == "" {
-			fmt.Println("Connect this machine to a beamd edge.")
-			*server = prompt(r, "edge address (e.g. tunnel.example.com)", "")
-		}
-		if *token == "" {
-			fmt.Println("Your developer token — ask whoever runs the edge, or find it in the")
-			fmt.Println("edge's tokens.json (the key that maps to your slug).")
-			*token = prompt(r, "token (or Enter to try browser login, if the edge supports it)", "")
-		}
+	// Hosted default: a bare `beamd login` (no server, no token) targets the
+	// built-in control plane and does browser/device-code login. OSS builds
+	// have no DefaultHost, so they fall through to requiring --server. (A
+	// pasted --token comes with its own edge, so it always needs --server.)
+	if *server == "" && *token == "" {
+		*server = DefaultHost
 	}
-
+	if *server == "" && isInteractive() {
+		r := bufio.NewReader(os.Stdin)
+		fmt.Println("Connect this machine to a beamd edge.")
+		*server = prompt(r, "edge address (e.g. tunnel.example.com)", "")
+	}
 	*server = normalizeServerAddr(*server)
-
 	if *server == "" {
-		fmt.Fprintln(os.Stderr, "login: --server is required")
+		fmt.Fprintln(os.Stderr, "login: --server is required for a self-hosted edge")
 		os.Exit(2)
 	}
 
+	// The account is keyed by the edge tunnels flow through. For self-host/OSS
+	// (or a pasted token) that's --server; for hosted device-code login the
+	// edge is whatever the login assigns (paid vs free live on different
+	// domains), so acctServer may switch to it below.
+	acctServer := *server
 	kind := "token"
+	var scopes []config.ScopeRef
+
 	if *token == "" {
-		got, err := deviceCodeLogin(*server, *insecure)
+		res, err := deviceCodeLogin(*server, *insecure)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "login:", err)
 			os.Exit(1)
 		}
-		*token = got
+		*token = res.Token
 		kind = "session"
+		if res.Edge != "" {
+			acctServer = normalizeServerAddr(res.Edge)
+		}
+		for _, s := range res.Scopes {
+			scopes = append(scopes, config.ScopeRef{Slug: s.Slug, Role: s.Role})
+		}
 	}
 
 	// Explicit --config writes a standalone {server, token} config (the
 	// automation path), bypassing the account store entirely.
 	if *configPath != "" {
-		cfg := &config.Client{Server: *server, Token: *token, InsecureSkipVerify: *insecure}
+		cfg := &config.Client{Server: acctServer, Token: *token, InsecureSkipVerify: *insecure}
 		if err := config.SaveClient(cfg, *configPath); err != nil {
 			fmt.Fprintln(os.Stderr, "save config:", err)
 			os.Exit(1)
@@ -121,14 +136,19 @@ func loginCmd(args []string) {
 		return
 	}
 
-	// Account path: keyed by server, one file per edge. The first account
-	// created becomes current.
+	// Account path: keyed by the (possibly login-assigned) edge. The first
+	// account created becomes current.
+	defaultScope := *scope
+	if defaultScope == "" && len(scopes) > 0 {
+		defaultScope = scopes[0].Slug // personal/first as the standing default
+	}
 	acct := &config.Account{
-		Server:             *server,
+		Server:             acctServer,
 		Token:              *token,
 		Kind:               kind,
 		InsecureSkipVerify: *insecure,
-		DefaultScope:       *scope,
+		Scopes:             scopes,
+		DefaultScope:       defaultScope,
 	}
 	if err := config.SaveAccount(acct); err != nil {
 		fmt.Fprintln(os.Stderr, "save account:", err)
@@ -141,22 +161,22 @@ func loginCmd(args []string) {
 	}
 	firstAccount := g.Current == ""
 	if firstAccount {
-		g.Current = *server
+		g.Current = acctServer
 		if err := config.SaveGlobal(g); err != nil {
 			fmt.Fprintln(os.Stderr, "save global config:", err)
 			os.Exit(1)
 		}
 	}
-	fmt.Printf("logged in (%s)\n", *server)
-	if !firstAccount && g.Current != *server {
-		fmt.Printf("current account is %s — use `--server %s` or `beamd default` to change defaults\n", g.Current, *server)
+	fmt.Printf("logged in (%s)\n", acctServer)
+	if !firstAccount && g.Current != acctServer {
+		fmt.Printf("current account is %s — use `--server %s` or `beamd default` to change defaults\n", g.Current, acctServer)
 	}
 }
 
-// deviceCodeLogin runs the no-token login flow: ask beamd for its
-// discovery payload, then do the device-code dance against whatever
-// web app the operator pointed it at. Returns the issued token.
-func deviceCodeLogin(server string, insecure bool) (string, error) {
+// deviceCodeLogin runs the no-token login flow: ask the control plane for its
+// discovery payload, then do the device-code dance against whatever web app it
+// points at. Returns the issued session + the assigned edge + scope set.
+func deviceCodeLogin(server string, insecure bool) (*devicecode.Result, error) {
 	hc := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -168,13 +188,13 @@ func deviceCodeLogin(server string, insecure bool) (string, error) {
 
 	disc, err := devicecode.Discover(ctx, hc, server)
 	if err != nil {
-		return "", fmt.Errorf(
+		return nil, fmt.Errorf(
 			"discovery failed: %w\n  → pass --token <T> instead, or --insecure if the server's apex cert is self-signed",
 			err,
 		)
 	}
 	if disc == nil {
-		return "", fmt.Errorf(
+		return nil, fmt.Errorf(
 			"this server does not advertise device-code login.\n  → pass --token <T> instead (your operator can issue one with `beamd add-developer`)",
 		)
 	}

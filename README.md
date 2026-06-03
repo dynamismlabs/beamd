@@ -217,14 +217,17 @@ Stay logged into several edges at once; each is an **account**, keyed by its
 server (the kubectl / `gh auth` model):
 
 ```
-beamd login --server acme.com   --token <T>
-beamd login --server other.com  --token <T>
+beamd login                     # hosted: opens a browser; edge + orgs assigned automatically
+beamd login --server acme.com   --token <T>   # self-host / OSS: pass the edge + token
 beamd accounts                  # list them; * marks the current
-beamd open 3001 --server other.com   # one-off override (any command takes --server)
+beamd open 3001 --server acme.com   # one-off override (any command takes --server)
 beamd logout --server acme.com  # remove one
 ```
 
-The first account becomes current; `BEAMD_SERVER=<edge>` overrides per-shell.
+On the **hosted** service a bare `beamd login` does browser login and the edge
+is assigned for you — `--server` is the **self-host opt-out**. (This repo's OSS
+binary has no built-in service, so it always takes `--server`.) The first
+account becomes current; `BEAMD_SERVER=<edge>` overrides per-shell.
 
 ### Scope (org) — one login, many orgs
 

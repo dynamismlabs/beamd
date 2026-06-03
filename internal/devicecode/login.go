@@ -37,12 +37,33 @@ type DeviceCodeResponse struct {
 	Interval        int    `json:"interval,omitempty"`
 }
 
+// Scope is one org the issued session may act in (slug + role).
+type Scope struct {
+	Slug string `json:"slug"`
+	Role string `json:"role,omitempty"`
+}
+
 // TokenResponse is what the web app's token-poll endpoint returns.
 // One of AccessToken (success) or Error (pending / denied / expired).
 // Error codes mirror RFC 8628 §3.5.
+//
+// On success, hosted deployments also return the **edge** this account
+// tunnels through (per tier — paid vs free live on different domains) and the
+// user's **scopes**. Both are optional: when omitted, the account falls back to
+// the login host and an empty scope set (single-edge / self-host case).
 type TokenResponse struct {
-	AccessToken string `json:"access_token,omitempty"`
-	Error       string `json:"error,omitempty"`
+	AccessToken string  `json:"access_token,omitempty"`
+	Edge        string  `json:"edge,omitempty"`
+	Scopes      []Scope `json:"scopes,omitempty"`
+	Error       string  `json:"error,omitempty"`
+}
+
+// Result is the outcome of a successful Login: the bearer session plus the
+// assigned edge + scope set (both may be empty).
+type Result struct {
+	Token  string
+	Edge   string
+	Scopes []Scope
 }
 
 // Discover fetches `/.well-known/beam-auth` on the beamd server.
@@ -74,10 +95,10 @@ func Discover(ctx context.Context, hc *http.Client, serverAddr string) (*Discove
 
 // Login executes the device-code dance and returns the issued token.
 // Prints user-facing instructions on `out`. Honors ctx cancellation.
-func Login(ctx context.Context, hc *http.Client, disc *Discovery, out io.Writer) (string, error) {
+func Login(ctx context.Context, hc *http.Client, disc *Discovery, out io.Writer) (*Result, error) {
 	dc, err := requestDeviceCode(ctx, hc, disc.DeviceCodeURL)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	verifyURI := disc.VerificationURI
@@ -85,7 +106,7 @@ func Login(ctx context.Context, hc *http.Client, disc *Discovery, out io.Writer)
 		verifyURI = dc.VerificationURI
 	}
 	if verifyURI == "" {
-		return "", fmt.Errorf("server did not return a verification URI")
+		return nil, fmt.Errorf("server did not return a verification URI")
 	}
 
 	fmt.Fprintln(out)
@@ -109,7 +130,7 @@ func Login(ctx context.Context, hc *http.Client, disc *Discovery, out io.Writer)
 	for time.Now().Before(expires) {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(interval):
 		}
 
@@ -121,7 +142,7 @@ func Login(ctx context.Context, hc *http.Client, disc *Discovery, out io.Writer)
 		}
 		if tok.AccessToken != "" {
 			fmt.Fprintln(out, "✓ logged in")
-			return tok.AccessToken, nil
+			return &Result{Token: tok.AccessToken, Edge: tok.Edge, Scopes: tok.Scopes}, nil
 		}
 		switch tok.Error {
 		case "", "authorization_pending":
@@ -129,15 +150,15 @@ func Login(ctx context.Context, hc *http.Client, disc *Discovery, out io.Writer)
 		case "slow_down":
 			interval += 5 * time.Second
 		case "access_denied":
-			return "", fmt.Errorf("login denied")
+			return nil, fmt.Errorf("login denied")
 		case "expired_token":
-			return "", fmt.Errorf("device code expired before approval; rerun login")
+			return nil, fmt.Errorf("device code expired before approval; rerun login")
 		default:
 			// Unknown — keep polling but surface it.
 			fmt.Fprintf(out, "  (server: %s — continuing)\n", tok.Error)
 		}
 	}
-	return "", fmt.Errorf("device code expired before approval")
+	return nil, fmt.Errorf("device code expired before approval")
 }
 
 func requestDeviceCode(ctx context.Context, hc *http.Client, url string) (*DeviceCodeResponse, error) {

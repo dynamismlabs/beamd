@@ -438,12 +438,37 @@ Content-Type: application/json
 
 ```
 200 OK
-{"access_token": "<the user-session token>"}
+{
+  "access_token": "<the user-session token>",
+  "edge":   "tunnels.beamd.app",
+  "scopes": [
+    {"slug": "trey", "role": "owner"},
+    {"slug": "acme", "role": "member"}
+  ]
+}
 ```
 
 The `access_token` is a **user session** (§3), not a single-workspace token —
-it authorizes the user's whole scope set. The CLI stores it as the account for
-this server; scope is then chosen per-command (`--scope` / `.beamd` / default).
+it authorizes the user's whole scope set.
+
+**`edge` and `scopes` are how the CLI learns where to point — this is the
+control-plane vs edge split.** The host the CLI logged in against (the *control
+plane* — your dashboard/api domain, baked into the published CLI) is **not**
+necessarily where tunnels flow:
+
+- **`edge`** — the tunnel edge this account uses, returned per **tier**. Free and
+  paid tunnels live on **different registrable domains** on purpose: free-tier
+  abuse can't get the paid domain blocklisted, and a malicious tunneled app is
+  never same-site with your dashboard (no cookie/session exfiltration). The CLI
+  keys the account by this `edge`, so `beamd open` connects there. Omit it and
+  the CLI falls back to the login host (single-domain / self-host).
+- **`scopes`** — the user's set; the CLI caches it for `beamd orgs` and picks the
+  first as the standing default. (The edge still re-checks scope on every
+  connect via verify-token; this cache is for display + selection only.)
+
+So a hosted user runs a bare `beamd login` (no `--server`): the CLI hits the
+baked-in control plane, and *this response* tells it the edge + orgs. `--server`
+stays the self-host opt-out.
 
 **Response (denied / expired):**
 

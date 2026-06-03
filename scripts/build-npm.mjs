@@ -23,6 +23,10 @@ const outDir = join(root, "npm", "build");
 
 const version = process.argv[2];
 const publish = process.argv.includes("--publish");
+// Hosted builds bake in the control-plane host so a bare `beamd login` targets
+// it (OSS builds leave it empty → login requires --server). Set at publish:
+//   BEAMD_DEFAULT_HOST=app.beamd.sh make publish-npm VERSION=x.y.z
+const defaultHost = process.env.BEAMD_DEFAULT_HOST || "";
 if (!version || version.startsWith("-")) {
   console.error("usage: node scripts/build-npm.mjs <version> [--publish]");
   process.exit(1);
@@ -48,10 +52,12 @@ for (const t of targets) {
   const pkgDir = join(outDir, dirName);
   mkdirSync(join(pkgDir, "bin"), { recursive: true });
 
-  console.error(`building ${name} (${t.goos}/${t.goarch}) …`);
+  console.error(`building ${name} (${t.goos}/${t.goarch})${defaultHost ? ` [host=${defaultHost}]` : ""} …`);
+  const ldflags =
+    `-s -w -X main.Version=${version}` + (defaultHost ? ` -X main.DefaultHost=${defaultHost}` : "");
   execFileSync(
     "go",
-    ["build", "-trimpath", "-ldflags", `-s -w -X main.Version=${version}`, "-o", join(pkgDir, "bin", "beamd"), "./cmd/beamd"],
+    ["build", "-trimpath", "-ldflags", ldflags, "-o", join(pkgDir, "bin", "beamd"), "./cmd/beamd"],
     { cwd: root, env: { ...process.env, GOOS: t.goos, GOARCH: t.goarch, CGO_ENABLED: "0" }, stdio: ["ignore", "ignore", "inherit"] },
   );
   chmodSync(join(pkgDir, "bin", "beamd"), 0o755);

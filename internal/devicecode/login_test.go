@@ -73,7 +73,11 @@ func TestLogin_FullFlow(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(TokenResponse{Error: "authorization_pending"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(TokenResponse{AccessToken: finalToken})
+		_ = json.NewEncoder(w).Encode(TokenResponse{
+			AccessToken: finalToken,
+			Edge:        "edge.example.com",
+			Scopes:      []Scope{{Slug: "trey", Role: "owner"}, {Slug: "acme", Role: "member"}},
+		})
 	})
 
 	srv := httptest.NewServer(mux)
@@ -92,12 +96,18 @@ func TestLogin_FullFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	tok, err := Login(ctx, http.DefaultClient, disc, out)
+	res, err := Login(ctx, http.DefaultClient, disc, out)
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if tok != finalToken {
-		t.Errorf("token = %q, want %q", tok, finalToken)
+	if res.Token != finalToken {
+		t.Errorf("token = %q, want %q", res.Token, finalToken)
+	}
+	if res.Edge != "edge.example.com" {
+		t.Errorf("edge = %q, want edge.example.com (assigned by login)", res.Edge)
+	}
+	if len(res.Scopes) != 2 || res.Scopes[0].Slug != "trey" || res.Scopes[1].Slug != "acme" {
+		t.Errorf("scopes = %+v, want [trey, acme]", res.Scopes)
 	}
 	if !strings.Contains(out.String(), userCode) {
 		t.Errorf("user code not printed:\n%s", out.String())

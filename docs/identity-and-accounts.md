@@ -164,11 +164,28 @@ on accounts whose server supports it. On an OSS account, `beamd orgs` reports
 session; a plain OSS edge → paste a token → store a static token. Same stored
 shape either way.
 
+### Control plane vs edge (hosted)
+
+The host the CLI **logs in against** is not necessarily the host tunnels **flow
+through**. The published CLI bakes in a single **control plane** (your
+dashboard/api domain, set at build via `-X main.DefaultHost=…`); a bare `beamd
+login` targets it. The device-code response then returns the **edge** this
+account uses, and the CLI keys the account by *that*. Why the split:
+
+- **Free and paid tunnels live on different registrable domains** — free-tier
+  abuse can't blocklist the paid domain, and a malicious tunneled app is never
+  same-site with the dashboard (no cookie/session theft). The edge is assigned
+  per tier at login, so it's **data the web app returns, never a CLI constant**
+  — changing it needs no CLI rebuild.
+- OSS builds have no control plane (`DefaultHost` empty) → `--server` required,
+  and the edge *is* the login host (single domain). Wire contract for the
+  login→`{session, edge, scopes}` response is in [`hosted-mode.md`](hosted-mode.md) §2.3.
+
 ## Command surface
 
 | Command | Purpose |
 |---|---|
-| `beamd login [--server H] [--token K] [--scope S]` | hosted: device-code (browser) → session, sets default scope. OSS: store `{server, token}`. |
+| `beamd login` | **hosted:** no flags → browser/device-code against the built-in control plane; login assigns the edge + caches orgs. **self-host:** `--server H --token K` (`--scope S` sets the default). |
 | `beamd logout [--server H]` | drop an account |
 | `beamd default [scope]` | show / set this account's default scope (personal unless set) |
 | `beamd whoami` | user + server + current scope |
