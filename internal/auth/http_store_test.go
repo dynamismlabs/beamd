@@ -144,6 +144,27 @@ func TestHTTPStore_SessionScopeSet(t *testing.T) {
 	}
 }
 
+// A session with NO scopes must reject. This is the edge-side guarantee the
+// hosted "verify your email to claim a username" gate relies on: an
+// authenticated user who hasn't claimed a scope (no personal workspace) can't
+// open tunnels, because verify-token returns an empty scope set.
+func TestHTTPStore_SessionWithNoScopesRejects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"kind": "session", "user": "trey@example.com", "scopes": []map[string]string{},
+		})
+	}))
+	defer srv.Close()
+
+	s := NewHTTPStore(srv.URL, "")
+	if _, ok := s.Resolve("SESS", ""); ok {
+		t.Error("session with empty scopes must reject (no claimed scope → no tunnels)")
+	}
+	if _, ok := s.Resolve("SESS", "anything"); ok {
+		t.Error("session with empty scopes must reject for any requested scope")
+	}
+}
+
 // A bare {slug} (no kind) stays back-compatible: it's a single-scope key.
 func TestHTTPStore_BareSlugIsSingleScope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
