@@ -1,4 +1,4 @@
-package usage
+package reqlog
 
 import (
 	"reflect"
@@ -7,16 +7,15 @@ import (
 	"github.com/dynamismlabs/beamd/internal/beamdapi"
 )
 
-// TestConformance_Usage guards the usage report body the reporter sends against
-// the shared OpenAPI spec (internal/beamdapi). See the device-code conformance
-// test for the regen workflow.
-func TestConformance_Usage(t *testing.T) {
+// TestConformance guards the hand-written wire structs against the OpenAPI-
+// generated types by comparing JSON field-name sets (omitempty stripped). Names
+// must match exactly; types/optionality are manual care (request-events-spec §6).
+func TestConformance(t *testing.T) {
 	cases := []struct {
 		name      string
 		ours, gen any
 	}{
-		{"UsageEvent", usageEvent{}, beamdapi.UsageEvent{}},
-		{"UsageRequest", usageReportBody{}, beamdapi.UsageRequest{}},
+		{"RequestEvent", RequestEvent{}, beamdapi.RequestEvent{}},
 	}
 	for _, c := range cases {
 		ours, gen := beamdapi.JSONFields(c.ours), beamdapi.JSONFields(c.gen)

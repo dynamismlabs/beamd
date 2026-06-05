@@ -2,6 +2,8 @@
 
 Working checklist mapping PRD §14 milestones to discrete tasks. Check items off as completed. Each item should be small enough to land in one commit. Source of truth for "what's done"; PRD is source of truth for "what we're building."
 
+> **Naming note (post-M6 refactor).** The milestones below were originally built as **two binaries** — `cmd/beam` (client) and `cmd/beamd` (edge) — using the verbs `expose`/`unexpose` and a background **daemon**. They were later **merged into the single `beamd` binary** (same binary for `serve` and `open`): the verbs were renamed `open`/`close`, the background worker became the **agent**, and client state moved `~/.beam/` → `~/.beamd/` (socket `agent.sock`, config `config`). The checklist text uses the **current** names; the original two-binary milestone *structure* (the `cmd/beam` headings, "both binaries") is kept as a historical record.
+
 ---
 
 ## Deferred work — still open going into v1
@@ -21,9 +23,9 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 ### Still deferred (non-blocking for OSS v1)
 
 - [ ] **Additional libdns providers compiled in** — Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi. Today only `cloudflare` + `stub` are wired in `internal/dns/dns.go`'s `Open()`. Each is one import + one `case`. Operators on other DNS hosts can vendor it themselves until we land more.
-- [x] **Device-code login flow — CLI side** — `beam login` without `--token` now does the device-code dance against whatever web app the operator advertises via `auth_discovery` in beamd.yaml. Discovery endpoint at `/.well-known/beam-auth`. `internal/devicecode` package implements the polling. The *server* side (the `/api/device/code` + `/api/device/token` endpoints + the browser-based approval page) lives in the hosted web app, not in this repo.
+- [x] **Device-code login flow — CLI side** — `beamd login` without `--token` now does the device-code dance against whatever web app the operator advertises via `auth_discovery` in beamd.yaml. Discovery endpoint at `/.well-known/beam-auth`. `internal/devicecode` package implements the polling. The *server* side (the `/api/device/code` + `/api/device/token` endpoints + the browser-based approval page) lives in the hosted web app, not in this repo.
 - [x] **`auth.HTTPStore`** — hosted beamd's `auth.Store` impl. POSTs to a verify endpoint with shared-secret auth, caches 60s positive / 5s negative. `token_store: http(s)://...` in beamd.yaml, secret via `BEAMD_AUTH_VERIFY_SECRET` env var.
-- [ ] **Windows daemon transport** — Unix socket only today. Named-pipe equivalent (with ACL) per PRD §17.
+- [ ] **Windows agent transport** — Unix socket only today. Named-pipe equivalent (with ACL) per PRD §17.
 - [ ] **`token_store: file:<path>` YAML quoting** — Already documented in README + example config. Keep pinned until we've watched a few operators not trip over it.
 
 ---
@@ -49,7 +51,7 @@ Goal: both binaries build, both load config, both print version, server serves `
 - [x] On `serve`: loads config, logs "ready" with parsed values, serves `/healthz`
 
 ### Client binary (`cmd/beam`)
-- [x] `main.go` with subcommands: `login`, `expose`, `list`, `unexpose`, `daemon`, `mcp`, `version`
+- [x] `main.go` with subcommands: `login`, `open`, `list`, `close`, `agent`, `mcp`, `version`
 - [x] `--version` prints semver
 - [x] slog initialized
 - [x] All M5 subcommands stubbed to print "not implemented (M5)" and exit nonzero
@@ -58,9 +60,9 @@ Goal: both binaries build, both load config, both print version, server serves `
 - [x] `server.go` — Server struct + YAML loader + env override (`BEAMD_*`)
 - [x] Server fields: `base_domain`, `edge_ipv4`, `edge_ipv6`, `listen_https`, `acme_email`, `acme_ca`, `dns_provider`, `dns_provider_creds`, `token_store`, `max_tunnels_per_token`
 - [x] `client.go` — Client struct + YAML loader; tolerates missing file
-- [x] Client fields: `server`, `token`, `daemon_socket`
+- [x] Client fields: `server`, `token`, `agent_socket`
 - [x] Validation returns clear errors for missing required server fields
-- [x] Unit tests: valid load, invalid (missing required) fails, env override, default daemon socket path
+- [x] Unit tests: valid load, invalid (missing required) fails, env override, default agent socket path
 
 ### Health
 - [x] `beamd serve` exposes `GET /healthz` returning `{"status":"ok","version":"..."}`
@@ -229,21 +231,21 @@ Goal: per-slug wildcard cert lifecycle (one cert per slug, reused), pluggable DN
 
 ---
 
-## M5 — Client daemon, local API, MCP server, CLI, reconnect ✅ (device-code deferred)
+## M5 — Client agent, local API, MCP server, CLI, reconnect ✅ (device-code deferred)
 
-Goal: full client UX with reconnect-with-replay, daemon, CLI, MCP. Device-code login is the lone deferred piece (tracked in the top-of-file Deferred section).
+Goal: full client UX with reconnect-with-replay, agent, CLI, MCP. Device-code login is the lone deferred piece (tracked in the top-of-file Deferred section).
 
-### Daemon (`internal/daemon`)
-- [x] Daemon process; unix socket listener at `~/.beam/daemon.sock` (0600)
+### Agent (`internal/daemon`)
+- [x] Agent process; unix socket listener at `~/.beamd/agent.sock` (0600)
 - [ ] **Deferred:** Windows named pipe equivalent
-- [x] HTTP API on socket: `POST /expose`, `POST /unexpose`, `GET /list`, `GET /healthz`
-- [x] `/expose` blocks until tunnel registered (via client.Register's wait-for-session loop)
-- [x] Daemon owns the yamux conn to edge via a wrapped `*client.Client`
+- [x] HTTP API on socket: `POST /open`, `POST /close`, `GET /list`, `GET /healthz`
+- [x] `/open` blocks until tunnel registered (via client.Register's wait-for-session loop)
+- [x] Agent owns the yamux conn to edge via a wrapped `*client.Client`
 
 ### Auto-start (`internal/daemon.EnsureRunning`)
-- [x] CLI probes the socket; if absent, spawns `beam daemon --socket <path>` detached (`setsid`)
-- [x] Daemon log file at `~/.beam/daemon.log` (opened append, 0600)
-- [x] Subsequent CLI calls reuse the running daemon (probe succeeds → no respawn)
+- [x] CLI probes the socket; if absent, spawns `beamd agent --socket <path>` detached (`setsid`)
+- [x] Agent log file at `~/.beamd/agent.log` (opened append, 0600)
+- [x] Subsequent CLI calls reuse the running agent (probe succeeds → no respawn)
 
 ### Reconnect (`internal/client.Client`)
 - [x] Background `manage()` goroutine watches `session.CloseChan()` and reconnects on close
@@ -253,33 +255,33 @@ Goal: full client UX with reconnect-with-replay, daemon, CLI, MCP. Device-code l
 - [x] Server-side: identical (slug, name) re-register from the same session is idempotent (PRD §8) — same logic that was added in M3 now exercised by the replay path
 
 ### CLI (`cmd/beam`)
-- [x] `beam login --server <url> --token <t>` — copy-paste flow; writes `~/.beam/config`
-- [ ] **Deferred:** `beam login --server <url>` (no token) — device-code flow
-- [x] `beam expose <port> [--as <name>]` — prints URL on stdout (and only the URL)
-- [x] `beam list` — name / port / health / URL table
-- [x] `beam unexpose <name>`
-- [x] `beam daemon --socket <path>` — internal entry point used by EnsureRunning
+- [x] `beamd login --server <url> --token <t>` — copy-paste flow; writes `~/.beamd/config`
+- [ ] **Deferred:** `beamd login --server <url>` (no token) — device-code flow
+- [x] `beamd open <port> [--as <name>]` — prints URL on stdout (and only the URL)
+- [x] `beamd list` — name / port / health / URL table
+- [x] `beamd close <name>`
+- [x] `beamd agent --socket <path>` — internal entry point used by EnsureRunning
 
 ### Device-code flow
 - [ ] **Deferred (whole subsection):** server `/v1/device/code` + `/v1/device/token`, client polling loop, `Confirmer` interface, OSS `beamd issue-token` confirmer. See top-of-file Deferred section.
 
-### MCP server (`internal/mcp`, `beam mcp`)
-- [x] `beam mcp` subcommand runs the stdio JSON-RPC 2.0 server
+### MCP server (`internal/mcp`, `beamd mcp`)
+- [x] `beamd mcp` subcommand runs the stdio JSON-RPC 2.0 server
 - [x] Methods: `initialize`, `notifications/initialized`, `tools/list`, `tools/call`, `ping`
 - [x] Tool `expose_port(port: int, name?: string) → { content: [{text: <url>}] }`
-- [x] Tool `unexpose(name: string) → { content: [{text: "ok"}] }`
+- [x] Tool `remove_tunnel(name: string) → { content: [{text: "ok"}] }`
 - [x] Tool `list_tunnels() → { content: [{text: <json items>}] }`
 - [x] Schemas valid per MCP 2024-11-05 spec (input-schema JSON Schema, `serverInfo`)
-- [x] All three tools dispatch to the daemon's `LocalClient` — no logic duplication
+- [x] All three tools dispatch to the agent's `LocalClient` — no logic duplication
 
 ### Tests
-- [x] `TestM5_DaemonExposeAndList` — daemon's `/expose` returns a working URL; `/list` shows it; `/unexpose` removes it
+- [x] `TestDaemon_OpenListCloseRoundTrip` — agent's `/open` returns a working URL; `/list` shows it; `/close` removes it
 - [x] `TestM5_HealthzReportsSlug` — `/healthz` returns slug + healthy
 - [x] `TestM5_ReconnectReplaysRegistration` — `e.CloseAllSessions()` → client reconnects + replays → same URL still serves
 - [x] `TestM5_MCPRoundTrip` — initialize → tools/list (3 tools) → tools/call expose_port → URL serves
 - [ ] **Deferred:** device-code login E2E (lands with the device-code work)
 
-**M5 architecture done; device-code login deferred.** Daemon + reconnect + CLI + MCP all work end-to-end; copy-paste auth is the only login path.
+**M5 architecture done; device-code login deferred.** Agent + reconnect + CLI + MCP all work end-to-end; copy-paste auth is the only login path.
 
 **Verified 2026-05-18:** 19 e2e tests pass across M1–M5; all package unit tests green.
 

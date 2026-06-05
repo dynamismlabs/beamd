@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 	"github.com/dynamismlabs/beamd/internal/dns"
 	"github.com/dynamismlabs/beamd/internal/edge"
 	"github.com/dynamismlabs/beamd/internal/naming"
-	usagepkg "github.com/dynamismlabs/beamd/internal/usage"
+	"github.com/dynamismlabs/beamd/internal/reqlog"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".
@@ -164,60 +165,98 @@ func serveCmd(args []string) {
 
 	e := edge.New(cfg, Version, tokens, certMgr)
 
-	// Optional usage reporter: pushes per-slug usage deltas to the
-	// configured webhook. Hosted-only; OSS leaves UsageReporter unset.
-	reporterCancel := startUsageReporter(cfg, e)
-	defer reporterCancel()
+	// Per-request event pipeline: an always-on local file sink (OSS gets request
+	// logs for free), plus a hosted shipper that tails it to the control plane.
+	stopReqlog := startRequestPipeline(cfg, e)
+	defer stopReqlog() // backstop; the paths below stop it in the right order.
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
+	drained := make(chan struct{})
 	go func() {
 		sig := <-sigs
 		slog.Info("shutdown signal received", "signal", sig.String())
-		reporterCancel() // triggers a final usage report before exit
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		// Drain in-flight requests FIRST so their final events are recorded, THEN
+		// flush + stop the request log. Closing the sink before the drain would
+		// drop the events of requests that complete during the drain window.
 		_ = e.Shutdown(ctx)
+		stopReqlog()
+		close(drained)
 	}()
 
 	if err := e.Serve(); err != nil {
 		slog.Error("serve failed", "err", err.Error())
+		stopReqlog() // non-signal exit (e.g. listener error): still flush the sink
 		os.Exit(1)
 	}
+	// Graceful path: Serve returned because Shutdown closed the listener. Wait for
+	// the drain + sink flush to finish before exiting (Serve returns as soon as the
+	// listener closes, while Shutdown is still draining).
+	<-drained
 }
 
-// startUsageReporter spins up the per-slug usage reporter if configured
-// and returns a cancel func. Returns a no-op cancel when WebhookURL is
-// empty, so the caller can `defer cancel()` unconditionally.
-func startUsageReporter(cfg *config.Server, src usagepkg.Source) context.CancelFunc {
-	if cfg.UsageReporter.WebhookURL == "" {
+// startRequestPipeline wires the always-on per-request file sink into the edge
+// and, when a request_reporter webhook is configured, starts the hosted shipper
+// that tails the log and ships batches to the control plane. Returns an
+// idempotent stop func: it flushes the file sink (durable) then stops the shipper
+// — anything unsent ships on next start (the file + cursor persist), so it's
+// lossless across restarts (request-events-spec §4.7).
+func startRequestPipeline(cfg *config.Server, e *edge.Edge) func() {
+	if !cfg.RequestLogEnabled() {
 		return func() {}
 	}
-	interval := time.Duration(cfg.UsageReporter.IntervalSeconds) * time.Second
-	stateFile := cfg.UsageReporter.StateFile
-	if stateFile == "" {
-		stateFile = filepath.Join(cfg.DataDir, "usage-state.json")
+	logPath := cfg.RequestLog.Path
+	if logPath == "" {
+		logPath = filepath.Join(cfg.DataDir, "requests.log")
 	}
-	secret := ""
-	if cfg.UsageReporter.SecretEnv != "" {
-		secret = os.Getenv(cfg.UsageReporter.SecretEnv)
-	}
-
-	r, err := usagepkg.NewReporter(usagepkg.Config{
-		WebhookURL: cfg.UsageReporter.WebhookURL,
-		Secret:     secret,
-		Interval:   interval,
-		StateFile:  stateFile,
-	}, src)
+	fs, err := reqlog.NewFileSink(reqlog.FileSinkConfig{
+		Path:     logPath,
+		MaxBytes: int64(cfg.RequestLog.MaxSizeMB) << 20,
+		Fsync:    time.Duration(cfg.RequestLog.FsyncMs) * time.Millisecond,
+	})
 	if err != nil {
-		slog.Error("usage reporter init failed", "err", err.Error())
-		// Refuse to start: a hosted deployment that silently isn't
-		// billing customers is worse than failing loudly.
+		slog.Error("reqlog: file sink init failed", "err", err.Error())
 		os.Exit(1)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go r.Run(ctx)
-	return cancel
+	e.SetReqSink(fs)
+
+	shipperCancel := func() {}
+	if cfg.RequestReporter.WebhookURL != "" {
+		cursorPath := cfg.RequestReporter.CursorFile
+		if cursorPath == "" {
+			cursorPath = filepath.Join(cfg.DataDir, "requests.cursor")
+		}
+		secret := ""
+		if cfg.RequestReporter.SecretEnv != "" {
+			secret = os.Getenv(cfg.RequestReporter.SecretEnv)
+		}
+		if secret == "" {
+			slog.Error("reqlog: request_reporter set but secret env is empty")
+			os.Exit(1)
+		}
+		sh := reqlog.NewShipper(reqlog.ShipperConfig{
+			LogPath:    logPath,
+			CursorPath: cursorPath,
+			WebhookURL: cfg.RequestReporter.WebhookURL,
+			Secret:     secret,
+			BatchSize:  cfg.RequestReporter.BatchSize,
+			Flush:      time.Duration(cfg.RequestReporter.FlushMs) * time.Millisecond,
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		shipperCancel = cancel
+		go sh.Run(ctx)
+		slog.Info("reqlog: shipper started", "webhook", cfg.RequestReporter.WebhookURL)
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			fs.Close()      // flush buffered events to the durable file
+			shipperCancel() // best-effort final ship; unsent ships on next start
+		})
+	}
 }
 
 // resolveZone returns the registered DNS zone to manage records in.
@@ -596,5 +635,27 @@ func buildCertManager(cfg *config.Server) (certs.Manager, error) {
 		// /healthz, /metrics) serve a real cert. The per-slug wildcard
 		// `*.<slug>.<base>` doesn't cover the apex.
 		EagerNames: []string{cfg.BaseDomain},
+		// Custom domains (url-model §8.2, path B): On-Demand TLS gated by the
+		// control plane's verified-domain allowlist (resolve-host).
+		OnDemandDecision: onDemandDecision(cfg),
 	})
+}
+
+// onDemandDecision returns the custom-domain cert authorizer when the edge is in
+// hosted mode (an HTTP token store), else nil (a self-host edge serves no custom
+// domains). It gates On-Demand TLS issuance on the control plane's
+// verified-domain allowlist via GET /api/internal/resolve-host (derived from the
+// verify-token endpoint, same shared secret).
+func onDemandDecision(cfg *config.Server) func(context.Context, string) error {
+	ts := cfg.TokenStore
+	if !strings.HasPrefix(ts, "http://") && !strings.HasPrefix(ts, "https://") {
+		return nil
+	}
+	endpoint := strings.Replace(ts, "/verify-token", "/resolve-host", 1)
+	if endpoint == ts {
+		if i := strings.LastIndex(ts, "/"); i >= 0 {
+			endpoint = ts[:i] + "/resolve-host"
+		}
+	}
+	return certs.NewResolveHostAuthorizer(endpoint, os.Getenv("BEAMD_AUTH_VERIFY_SECRET"))
 }

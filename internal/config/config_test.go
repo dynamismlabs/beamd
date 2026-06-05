@@ -46,6 +46,30 @@ func TestLoadServer_MissingRequired(t *testing.T) {
 	}
 }
 
+func TestLoadServer_IPMode(t *testing.T) {
+	// Supported modes load (incl. unquoted `off` — yaml.v3 keeps it a string).
+	for _, mode := range []string{"", "truncate", "off"} {
+		body := validServerYAML
+		if mode != "" {
+			body += "request_log:\n  ip_mode: " + mode + "\n"
+		}
+		p := writeFile(t, t.TempDir(), "beamd.yaml", body)
+		cfg, err := LoadServer(p)
+		if err != nil {
+			t.Fatalf("ip_mode %q: unexpected error: %v", mode, err)
+		}
+		if cfg.RequestLog.IPMode != mode {
+			t.Errorf("ip_mode = %q, want %q", cfg.RequestLog.IPMode, mode)
+		}
+	}
+	// An unimplemented mode must fail loudly rather than silently truncate — an
+	// operator picking "hash" expects hashing, not /24 truncation.
+	p := writeFile(t, t.TempDir(), "beamd.yaml", validServerYAML+"request_log:\n  ip_mode: hash\n")
+	if _, err := LoadServer(p); err == nil {
+		t.Fatal("expected an error for unsupported ip_mode: hash")
+	}
+}
+
 func TestLoadServer_EnvOverride(t *testing.T) {
 	p := writeFile(t, t.TempDir(), "beamd.yaml", validServerYAML)
 	t.Setenv("BEAMD_BASE_DOMAIN", "override.example.com")

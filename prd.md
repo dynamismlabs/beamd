@@ -44,7 +44,7 @@ Explicitly out of scope for v1. Do not build these; do not architect around them
 - Customer-owned custom domains (`*.app.theircompany.com`). Phase 2 — leave the cert layer pluggable.
 - Web dashboard / request-inspection UI. Phase 2.
 - Multi-region / anycast edge. Later.
-- Ambient port auto-discovery (auto-expose every listening port). Phase 2 — design the daemon API so it can be added without rework.
+- Ambient port auto-discovery (auto-expose every listening port). Phase 2 — design the agent API so it can be added without rework.
 - Billing, teams, quotas beyond a basic per-token concurrency cap.
 
 ## 5. Decided technical choices (do not relitigate)
@@ -72,7 +72,7 @@ Therefore:
 [ local app :3001 ]
         ▲
         │ loopback
-[ beam client/daemon ]  ──(:443, ALPN "beam/1", yamux)──▶  [ beamd edge server ]
+[ beamd client/agent ]  ──(:443, ALPN "beam/1", yamux)──▶  [ beamd edge server ]
    - local control API                                   - :443 public ingress
    - CLI wraps it                                         - TLS term (certmagic)
    - reconnect + re-register                              - host-based routing table
@@ -89,8 +89,8 @@ Therefore:
 
 ```
 /cmd
-  /beam          # client CLI + daemon (single binary, subcommands)
-  /beamd         # edge server binary
+  /beamd         # single binary: edge (serve) + client (open/run/…) + background agent
+  /beam-testapp  # throwaway origin app used by smoke tests
 /internal
   /proto            # control message types + (de)serialization
   /mux              # yamux setup/helpers (client + server side)
@@ -133,30 +133,30 @@ Rules:
 - Final hostname = `<label>.<slug>.<base_domain>`.
 - Collision: within one slug, a `name` maps to exactly one active session. Second registration of a live name from a different session → `name_taken`. Re-registration from the same session (reconnect) → OK.
 
-## 10. Client daemon + CLI
+## 10. Client agent + CLI
 
-The client runs a background daemon exposing an HTTP API over a **unix domain socket** (default `~/.beam/daemon.sock`, mode `0600`; named pipe `\\.\pipe\beam-daemon-<user>` on Windows). The CLI is a thin wrapper so an agent can use either the CLI, raw HTTP-over-socket, or the MCP server below. File-system permissions enforce single-user access — no in-band auth needed.
+The client runs a background agent exposing an HTTP API over a **unix domain socket** (default `~/.beamd/agent.sock`, mode `0600`; named pipe `\\.\pipe\beamd-agent-<user>` on Windows). The CLI is a thin wrapper so an agent can use either the CLI, raw HTTP-over-socket, or the MCP server below. File-system permissions enforce single-user access — no in-band auth needed.
 
 Local API:
-- `POST /expose` `{ "port":3001, "name":"api" }` → `200 { "url":"https://api.turing.beam.example.com" }` — **blocks until the URL is live (registered + control conn healthy), then returns.** This synchronous return is the core UX; do not make it fire-and-forget.
-- `POST /unexpose` `{ "name":"api" }` → `200`
+- `POST /open` `{ "port":3001, "name":"api" }` → `200 { "url":"https://api.turing.beam.example.com" }` — **blocks until the URL is live (registered + control conn healthy), then returns.** This synchronous return is the core UX; do not make it fire-and-forget.
+- `POST /close` `{ "name":"api" }` → `200`
 - `GET /list` → `[ { "name":"api","port":3001,"url":"...","healthy":true } ]`
 - `GET /healthz`
 
-**MCP server.** The daemon also exposes an MCP server (stdio transport, mountable into any MCP-speaking client) wrapping the same operations as typed tools:
+**MCP server.** The agent also exposes an MCP server (stdio transport, mountable into any MCP-speaking client) wrapping the same operations as typed tools:
 
-- `expose_port(port: int, name?: string) -> { url: string }` — synchronous, same semantics as `POST /expose`.
-- `unexpose(name: string) -> { ok: bool }`
+- `expose_port(port: int, name?: string) -> { url: string }` — synchronous, same semantics as `POST /open`.
+- `remove_tunnel(name: string) -> { ok: bool }`
 - `list_tunnels() -> [ { name, port, url, healthy } ]`
 
 This is the primary integration surface for AI agents — they get a discoverable, typed tool list instead of constructing CLI invocations or HTTP calls. The MCP tools are thin wrappers over the local API; both stay in sync by construction. Discoverability via the MCP tool schema is the point: the agent learns "I have an `expose_port` tool" the same way it learns about file_edit or bash.
 
 CLI:
-- `beam login --server beam.example.com --token <t>` (writes `~/.beam/config`)
-- `beam expose 3001 [--as api]` → prints URL on success (exit 0), error on stderr (exit nonzero). One line of stdout = the URL, nothing else, so agents can capture it.
-- `beam list`
-- `beam unexpose api`
-- The first `expose` auto-starts the daemon if not running.
+- `beamd login --server beam.example.com --token <t>` (writes `~/.beamd/config`)
+- `beamd open 3001 [--as api]` → prints URL on success (exit 0), error on stderr (exit nonzero). One line of stdout = the URL, nothing else, so agents can capture it.
+- `beamd list`
+- `beamd close api`
+- The first `open` auto-starts the agent if not running.
 
 Reconnect: exponential backoff (e.g., 0.5s → max 30s, jittered). While disconnected, `/list` marks entries `healthy:false`; on reconnect, replay registrations, flip back to healthy. Never drop a mapping due to a transient disconnect.
 
@@ -183,7 +183,7 @@ Admin command: `beamd provision-dev --slug turing` → ensures DNS records (`*.t
 
 - Token → slug binding is the authorization boundary. A client can only register under its own slug. Enforce server-side; never trust client-sent slug.
 - Per-token concurrent tunnel cap (`max_tunnels_per_token`). Exceed → `over_limit`.
-- Daemon HTTP API binds to a unix socket (mode `0600`) under the user's home dir; FS perms enforce single-user access. Same model for the MCP stdio transport (inherits the daemon process's user). On Windows, named pipe with equivalent ACL.
+- Agent HTTP API binds to a unix socket (mode `0600`) under the user's home dir; FS perms enforce single-user access. Same model for the MCP stdio transport (inherits the agent process's user). On Windows, named pipe with equivalent ACL.
 - Reasonable request body and header limits at the edge.
 - Bandwidth metering hooks: wrap the proxied copy in a counter per (slug, tunnel) and log it. Do not enforce quotas in v1, but the counter must exist (bandwidth egress is the real cost driver later; instrument now).
 - Graceful shutdown: drain in-flight requests, send `error{code:"shutdown"}` to clients so they reconnect elsewhere.
@@ -191,7 +191,7 @@ Admin command: `beamd provision-dev --slug turing` → ensures DNS records (`*.t
 ## 13. Observability
 
 - Structured logs (slog). Log: connection lifecycle, register/unregister, per-request method/host/status/bytes/duration, cert issuance events.
-- `/healthz` on edge and client daemon.
+- `/healthz` on edge and client agent.
 - Minimal Prometheus metrics: active tunnels, active control conns, requests total (by status), bytes proxied (by slug), cert issuance count/errors. `/metrics` on edge.
 
 ## 14. Milestones & acceptance criteria
@@ -206,15 +206,15 @@ Build in this order. Each milestone has a concrete, testable "done."
 
 **M3 — Dynamic host routing + naming.** Routing table, control protocol (`register`/`registered`), name/port → subdomain, collision rules. *Done:* `register` for `api`@3001 and `web`@3002 yields working `api.<slug>...` and `web.<slug>...`; invalid names and collisions return correct error codes.
 
-**M4 — Real certs, per-dev wildcard via DNS-01.** certmagic + DNS provider; one wildcard cert per slug, reused across that slug's apps; `provision-dev` admin command. *Done:* fresh slug, first `expose` triggers issuance of `*.<slug>.<base>`, second app under same slug serves over TLS with **no new issuance** (assert issuance count == 1).
+**M4 — Real certs, per-dev wildcard via DNS-01.** certmagic + DNS provider; one wildcard cert per slug, reused across that slug's apps; `provision-dev` admin command. *Done:* fresh slug, first `open` triggers issuance of `*.<slug>.<base>`, second app under same slug serves over TLS with **no new issuance** (assert issuance count == 1).
 
-**M5 — Client daemon, local API, MCP server, CLI, reconnect.** Synchronous `/expose`, MCP stdio server exposing `expose_port`/`unexpose`/`list_tunnels`, CLI wrapping, auto-start daemon, exponential-backoff reconnect with registration replay. *Done:* `beam expose 3001 --as api` prints a working URL and exits 0; an MCP client invoking `expose_port(3001, "api")` returns the same URL for the same inputs; killing the edge for 10s then restoring it restores all tunnels with unchanged URLs and no client restart.
+**M5 — Client agent, local API, MCP server, CLI, reconnect.** Synchronous `/open`, MCP stdio server exposing `expose_port`/`remove_tunnel`/`list_tunnels`, CLI wrapping, auto-start agent, exponential-backoff reconnect with registration replay. *Done:* `beamd open 3001 --as api` prints a working URL and exits 0; an MCP client invoking `expose_port(3001, "api")` returns the same URL for the same inputs; killing the edge for 10s then restoring it restores all tunnels with unchanged URLs and no client restart.
 
 **M6 — Hardening.** Token/slug auth enforcement, per-token cap, bandwidth counters, metrics, structured logs, graceful shutdown. *Done:* auth boundary cannot be bypassed by a forged slug; metrics and byte counters populate; clean shutdown drains and triggers client reconnect.
 
 ## 15. Definition of done (v1)
 
-A developer self-hosts `beamd` against their domain and DNS provider, runs `beamd provision-dev --slug turing` once, then on their laptop (which can drop network) runs `beam expose 3001 --as api` and immediately gets `https://api.turing.beam.example.com` serving their local app over valid TLS. They can `expose` several more apps instantly with no extra setup, each on its own subdomain, all over one connection, all surviving a network blip. An AI agent can do the identical thing by calling `expose_port` on the daemon's MCP server (or the local HTTP API) and reading the returned URL.
+A developer self-hosts `beamd` against their domain and DNS provider, runs `beamd provision-dev --slug turing` once, then on their laptop (which can drop network) runs `beamd open 3001 --as api` and immediately gets `https://api.turing.beam.example.com` serving their local app over valid TLS. They can `open` several more apps instantly with no extra setup, each on its own subdomain, all over one connection, all surviving a network blip. An AI agent can do the identical thing by calling `expose_port` on the agent's MCP server (or the local HTTP API) and reading the returned URL.
 
 ## 16. Reference implementations to study (do not copy licenses blindly; study architecture)
 
@@ -227,11 +227,11 @@ A developer self-hosts `beamd` against their domain and DNS provider, runs `beam
 
 **Resolved:**
 
-- **DNS provider abstraction:** the `libdns` interface, with multiple providers compiled into the OSS binary. Cloudflare is the reference/test target because its libdns module is the most mature, but the binary ships with several (Cloudflare, Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi to start; README has the live list). Operators pick via `dns_provider:` config; adding a new provider is a single PR.
-- **Daemon transport:** unix socket with mode `0600` at `~/.beam/daemon.sock` (named pipe with equivalent ACL on Windows). FS permissions enforce single-user access; no in-band auth.
+- **DNS provider abstraction:** the `libdns` interface, with providers compiled into the OSS binary. Cloudflare is the reference/test target because its libdns module is the most mature; the binary currently ships `cloudflare` + `stub`, and more (Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi) are each one import + one `case` away in `internal/dns/dns.go` (README has the live list). Operators pick via `dns_provider:` config; adding a new provider is a single PR.
+- **Agent transport:** unix socket with mode `0600` at `~/.beamd/agent.sock` (named pipe with equivalent ACL on Windows). FS permissions enforce single-user access; no in-band auth.
 - **Control transport:** TLS on :443 with ALPN demux (`beam/1`), not a separate port — see §5. Eliminates the "client behind locked-down network" failure mode.
 
-- **Token issuance: both flows ship in v1.** *Copy-paste* (`beam login --server <url> --token <t>`) is the default for self-hosted OSS — operator edits `tokens.json`, hands the developer the token over Slack/email, developer pastes. *Device-code* (`beam login --server <url>` → CLI prints URL + short code → developer confirms in a browser → CLI polls and writes the token) ships alongside, optional. The device-code wire endpoints (`/v1/device/code`, `/v1/device/token`) live in beamd; the *confirmer backend* (who can approve which slug and how they sign in) is pluggable — OSS ships a basic operator-approves-from-terminal confirmer, hosted swaps in OIDC/magic-link.
+- **Token issuance.** *Copy-paste* (`beamd login --server <url> --token <t>`) is the default for self-hosted OSS and needs no web app — the operator mints a token (`beamd add-developer`, or edits `tokens.json`), hands it over, the developer pastes. *Device-code* (`beamd login --server <url>` → CLI prints a URL + short code → developer confirms in a browser → CLI polls and writes the token) is the **hosted** login UX: the wire endpoints (`/api/device/code`, `/api/device/token`) and the browser approval page live in the **web app**, not beamd — beamd only advertises them at `/.well-known/beam-auth` (the `auth_discovery` config), and the CLI's polling loop lives in `internal/devicecode`. An OSS-native device-code confirmer (operator approves from the terminal, no web app) is possible but not built; OSS today is copy-paste only.
 
 **Deferred:**
 

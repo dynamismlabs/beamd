@@ -17,14 +17,14 @@ One spec, three audiences (tagged + per-operation auth):
 |---|---|---|---|
 | **Device** | `GET /.well-known/beam-auth`, `POST /api/device/code`, `POST /api/device/token` | none | the **CLI** (`internal/devicecode`) |
 | **Account** | `GET /api/scopes` | user-session bearer | the **CLI** (`beamd orgs --refresh`) |
-| **Internal** | `POST /api/internal/verify-token`, `POST /api/internal/usage` | shared secret | each **edge** (`internal/auth`, `internal/usage`) |
+| **Internal** | `POST /api/internal/verify-token`, `POST /api/internal/requests`, `GET /api/internal/scope-hostnames`, `GET /api/internal/resolve-host` | shared secret | each **edge** (`internal/auth`, `internal/reqlog`, `internal/edge`) |
 | **Workspace / API Keys / Usage** | `GET/POST/DELETE /api/v1/*` | workspace API key | public REST (automation) |
 
 The `DeviceTokenResponse` (`access_token` + `edge` + `scopes`), `VerifyTokenResponse`
-(`kind`/`slug`/`scopes`), `UsageRequest`, and `ScopeRef` types here are the same
+(`kind`/`slug`/`scopes`), `RequestEvent`, and `ScopeRef` types here are the same
 shapes the hand-written structs in `internal/devicecode/login.go`,
-`internal/auth/http_store.go`, and `internal/usage/reporter.go` currently model —
-so you can migrate those to the generated types to lock alignment.
+`internal/auth/http_store.go`, and `internal/reqlog` currently model — so you can
+migrate those to the generated types to lock alignment.
 
 ## Regenerate
 

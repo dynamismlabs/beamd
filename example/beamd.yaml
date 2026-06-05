@@ -56,12 +56,27 @@ preview_embed: false
 #   token_url:       https://app.example.com/api/device/token
 #   verification_uri: https://app.example.com/device
 
-# Hosted-deployment only: push per-slug usage deltas (bytes proxied,
-# active tunnels, request count) to a billing webhook on an interval.
-# OSS users leave this unset and scrape `/metrics` for the same data.
+# Per-request event log. Always on: every proxied request is appended as one
+# JSON line to <data_dir>/requests.log (OSS gets request logs for free). The
+# visitor IP is minimized AT THE EDGE before it's written.
 #
-# usage_reporter:
-#   webhook_url:      https://app.example.com/api/internal/usage
-#   secret_env:       BEAMD_USAGE_SECRET     # env var holding the bearer token
-#   interval_seconds: 60
-#   state_file:       /var/lib/beamd/usage-state.json  # default: <data_dir>/usage-state.json
+# request_log:
+#   enabled:   true            # default true
+#   path:      /var/lib/beamd/requests.log   # default <data_dir>/requests.log
+#   max_size_mb: 128           # rotate at this size
+#   ip_mode:   truncate        # truncate (/24, /48) | off (don't record the IP)
+#   capture:                   # analytics fields (billing fields always ship)
+#     path: true
+#     user_agent: true
+#     referer: true
+
+# Hosted-deployment only: ship the request-event log to the control plane, which
+# attributes + aggregates it for usage/billing. OSS users leave this unset (the
+# local file + `/metrics` are still there).
+#
+# request_reporter:
+#   webhook_url: https://app.example.com/api/internal/requests
+#   secret_env:  BEAMD_REQUESTS_SECRET   # env var holding the bearer token
+#   batch_size:  500
+#   flush_ms:    1000
+#   cursor_file: /var/lib/beamd/requests.cursor  # default <data_dir>/requests.cursor

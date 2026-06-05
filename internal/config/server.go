@@ -6,10 +6,17 @@ import (
 	"strconv"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/dynamismlabs/beamd/internal/naming"
 )
 
 type Server struct {
-	BaseDomain       string `yaml:"base_domain"`
+	BaseDomain string `yaml:"base_domain"`
+	// URLShape is how tunnel hostnames are rendered + routed: "hyphen"
+	// (<name>-<slug>.<base>, the default), "subdomain" (<name>.<slug>.<base>),
+	// or "flat" (<name>.<base>). MUST match the control plane's
+	// NEXT_PUBLIC_URL_SHAPE — the edge routes by Host and issues the certs.
+	URLShape         string `yaml:"url_shape"`
 	EdgeIPv4         string `yaml:"edge_ipv4"`
 	EdgeIPv6         string `yaml:"edge_ipv6"`
 	ListenHTTPS      string `yaml:"listen_https"`
@@ -49,10 +56,14 @@ type Server struct {
 	// can do browser-based login against the web app.
 	AuthDiscovery AuthDiscovery `yaml:"auth_discovery"`
 
-	// UsageReporter, if WebhookURL is set, pushes per-slug usage
-	// deltas to that webhook on an interval. Hosted-only — the web
-	// app does billing on top of the events it receives.
-	UsageReporter UsageReporterConfig `yaml:"usage_reporter"`
+	// RequestLog configures the per-request event file sink (always on —
+	// OSS gets local request logs for free).
+	RequestLog RequestLogConfig `yaml:"request_log"`
+
+	// RequestReporter, if WebhookURL is set, tails the request log and ships
+	// batches to the control plane. Hosted-only — the web app does billing +
+	// analytics on top of the events it receives (request-events-spec §4.6).
+	RequestReporter RequestReporterConfig `yaml:"request_reporter"`
 }
 
 // AuthDiscovery is the response body of /.well-known/beam-auth.
@@ -63,14 +74,50 @@ type AuthDiscovery struct {
 	VerificationURI string `yaml:"verification_uri"  json:"verification_uri,omitempty"`
 }
 
-// UsageReporterConfig configures the per-slug usage reporter. Leave
-// WebhookURL empty to disable (OSS default — the same data is still
-// exposed at `/metrics`).
-type UsageReporterConfig struct {
-	WebhookURL      string `yaml:"webhook_url"`
-	SecretEnv       string `yaml:"secret_env"`
-	IntervalSeconds int    `yaml:"interval_seconds"`
-	StateFile       string `yaml:"state_file"`
+// RequestLogConfig configures the always-on per-request file sink.
+type RequestLogConfig struct {
+	Enabled          *bool         `yaml:"enabled"`           // default true
+	Path             string        `yaml:"path"`              // default <data_dir>/requests.log
+	MaxSizeMB        int           `yaml:"max_size_mb"`       // default 128
+	FsyncMs          int           `yaml:"fsync_ms"`          // default 250
+	HeartbeatSeconds int           `yaml:"heartbeat_seconds"` // long-conn window; default 60
+	IPMode           string        `yaml:"ip_mode"`           // truncate (default) | off
+	Capture          CaptureConfig `yaml:"capture"`           // analytics-field toggles
+}
+
+// CaptureConfig toggles the analytics fields (billing fields always ship). A nil
+// pointer means "default on"; set false to drop the field at the edge.
+type CaptureConfig struct {
+	Path      *bool `yaml:"path"`
+	ClientIP  *bool `yaml:"client_ip"`
+	UserAgent *bool `yaml:"user_agent"`
+	Referer   *bool `yaml:"referer"`
+}
+
+// RequestReporterConfig configures the hosted-only request shipper. Leave
+// WebhookURL empty to disable (OSS default — the local file is still written).
+type RequestReporterConfig struct {
+	WebhookURL string `yaml:"webhook_url"`
+	SecretEnv  string `yaml:"secret_env"`
+	BatchSize  int    `yaml:"batch_size"`  // default 500
+	FlushMs    int    `yaml:"flush_ms"`    // default 1000
+	CursorFile string `yaml:"cursor_file"` // default <data_dir>/requests.cursor
+}
+
+// boolOr returns *p when set, else def — for "default on" toggles.
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// RequestLogEnabled reports whether the file sink should run (default true).
+func (s *Server) RequestLogEnabled() bool { return boolOr(s.RequestLog.Enabled, true) }
+
+// Captures resolves the analytics-field toggles (all default on).
+func (c CaptureConfig) Captures() (path, clientIP, userAgent, referer bool) {
+	return boolOr(c.Path, true), boolOr(c.ClientIP, true), boolOr(c.UserAgent, true), boolOr(c.Referer, true)
 }
 
 func LoadServer(path string) (*Server, error) {
@@ -114,12 +161,29 @@ func (s *Server) Validate() error {
 	if s.MaxRequestBodyBytes == 0 {
 		s.MaxRequestBodyBytes = 32 << 20 // 32 MiB default
 	}
+	if s.URLShape == "" {
+		s.URLShape = "hyphen" // the shipped default (matches the control plane)
+	}
+	switch s.RequestLog.IPMode {
+	case "", "truncate", "off":
+		// "" / "truncate" minimize the IP at the edge; "off" drops it entirely.
+	default:
+		// Fail loud rather than silently truncate a mode we don't implement (e.g.
+		// "hash") — an operator picking it expects different behavior.
+		return fmt.Errorf("request_log.ip_mode %q is not supported (use \"truncate\" or \"off\")", s.RequestLog.IPMode)
+	}
 	return nil
+}
+
+// Shape returns the parsed URL shape (hyphen by default).
+func (s *Server) Shape() naming.Shape {
+	return naming.ParseShape(s.URLShape)
 }
 
 func applyServerEnvOverrides(s *Server) {
 	envs := map[string]*string{
 		"BEAMD_BASE_DOMAIN":        &s.BaseDomain,
+		"BEAMD_URL_SHAPE":          &s.URLShape,
 		"BEAMD_EDGE_IPV4":          &s.EdgeIPv4,
 		"BEAMD_EDGE_IPV6":          &s.EdgeIPv6,
 		"BEAMD_LISTEN_HTTPS":       &s.ListenHTTPS,

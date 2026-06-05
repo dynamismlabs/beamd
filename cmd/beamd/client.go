@@ -441,7 +441,10 @@ func runCmd(args []string) {
 	}
 	defer c.Close()
 
-	host := naming.Hostname(label, c.Slug(), c.BaseDomain())
+	// Local preview URL; the edge returns the authoritative host on register.
+	// Uses the shipped default shape (hyphen) — a self-host edge on another shape
+	// still routes correctly (it builds the real host), this is display only.
+	host := naming.Hostname(label, c.Slug(), c.BaseDomain(), naming.ShapeHyphen)
 	publicURL := "https://" + host
 	// Vite/Next allowed-hosts: the wildcard parent of the tunnel host —
 	// `.<slug>.<base>` when namespaced, `.<base>` when flat. Derive it from

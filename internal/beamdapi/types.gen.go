@@ -9,6 +9,96 @@ const (
 	SessionBearerScopes sessionBearerContextKey = "sessionBearer.Scopes"
 )
 
+// Defines values for CustomDomainRefCertMode.
+const (
+	CustomDomainRefCertModeDelegated CustomDomainRefCertMode = "delegated"
+	CustomDomainRefCertModeOnDemand  CustomDomainRefCertMode = "on_demand"
+)
+
+// Valid indicates whether the value is a known member of the CustomDomainRefCertMode enum.
+func (e CustomDomainRefCertMode) Valid() bool {
+	switch e {
+	case CustomDomainRefCertModeDelegated:
+		return true
+	case CustomDomainRefCertModeOnDemand:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RequestEventOutcome.
+const (
+	BackendError RequestEventOutcome = "backend_error"
+	ClientClosed RequestEventOutcome = "client_closed"
+	InProgress   RequestEventOutcome = "in_progress"
+	NoRoute      RequestEventOutcome = "no_route"
+	Ok           RequestEventOutcome = "ok"
+	SizeLimit    RequestEventOutcome = "size_limit"
+	Timeout      RequestEventOutcome = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the RequestEventOutcome enum.
+func (e RequestEventOutcome) Valid() bool {
+	switch e {
+	case BackendError:
+		return true
+	case ClientClosed:
+		return true
+	case InProgress:
+		return true
+	case NoRoute:
+		return true
+	case Ok:
+		return true
+	case SizeLimit:
+		return true
+	case Timeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResolveHostResponseCertMode.
+const (
+	ResolveHostResponseCertModeDelegated ResolveHostResponseCertMode = "delegated"
+	ResolveHostResponseCertModeOnDemand  ResolveHostResponseCertMode = "on_demand"
+)
+
+// Valid indicates whether the value is a known member of the ResolveHostResponseCertMode enum.
+func (e ResolveHostResponseCertMode) Valid() bool {
+	switch e {
+	case ResolveHostResponseCertModeDelegated:
+		return true
+	case ResolveHostResponseCertModeOnDemand:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScopeHostnamesResponseShape.
+const (
+	Flat      ScopeHostnamesResponseShape = "flat"
+	Hyphen    ScopeHostnamesResponseShape = "hyphen"
+	Subdomain ScopeHostnamesResponseShape = "subdomain"
+)
+
+// Valid indicates whether the value is a known member of the ScopeHostnamesResponseShape enum.
+func (e ScopeHostnamesResponseShape) Valid() bool {
+	switch e {
+	case Flat:
+		return true
+	case Hyphen:
+		return true
+	case Subdomain:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for VerifyTokenResponseKind.
 const (
 	Key     VerifyTokenResponseKind = "key"
@@ -47,6 +137,16 @@ type CreatedToken struct {
 	Token     string  `json:"token"`
 }
 
+// CustomDomainRef defines model for CustomDomainRef.
+type CustomDomainRef struct {
+	CertMode CustomDomainRefCertMode `json:"cert_mode"`
+	Domain   string                  `json:"domain"`
+	Primary  bool                    `json:"primary"`
+}
+
+// CustomDomainRefCertMode defines model for CustomDomainRef.CertMode.
+type CustomDomainRefCertMode string
+
 // DeviceCodeResponse defines model for DeviceCodeResponse.
 type DeviceCodeResponse struct {
 	DeviceCode      string  `json:"device_code"`
@@ -69,11 +169,68 @@ type DeviceTokenResponse struct {
 	Scopes      *[]ScopeRef `json:"scopes,omitempty"`
 }
 
+// RequestAccepted defines model for RequestAccepted.
+type RequestAccepted struct {
+	Accepted int  `json:"accepted"`
+	Ok       bool `json:"ok"`
+}
+
+// RequestBatch defines model for RequestBatch.
+type RequestBatch struct {
+	Events []RequestEvent `json:"events"`
+}
+
+// RequestEvent defines model for RequestEvent.
+type RequestEvent struct {
+	BytesIn      int                 `json:"bytes_in"`
+	BytesOut     int                 `json:"bytes_out"`
+	ClientIp     *string             `json:"client_ip,omitempty"`
+	ConnectionId *string             `json:"connection_id,omitempty"`
+	EndedAt      string              `json:"ended_at"`
+	Host         string              `json:"host"`
+	IsWebsocket  bool                `json:"is_websocket"`
+	Method       string              `json:"method"`
+	Outcome      RequestEventOutcome `json:"outcome"`
+	Path         *string             `json:"path,omitempty"`
+	Referer      *string             `json:"referer,omitempty"`
+	RequestId    string              `json:"request_id"`
+	Slug         *string             `json:"slug,omitempty"`
+	StartedAt    string              `json:"started_at"`
+	Status       int                 `json:"status"`
+	TtfbMs       *int                `json:"ttfb_ms,omitempty"`
+	UserAgent    *string             `json:"user_agent,omitempty"`
+}
+
+// RequestEventOutcome defines model for RequestEvent.Outcome.
+type RequestEventOutcome string
+
+// ResolveHostResponse defines model for ResolveHostResponse.
+type ResolveHostResponse struct {
+	CertMode *ResolveHostResponseCertMode `json:"cert_mode,omitempty"`
+	Slug     string                       `json:"slug"`
+	Tunnel   *string                      `json:"tunnel,omitempty"`
+}
+
+// ResolveHostResponseCertMode defines model for ResolveHostResponse.CertMode.
+type ResolveHostResponseCertMode string
+
 // RevokeResult defines model for RevokeResult.
 type RevokeResult struct {
 	Id      string `json:"id"`
 	Revoked bool   `json:"revoked"`
 }
+
+// ScopeHostnamesResponse defines model for ScopeHostnamesResponse.
+type ScopeHostnamesResponse struct {
+	Domains     []CustomDomainRef           `json:"domains"`
+	PrimaryHost string                      `json:"primary_host"`
+	PrimarySlug string                      `json:"primary_slug"`
+	Shape       ScopeHostnamesResponseShape `json:"shape"`
+	Slugs       []string                    `json:"slugs"`
+}
+
+// ScopeHostnamesResponseShape defines model for ScopeHostnamesResponse.Shape.
+type ScopeHostnamesResponseShape string
 
 // ScopeRef defines model for ScopeRef.
 type ScopeRef struct {
@@ -101,40 +258,23 @@ type TokenList struct {
 	Tokens []Token `json:"tokens"`
 }
 
-// UsageAccepted defines model for UsageAccepted.
-type UsageAccepted struct {
-	Ok bool `json:"ok"`
-}
-
 // UsageDay defines model for UsageDay.
 type UsageDay struct {
-	Bytes       float32 `json:"bytes"`
-	Day         string  `json:"day"`
-	PeakTunnels float32 `json:"peakTunnels"`
-}
-
-// UsageEvent defines model for UsageEvent.
-type UsageEvent struct {
-	ActiveTunnels int    `json:"active_tunnels"`
-	Bytes         int    `json:"bytes"`
-	PeriodEnd     string `json:"period_end"`
-	PeriodStart   string `json:"period_start"`
-	Slug          string `json:"slug"`
-}
-
-// UsageRequest defines model for UsageRequest.
-type UsageRequest struct {
-	Events             []UsageEvent `json:"events"`
-	RequestsTotalDelta *int         `json:"requests_total_delta,omitempty"`
+	BytesIn    float32 `json:"bytesIn"`
+	BytesOut   float32 `json:"bytesOut"`
+	Day        string  `json:"day"`
+	Requests   float32 `json:"requests"`
+	TotalBytes float32 `json:"totalBytes"`
 }
 
 // UsageSummary defines model for UsageSummary.
 type UsageSummary struct {
-	EventCount  float32    `json:"eventCount"`
-	LastSeen    *string    `json:"lastSeen"`
-	PeakTunnels float32    `json:"peakTunnels"`
-	Series      []UsageDay `json:"series"`
-	TotalBytes  float32    `json:"totalBytes"`
+	BytesIn    float32    `json:"bytesIn"`
+	BytesOut   float32    `json:"bytesOut"`
+	LastSeen   *string    `json:"lastSeen"`
+	Requests   float32    `json:"requests"`
+	Series     []UsageDay `json:"series"`
+	TotalBytes float32    `json:"totalBytes"`
 }
 
 // VerifyTokenRequest defines model for VerifyTokenRequest.
@@ -155,10 +295,10 @@ type VerifyTokenResponseKind string
 
 // Workspace defines model for Workspace.
 type Workspace struct {
+	ExampleUrl  string `json:"exampleUrl"`
 	Name        string `json:"name"`
 	Provisioned bool   `json:"provisioned"`
 	Slug        string `json:"slug"`
-	TunnelBase  string `json:"tunnelBase"`
 }
 
 // bearerAuthContextKey is the context key for bearerAuth security scheme
@@ -170,6 +310,16 @@ type edgeSecretContextKey string
 // sessionBearerContextKey is the context key for sessionBearer security scheme
 type sessionBearerContextKey string
 
+// ResolveHostParams defines parameters for ResolveHost.
+type ResolveHostParams struct {
+	Host string `form:"host" json:"host"`
+}
+
+// ScopeHostnamesParams defines parameters for ScopeHostnames.
+type ScopeHostnamesParams struct {
+	Slug string `form:"slug" json:"slug"`
+}
+
 // GetUsageParams defines parameters for GetUsage.
 type GetUsageParams struct {
 	Days *int `form:"days,omitempty" json:"days,omitempty"`
@@ -178,8 +328,8 @@ type GetUsageParams struct {
 // PollDeviceTokenJSONRequestBody defines body for PollDeviceToken for application/json ContentType.
 type PollDeviceTokenJSONRequestBody = DeviceTokenRequest
 
-// IngestUsageJSONRequestBody defines body for IngestUsage for application/json ContentType.
-type IngestUsageJSONRequestBody = UsageRequest
+// IngestRequestsJSONRequestBody defines body for IngestRequests for application/json ContentType.
+type IngestRequestsJSONRequestBody = RequestBatch
 
 // VerifyTokenJSONRequestBody defines body for VerifyToken for application/json ContentType.
 type VerifyTokenJSONRequestBody = VerifyTokenRequest

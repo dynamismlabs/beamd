@@ -43,6 +43,17 @@ type MagicConfig struct {
 	// can serve `/healthz`, `/metrics`, and `/.well-known/beam-auth`
 	// with a real cert — the per-slug wildcard doesn't cover the apex.
 	EagerNames []string
+
+	// OnDemandDecision, when set, enables certmagic **On-Demand TLS** for hosts
+	// that are NOT under the base domain — i.e. customer **custom domains**
+	// (url-model §8, path B). A per-host cert is issued on the first handshake
+	// only if this returns nil; otherwise issuance is refused. Wire it to
+	// NewResolveHostAuthorizer so only control-plane-verified hosts get a cert —
+	// that allowlist is what makes On-Demand safe. nil → custom domains are not
+	// served (the host falls back to the self-signed cert). On-Demand certs use
+	// HTTP-01 / TLS-ALPN-01 (only need the host to resolve to the edge), since we
+	// don't control the customer's DNS.
+	OnDemandDecision func(ctx context.Context, name string) error
 }
 
 // DNSProvider is what certmagic needs to solve DNS-01 challenges. It
@@ -116,7 +127,10 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 		acmeCA = certmagic.LetsEncryptProductionCA
 	}
 
-	acmeIssuer := certmagic.NewACMEIssuer(cm, certmagic.ACMEIssuer{
+	// DNS-01 issuer: the only way to get the per-slug WILDCARD certs
+	// (`*.<slug>.<base>` / `*.<base>`) the default URL shapes need — wildcards
+	// are DNS-01-only, and the edge controls the base domain's DNS.
+	dnsIssuer := certmagic.NewACMEIssuer(cm, certmagic.ACMEIssuer{
 		CA:     acmeCA,
 		Email:  cfg.ACMEEmail,
 		Agreed: true,
@@ -127,7 +141,42 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 			},
 		},
 	})
-	cm.Issuers = []certmagic.Issuer{acmeIssuer}
+	// TLS-ALPN-01 issuer: for on-demand custom-domain certs (url-model §8.2,
+	// path B). We do NOT control the customer's DNS, so DNS-01 is unavailable for
+	// `api.acme.com`; instead certmagic solves the challenge over the edge's own
+	// :443 (the listener advertises `acme-tls/1`). Setting DNS01Solver disables
+	// the HTTP-01/TLS-ALPN-01 solvers entirely (certmagic enables them only when
+	// DNS01Solver is nil), which is exactly why a single DNS-01 issuer can't serve
+	// custom domains — hence this second issuer. HTTP-01 is disabled (no :80
+	// listener), leaving TLS-ALPN-01. Ordered AFTER the DNS issuer so the hot
+	// wildcard path issues directly via DNS-01; a custom domain fails the DNS
+	// issuer fast (its zone isn't in our provider) and falls through to here.
+	alpnIssuer := certmagic.NewACMEIssuer(cm, certmagic.ACMEIssuer{
+		CA:                   acmeCA,
+		Email:                cfg.ACMEEmail,
+		Agreed:               true,
+		DisableHTTPChallenge: true,
+	})
+	cm.Issuers = []certmagic.Issuer{dnsIssuer, alpnIssuer}
+
+	// On-Demand TLS for custom domains (url-model §8.2, path B). The
+	// DecisionFunc is the allowlist: certmagic asks it before issuing a per-host
+	// cert, so only control-plane-verified hosts can mint one. Wildcard base
+	// hosts continue to use the eager/managed DNS-01 path above — On-Demand only
+	// kicks in for names certmagic isn't already managing (custom domains).
+	if cfg.OnDemandDecision != nil {
+		decide := cfg.OnDemandDecision
+		cm.OnDemand = &certmagic.OnDemandConfig{
+			DecisionFunc: func(ctx context.Context, name string) error {
+				if err := decide(ctx, name); err != nil {
+					slog.Warn("certs: on-demand issuance refused", "host", name, "err", err.Error())
+					return err
+				}
+				slog.Info("certs: on-demand issuance authorized", "host", name)
+				return nil
+			},
+		}
+	}
 
 	fallback, err := generateSelfSignedCert(
 		"localhost", cfg.BaseDomain, "*."+cfg.BaseDomain,
@@ -161,13 +210,16 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 func (m *MagicManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	slug, ok := extractSlug(hello.ServerName, m.baseDomain)
 	if !ok {
-		// No per-developer slug in the SNI — this is the apex (or another
-		// eagerly-managed name, e.g. the one /.well-known/beam-auth is
-		// served on). Serve its managed cert if certmagic has one. certmagic
-		// needs the handshake context, so only consult it when there is one
-		// (real handshakes always set it); otherwise, and for genuinely
-		// unknown SNIs or beam control connections — which skip
-		// verification anyway — use the self-signed fallback.
+		// No per-developer slug in the SNI — this is the apex / an eagerly-
+		// managed name, OR a customer **custom domain** (url-model §8). Consult
+		// certmagic: it returns the managed cert for the apex, and — when
+		// On-Demand is enabled — issues a per-host cert for a verified custom
+		// domain (gated by the DecisionFunc) and solves the ACME challenge
+		// (incl. TLS-ALPN-01 over this very handshake). certmagic needs the
+		// handshake context, so only consult it when there is one (real
+		// handshakes always set it); for genuinely unknown SNIs / beam control
+		// connections — which skip verification anyway — use the self-signed
+		// fallback.
 		if hello.Context() != nil {
 			if cert, err := m.cm.GetCertificate(hello); err == nil {
 				return cert, nil

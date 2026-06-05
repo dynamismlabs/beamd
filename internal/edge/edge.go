@@ -32,10 +32,14 @@ import (
 	"github.com/dynamismlabs/beamd/internal/mux"
 	"github.com/dynamismlabs/beamd/internal/naming"
 	"github.com/dynamismlabs/beamd/internal/proto"
-	"github.com/dynamismlabs/beamd/internal/usage"
+	"github.com/dynamismlabs/beamd/internal/reqlog"
 )
 
 const ALPNBeam = "beam/1"
+
+// acmeTLS1 is the ACME TLS-ALPN-01 challenge protocol — advertised so certmagic
+// can issue On-Demand custom-domain certs over this listener (url-model §8.2).
+const acmeTLS1 = "acme-tls/1"
 
 type Edge struct {
 	cfg     *config.Server
@@ -60,6 +64,21 @@ type Edge struct {
 	traffic      *trafficStore
 	trafficSinks []TrafficRecorder
 
+	// reqSink receives per-request events (the file sink + optional shipper);
+	// NopSink by default. reqHeartbeat is the long-connection accounting window.
+	// The cap* flags + ipTruncate gate/minimize the analytics fields at the edge.
+	reqSink      reqlog.Sink
+	reqHeartbeat time.Duration
+	capPath      bool
+	capClientIP  bool
+	capUserAgent bool
+	capReferer   bool
+	ipTruncate   bool
+
+	// hostnames resolves a scope's full hostname set (aliases + custom domains)
+	// so a tunnel registers under all of them. nil in self-host mode.
+	hostnames *hostnamesClient
+
 	// firstSession is closed when the first session completes hello/hello_ok.
 	firstSessionOnce sync.Once
 	firstSession     chan struct{}
@@ -75,8 +94,12 @@ type Session struct {
 
 	writeMu sync.Mutex // serializes control-stream writes
 
-	mu            sync.Mutex
-	names         map[string]struct{}
+	mu    sync.Mutex
+	names map[string]struct{}
+	// hosts maps a tunnel name → every hostname it's registered under (the
+	// default-shape host(s) for the scope's slug(s) plus any custom-domain hosts).
+	// Used to remove them all on unregister.
+	hosts         map[string][]string
 	lastHeartbeat time.Time
 }
 
@@ -86,6 +109,17 @@ type Route struct {
 }
 
 func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Manager) *Edge {
+	hbSec := cfg.RequestLog.HeartbeatSeconds
+	if hbSec <= 0 {
+		hbSec = 60
+	}
+	capPath, capIP, capUA, capRef := cfg.RequestLog.Capture.Captures()
+	// ip_mode "off" means do NOT collect the client IP at all. A raw visitor IP
+	// must never leave the edge, so we drop it rather than ship it un-truncated
+	// (capturing-but-not-truncating would do exactly that — request-events §4.4).
+	if cfg.RequestLog.IPMode == "off" {
+		capIP = false
+	}
 	return &Edge{
 		cfg:              cfg,
 		version:          version,
@@ -98,8 +132,28 @@ func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Ma
 		pubSrvs:          make(map[*http.Server]struct{}),
 		metrics:          newMetrics(),
 		traffic:          newTrafficStore(trafficPath(cfg)),
+		reqSink:          reqlog.NopSink{},
+		reqHeartbeat:     time.Duration(hbSec) * time.Second,
+		capPath:          capPath,
+		capClientIP:      capIP,
+		capUserAgent:     capUA,
+		capReferer:       capRef,
+		ipTruncate:       cfg.RequestLog.IPMode != "off",
+		hostnames:        newHostnamesClient(cfg.TokenStore),
 		firstSession:     make(chan struct{}),
 		shutdown:         make(chan struct{}),
+	}
+}
+
+// SetHostnamesEndpoint overrides the scope-hostnames endpoint + secret (tests
+// point this at a stub control plane to exercise multi-host registration).
+func (e *Edge) SetHostnamesEndpoint(url, secret string) {
+	e.hostnames = &hostnamesClient{
+		url:    url,
+		secret: secret,
+		ttl:    5 * time.Minute,
+		client: &http.Client{Timeout: 5 * time.Second},
+		cache:  make(map[string]hostnamesEntry),
 	}
 }
 
@@ -156,7 +210,12 @@ func (e *Edge) flushTrafficPeriodically() {
 func (e *Edge) Serve() error {
 	tlsCfg := &tls.Config{
 		GetCertificate: e.certs.GetCertificate,
-		NextProtos:     []string{ALPNBeam, "h2", "http/1.1"},
+		// `acme-tls/1` lets certmagic solve ACME TLS-ALPN-01 challenges over this
+		// listener — how On-Demand custom-domain certs (url-model §8.2, path B)
+		// get issued without a :80 listener. GetCertificate returns the challenge
+		// cert for these handshakes; they carry no app data, so the conn handler
+		// just sees them close.
+		NextProtos: []string{ALPNBeam, acmeTLS1, "h2", "http/1.1"},
 	}
 
 	ln, err := tls.Listen("tcp", e.cfg.ListenHTTPS, tlsCfg)
@@ -273,34 +332,6 @@ func (e *Edge) SessionsCreatedTotal() int64 {
 	return e.metrics.sessionsCreatedTotal.Load()
 }
 
-// UsageSnapshot satisfies usage.Source — a point-in-time read of the
-// per-slug counters the usage reporter ships to your billing webhook.
-func (e *Edge) UsageSnapshot() usage.Snapshot {
-	// BytesBySlug reports egress (response bytes) per slug — the billable
-	// dimension the webhook has always carried.
-	bytes := e.traffic.bytesOutBySlug()
-
-	e.metrics.mu.Lock()
-	var requests int64
-	for _, v := range e.metrics.requestsByStatus {
-		requests += v
-	}
-	e.metrics.mu.Unlock()
-
-	tunnels := make(map[string]int64)
-	e.mu.RLock()
-	for _, r := range e.routes {
-		tunnels[r.session.slug]++
-	}
-	e.mu.RUnlock()
-
-	return usage.Snapshot{
-		BytesBySlug:   bytes,
-		TunnelsBySlug: tunnels,
-		RequestsTotal: requests,
-	}
-}
-
 // CloseAllSessions ends every active client session by closing its
 // yamux session. Test helper for exercising the client's reconnect
 // path — production code does NOT call this.
@@ -331,6 +362,11 @@ func (e *Edge) handle(c net.Conn) {
 	switch tlsConn.ConnectionState().NegotiatedProtocol {
 	case ALPNBeam:
 		e.handleClient(c)
+	case acmeTLS1:
+		// An ACME TLS-ALPN-01 challenge: validation happened during the
+		// handshake (the challenge cert was served via GetCertificate). There's
+		// no application data — just close.
+		_ = c.Close()
 	default:
 		e.handlePublic(c)
 	}
@@ -394,6 +430,7 @@ func (e *Edge) handleClient(c net.Conn) {
 		slug:          slug,
 		control:       control,
 		names:         make(map[string]struct{}),
+		hosts:         make(map[string][]string),
 		lastHeartbeat: time.Now(),
 	}
 	e.mu.Lock()
@@ -472,44 +509,92 @@ func (sess *Session) send(msg any) {
 }
 
 func (e *Edge) register(sess *Session, name string) (string, *proto.Error) {
-	hostname := naming.Hostname(name, sess.slug, e.cfg.BaseDomain)
+	// 63-char backstop: under the hyphen shape `<name>-<slug>` is ONE DNS label,
+	// which must fit 63 chars. The edge is the cert authority, so reject here —
+	// otherwise an over-long label fails cert issuance opaquely (url-model §7).
+	if sess.slug != "" && e.cfg.Shape() == naming.ShapeHyphen {
+		if len(name)+1+len(sess.slug) > 63 {
+			return "", &proto.Error{
+				Type: proto.TypeError, Code: proto.CodeInvalidName,
+				Message: fmt.Sprintf(
+					"name too long for this workspace URL (%s-%s exceeds 63 chars) — shorten it or use a custom domain",
+					name, sess.slug),
+			}
+		}
+	}
+
+	// The full hostname set (default-shape per bound slug + custom domains) and
+	// the primary host to render. Fetched outside the lock (may do a network call).
+	hosts, primary := e.hostsForTunnel(name, sess.slug)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if existing, ok := e.routes[hostname]; ok {
-		if existing.session == sess {
-			// Re-registration from the same session: idempotent (PRD §8).
-			return "https://" + hostname, nil
+	// Idempotent re-registration from the same session.
+	sess.mu.Lock()
+	_, already := sess.names[name]
+	sess.mu.Unlock()
+	if already {
+		return "https://" + primary, nil
+	}
+
+	// Conflict check across ALL hosts. A host held by an already-dead session
+	// (its dropSession is racing this register) is reclaimable — we'd rather
+	// show stable URLs than spurious `name_taken` during reconnect-with-replay.
+	// Track the distinct dead tunnels we reclaim: we fully evict them below (so
+	// their dropSession won't decrement activeTunnels for them) and net the gauge
+	// by len(displaced) when we add this tunnel.
+	type displacedKey struct {
+		sess *Session
+		name string
+	}
+	displaced := make(map[displacedKey]struct{})
+	for _, h := range hosts {
+		existing, ok := e.routes[h]
+		if !ok || existing.session == sess {
+			continue
 		}
-		// Reclaim: if the holding session is already dead (yamux
-		// closed) but its dropSession() hasn't run yet, take over the
-		// name. This is the common case during client reconnect-with-
-		// replay — the old session's cleanup is racing the new
-		// session's register, and we'd rather the user see stable URLs
-		// than spurious `name_taken` errors.
 		if existing.session.yamux.IsClosed() {
-			e.routes[hostname] = &Route{session: sess, name: name}
-			sess.mu.Lock()
-			sess.names[name] = struct{}{}
-			sess.mu.Unlock()
-			slog.Info("reclaimed", "slug", sess.slug, "name", name, "host", hostname)
-			return "https://" + hostname, nil
+			displaced[displacedKey{existing.session, existing.name}] = struct{}{}
+			continue
 		}
 		return "", &proto.Error{
 			Type: proto.TypeError, Code: proto.CodeNameTaken,
-			Message: hostname + " is taken",
+			Message: h + " is taken",
 		}
 	}
 
-	// Enforce per-token (per-slug) tunnel cap across all sessions for
-	// the slug. PRD §12 says per-token, and a token always maps to
-	// exactly one slug, so the natural place to count is per-slug.
+	// Reclaim each distinct dead tunnel we're displacing BEFORE the cap check and
+	// the overwrite: drop ALL of its remaining routes and clear its session
+	// bookkeeping now. This does two things: (1) the per-token cap below counts
+	// only genuinely-live tunnels, so a reconnect racing the dead session's
+	// dropSession isn't spuriously rejected with `over_limit`; (2) the dead
+	// session's pending dropSession finds nothing of its own to decrement, so it
+	// can't double-decrement activeTunnels for a tunnel we've already taken over
+	// (any of its hosts NOT in our new set — e.g. an alias dropped between two
+	// scope-hostnames fetches — would otherwise survive as a stale route and drift
+	// the gauge below the true live count).
+	for dk := range displaced {
+		for h, r := range e.routes {
+			if r.session == dk.sess && r.name == dk.name {
+				delete(e.routes, h)
+			}
+		}
+		dk.sess.mu.Lock()
+		delete(dk.sess.names, dk.name)
+		delete(dk.sess.hosts, dk.name)
+		dk.sess.mu.Unlock()
+	}
+
+	// Per-token (per-slug) tunnel cap, counted as DISTINCT tunnels (not route
+	// entries — a tunnel now has several with multi-host). PRD §12.
 	if max := e.cfg.MaxTunnelsPerToken; max > 0 {
 		live := 0
-		for _, r := range e.routes {
-			if r.session.slug == sess.slug {
-				live++
+		for s := range e.sessions {
+			if s.slug == sess.slug {
+				s.mu.Lock()
+				live += len(s.names)
+				s.mu.Unlock()
 			}
 		}
 		if live >= max {
@@ -520,26 +605,56 @@ func (e *Edge) register(sess *Session, name string) (string, *proto.Error) {
 		}
 	}
 
+	for _, h := range hosts {
+		e.routes[h] = &Route{session: sess, name: name}
+	}
 	sess.mu.Lock()
 	sess.names[name] = struct{}{}
+	sess.hosts[name] = hosts
 	sess.mu.Unlock()
+	// Net: +1 for this tunnel, −1 per distinct dead tunnel we reclaimed (each fully
+	// evicted above, so dropSession won't decrement it again).
+	e.metrics.activeTunnels.Add(1 - int64(len(displaced)))
+	slog.Info("registered", "slug", sess.slug, "name", name, "host", primary, "hosts", len(hosts))
+	return "https://" + primary, nil
+}
 
-	e.routes[hostname] = &Route{session: sess, name: name}
-	e.metrics.activeTunnels.Add(1)
-	slog.Info("registered", "slug", sess.slug, "name", name, "host", hostname)
-	return "https://" + hostname, nil
+// RouteHosts returns every hostname currently in the route table (test helper —
+// lets tests assert multi-host registration without TLS/cert concerns).
+func (e *Edge) RouteHosts() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]string, 0, len(e.routes))
+	for h := range e.routes {
+		out = append(out, h)
+	}
+	return out
 }
 
 func (e *Edge) unregister(sess *Session, name string) {
-	hostname := naming.Hostname(name, sess.slug, e.cfg.BaseDomain)
+	sess.mu.Lock()
+	hosts := sess.hosts[name]
+	sess.mu.Unlock()
+	if len(hosts) == 0 {
+		hosts = []string{naming.Hostname(name, sess.slug, e.cfg.BaseDomain, e.cfg.Shape())}
+	}
+
 	e.mu.Lock()
-	if r, ok := e.routes[hostname]; ok && r.session == sess {
-		delete(e.routes, hostname)
-		e.metrics.activeTunnels.Add(-1)
+	removed := false
+	for _, h := range hosts {
+		if r, ok := e.routes[h]; ok && r.session == sess {
+			delete(e.routes, h)
+			removed = true
+		}
+	}
+	if removed {
+		e.metrics.activeTunnels.Add(-1) // one tunnel, regardless of host count
 	}
 	e.mu.Unlock()
+
 	sess.mu.Lock()
 	delete(sess.names, name)
+	delete(sess.hosts, name)
 	sess.mu.Unlock()
 	slog.Info("unregistered", "slug", sess.slug, "name", name)
 }
@@ -550,15 +665,17 @@ func (e *Edge) dropSession(sess *Session) {
 		delete(e.sessions, sess)
 		e.metrics.activeSessions.Add(-1)
 	}
-	removedRoutes := 0
+	// Count DISTINCT tunnels (names), not route entries — a tunnel may answer on
+	// several hosts under multi-host registration.
+	removedNames := make(map[string]struct{})
 	for host, r := range e.routes {
 		if r.session == sess {
 			delete(e.routes, host)
-			removedRoutes++
+			removedNames[r.name] = struct{}{}
 		}
 	}
-	if removedRoutes > 0 {
-		e.metrics.activeTunnels.Add(-int64(removedRoutes))
+	if len(removedNames) > 0 {
+		e.metrics.activeTunnels.Add(-int64(len(removedNames)))
 	}
 	e.mu.Unlock()
 	_ = sess.yamux.Close()
@@ -630,10 +747,15 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	rr := &responseRecorder{ResponseWriter: w}
 	start := time.Now()
 
-	// Cap request body size before it's forwarded. Oversized bodies
+	// Count request bytes (bytes_in), then cap body size. Oversized bodies
 	// produce HTTP 413 via http.MaxBytesReader's error response.
-	if cap := e.cfg.MaxRequestBodyBytes; cap > 0 && r.Body != nil {
-		r.Body = http.MaxBytesReader(rr, r.Body, cap)
+	var bodyCount *countingReader
+	if r.Body != nil {
+		bodyCount = &countingReader{rc: r.Body}
+		r.Body = bodyCount
+		if cap := e.cfg.MaxRequestBodyBytes; cap > 0 {
+			r.Body = http.MaxBytesReader(rr, bodyCount, cap)
+		}
 	}
 
 	// Routes are keyed by the bare hostname. Strip any port from the Host
@@ -649,11 +771,18 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	route := e.routes[host]
 	e.mu.RUnlock()
 
-	var slug string
+	slug := ""
+	if route != nil {
+		slug = route.session.slug
+	}
+	meta := e.metaFor(host, slug, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent(), r.Referer(), start)
+
 	if route == nil {
 		http.Error(rr, "no route for host "+host, http.StatusNotFound)
 	} else {
-		slug = route.session.slug
+		// On a WebSocket/upgrade, the bytes flow through the hijacked conn (not
+		// the recorder); wrap it so they're counted + heartbeated.
+		rr.wrapHijack = func(c net.Conn) net.Conn { return e.startWSHeartbeat(meta, c) }
 		e.proxyFor(host).ServeHTTP(rr, r)
 	}
 
@@ -662,13 +791,40 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	e.metrics.recordRequest(rr.status)
 
-	slog.Info("request",
+	outcome := reqlog.OutcomeOK
+	switch {
+	case route == nil:
+		outcome = reqlog.OutcomeNoRoute
+	case rr.status == http.StatusRequestEntityTooLarge:
+		outcome = reqlog.OutcomeSizeLimit
+	case rr.status >= 500:
+		outcome = reqlog.OutcomeBackendError
+	}
+
+	// A hijacked (WS) connection's events — incl. the final one — are emitted by
+	// its heartbeat goroutine; the handler only emits for ordinary requests.
+	if rr.hijackedConn == nil {
+		var bytesIn int64
+		if bodyCount != nil {
+			bytesIn = bodyCount.n
+		}
+		// TTFB reflects the *backend's* first byte; a no_route 404 is the edge's
+		// own response, so omit it there (spec §3).
+		firstByte := rr.firstByteAt
+		if outcome == reqlog.OutcomeNoRoute {
+			firstByte = time.Time{}
+		}
+		e.emitRequest(meta, rr.status, outcome, bytesIn, rr.bytes, firstByte)
+	}
+
+	slog.Debug("request",
 		"host", r.Host,
 		"method", r.Method,
 		"status", rr.status,
 		"bytes", rr.bytes,
 		"duration_ms", time.Since(start).Milliseconds(),
 		"slug", slug,
+		"outcome", outcome,
 	)
 }
 
@@ -676,6 +832,12 @@ func (e *Edge) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	e.metrics.writeText(w, int64(e.certs.IssuanceCount()))
 	e.traffic.writeMetrics(w)
+	// Per-request event drops (sink backpressure) — loss is observable.
+	if d, ok := e.reqSink.(interface{ Dropped() int64 }); ok {
+		fmt.Fprintln(w, "# HELP beam_requests_dropped_total Per-request events dropped under sink backpressure.")
+		fmt.Fprintln(w, "# TYPE beam_requests_dropped_total counter")
+		fmt.Fprintf(w, "beam_requests_dropped_total %d\n", d.Dropped())
+	}
 }
 
 // handleAuthDiscovery returns the device-code endpoints the hosted

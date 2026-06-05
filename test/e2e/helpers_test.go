@@ -32,6 +32,7 @@ func startEdge(t *testing.T, tokens map[string]string) (*edge.Edge, string) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
+		URLShape:         "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
@@ -60,6 +61,7 @@ func startEdgeWithCertMgr(t *testing.T, tokens map[string]string) (*edge.Edge, *
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
+		URLShape:         "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
@@ -88,6 +90,7 @@ func startEdgeCfg(t *testing.T, tokens map[string]string, mutate func(*config.Se
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
+		URLShape:         "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",

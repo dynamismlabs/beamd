@@ -359,6 +359,7 @@ func TestRegister_PerSlugTunnelCapReturnsOverLimit(t *testing.T) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
+		URLShape:         "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
@@ -1064,6 +1065,7 @@ func TestProxy_OversizedRequestBodyRejected(t *testing.T) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:          testBaseDomain,
+		URLShape:          "subdomain",
 		ListenHTTPS:         edgeAddr,
 		ACMEEmail:           "test@example.com",
 		DNSProvider:         "stub",
@@ -1222,6 +1224,7 @@ func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
+		URLShape:         "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
@@ -1289,6 +1292,7 @@ func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 		edgeAddr := freeListenAddr(t)
 		cfg := &config.Server{
 			BaseDomain:         testBaseDomain,
+			URLShape:         "subdomain",
 			ListenHTTPS:        edgeAddr,
 			ACMEEmail:          "test@example.com",
 			DNSProvider:        "stub",

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // metrics holds the counters and gauges exposed at /metrics. Plain
@@ -86,11 +87,23 @@ type responseRecorder struct {
 	status        int
 	bytes         int64
 	headerWritten bool
+	// firstByteAt is when the first response byte was sent (TTFB). Zero until
+	// the first WriteHeader/Write.
+	firstByteAt time.Time
+	// wrapHijack, if set, wraps the hijacked conn (the WebSocket/upgrade path)
+	// so its bytes are counted and a heartbeat goroutine can emit per-window
+	// events. The wrapped conn is stored in hijackedConn so the handler can tell
+	// the WS path apart (its events are emitted by the heartbeat, not the handler).
+	wrapHijack   func(net.Conn) net.Conn
+	hijackedConn net.Conn
 }
 
 func (rr *responseRecorder) WriteHeader(status int) {
 	if rr.headerWritten {
 		return
+	}
+	if rr.firstByteAt.IsZero() {
+		rr.firstByteAt = time.Now()
 	}
 	rr.status = status
 	rr.headerWritten = true
@@ -112,7 +125,12 @@ func (rr *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 	}
 	rr.headerWritten = true
-	return hj.Hijack()
+	conn, brw, err := hj.Hijack()
+	if err == nil && rr.wrapHijack != nil {
+		conn = rr.wrapHijack(conn)
+		rr.hijackedConn = conn
+	}
+	return conn, brw, err
 }
 
 func (rr *responseRecorder) Flush() {
