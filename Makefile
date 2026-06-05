@@ -1,4 +1,4 @@
-.PHONY: build test run-server clean tidy smoke-test npm-build publish-npm publish-binaries api-gen api-check
+.PHONY: build test test-acme run-server clean tidy smoke-test npm-build publish-npm publish-binaries api-gen api-check
 
 BIN_DIR := bin
 VERSION ?= dev
@@ -14,6 +14,15 @@ smoke-test: build
 
 test:
 	go test ./...
+
+# Custom-domain cert path against a real ACME server (Pebble), run as local
+# processes on 127.0.0.1. Validates On-Demand TLS-ALPN-01 issuance
+# (launch-readiness §3). Installs the Pebble binaries first; build-tagged so it
+# never runs in `make test`.
+test-acme:
+	go install github.com/letsencrypt/pebble/v2/cmd/pebble@latest
+	go install github.com/letsencrypt/pebble/v2/cmd/pebble-challtestsrv@latest
+	go test -tags acme_integration -count=1 -v -run TestOnDemandCustomDomain ./internal/certs/
 
 # Regenerate the shared-contract Go types from internal/beamdapi/openapi.json
 # (exported from the hosted web app). Commit the result.

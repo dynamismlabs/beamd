@@ -3,6 +3,7 @@ package certs
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"log/slog"
@@ -54,6 +55,18 @@ type MagicConfig struct {
 	// HTTP-01 / TLS-ALPN-01 (only need the host to resolve to the edge), since we
 	// don't control the customer's DNS.
 	OnDemandDecision func(ctx context.Context, name string) error
+
+	// --- Advanced / integration-testing knobs — leave zero/nil in production. ---
+
+	// ChallengeTLSPort overrides the port certmagic expects ACME TLS-ALPN-01
+	// validation to arrive on. The ACME spec mandates :443 in production, so this
+	// must stay 0 (→ 443) there; a local ACME test server (Pebble) validates on a
+	// custom port, which is the only reason to set it.
+	ChallengeTLSPort int
+	// ACMETrustedRoots is the root pool the ACME client uses to reach the ACME
+	// directory. nil → system roots (correct for Let's Encrypt). The cert
+	// integration test sets this to Pebble's self-signed CA.
+	ACMETrustedRoots *x509.CertPool
 }
 
 // DNSProvider is what certmagic needs to solve DNS-01 challenges. It
@@ -131,9 +144,10 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 	// (`*.<slug>.<base>` / `*.<base>`) the default URL shapes need — wildcards
 	// are DNS-01-only, and the edge controls the base domain's DNS.
 	dnsIssuer := certmagic.NewACMEIssuer(cm, certmagic.ACMEIssuer{
-		CA:     acmeCA,
-		Email:  cfg.ACMEEmail,
-		Agreed: true,
+		CA:           acmeCA,
+		Email:        cfg.ACMEEmail,
+		Agreed:       true,
+		TrustedRoots: cfg.ACMETrustedRoots,
 		DNS01Solver: &certmagic.DNS01Solver{
 			DNSManager: certmagic.DNSManager{
 				DNSProvider:        cfg.DNSProvider,
@@ -155,7 +169,11 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 		CA:                   acmeCA,
 		Email:                cfg.ACMEEmail,
 		Agreed:               true,
+		TrustedRoots:         cfg.ACMETrustedRoots,
 		DisableHTTPChallenge: true,
+		// 0 → certmagic default (:443, per the ACME spec). The integration test
+		// points this at Pebble's TLS-ALPN validation port.
+		AltTLSALPNPort: cfg.ChallengeTLSPort,
 	})
 	cm.Issuers = []certmagic.Issuer{dnsIssuer, alpnIssuer}
 

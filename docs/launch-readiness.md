@@ -35,8 +35,9 @@ a set of correctness/security bugs — all landed, all gates re-run green:
   single ACME issuer set `DNS01Solver`, which makes certmagic use DNS-01 *exclusively* —
   so the On-Demand path could never solve TLS-ALPN-01 for a domain whose DNS we don't
   control. Fixed: a second TLS-ALPN-01 issuer for on-demand, ordered after the DNS-01
-  issuer (wildcards keep DNS-01; custom domains fall through to TLS-ALPN). See §3 — the
-  LE-staging round-trip should now actually succeed.
+  issuer (wildcards keep DNS-01; custom domains fall through to TLS-ALPN). Now
+  covered by an automated Pebble integration test (`make test-acme`) that proves the
+  failover issues a real cert via TLS-ALPN-01; see §3.
 - **Production migration was stale** — `drizzle/0000_*.sql` still created the dropped
   `usage_event` and lacked `request_event`/`usage_daily`/`custom_domain`/`host_binding`/
   `aliased_at` (tests pass on `drizzle-kit push`, so it was invisible). Regenerated from
@@ -92,12 +93,17 @@ so an untrusted tunneled app can't set/read the dashboard's session cookie.
 
 ### 3. LE-staging validation of custom-domain certs — hands-on (~hours)
 
-The On-Demand cert code + authorization gate are done + unit-tested, and the
-DNS-01-only issuer bug (above) is fixed, so the path *should* now issue via
-TLS-ALPN-01 — but the ACME issuance round-trip (certmagic solving TLS-ALPN-01 over
-the edge's own `:443`) can only be **confirmed** against a real ACME server. This is
-the validation that catches issues like the issuer bug, so it's still required.
-Runbook:
+The On-Demand cert path is now **validated automatically** against a real ACME
+server: **`make test-acme`** runs Let's Encrypt's Pebble + a mock DNS locally and
+drives the real `NewMagicManager` through an On-Demand issuance for a custom
+domain — proving the DNS-01 issuer fails (no control of the customer's DNS) and
+**fails over to TLS-ALPN-01**, which issues a real cert over the edge's own
+listener (and that an unauthorized host is refused → self-signed fallback). This is
+the regression guard for the DNS-01-only issuer bug.
+
+What `make test-acme` can't cover is the **real CA + real networking** (public DNS,
+a real domain, Let's Encrypt's multi-perspective validation), so a one-time
+LE-staging smoke test is still worth doing before relying on it. Runbook:
 
 1. Point the edge at staging: `acme_ca: https://acme-staging-v02.api.letsencrypt.org/directory`
    (or `BEAMD_ACME_CA`) in `beamd.yaml`. Set the `token_store` to the hosted
