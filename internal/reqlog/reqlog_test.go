@@ -48,7 +48,7 @@ func TestFileSinkWritesLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		fs.Record(RequestEvent{RequestID: NewID(), Host: "api-acme.beamd.sh", Method: "GET", Status: 200, Outcome: OutcomeOK})
+		fs.Record(RequestEvent{RequestID: NewID(), Host: "api-acme.beamd.run", Method: "GET", Status: 200, Outcome: OutcomeOK})
 	}
 	fs.Close() // drains
 
@@ -61,7 +61,7 @@ func TestFileSinkWritesLines(t *testing.T) {
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			t.Fatalf("bad line: %v", err)
 		}
-		if ev.Host != "api-acme.beamd.sh" {
+		if ev.Host != "api-acme.beamd.run" {
 			t.Errorf("host = %q", ev.Host)
 		}
 		n++

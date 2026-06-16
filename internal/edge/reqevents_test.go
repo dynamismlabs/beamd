@@ -33,7 +33,7 @@ func (c *capSink) events() []reqlog.RequestEvent {
 func TestWSHeartbeatEmitsPerWindow(t *testing.T) {
 	sink := &capSink{}
 	e := &Edge{reqSink: sink, reqHeartbeat: 30 * time.Millisecond}
-	meta := reqMeta{host: "ws-acme.beamd.sh", slug: "acme", method: "GET", started: time.Now()}
+	meta := reqMeta{host: "ws-acme.beamd.run", slug: "acme", method: "GET", started: time.Now()}
 
 	client, server := net.Pipe()
 	wrapped := e.startWSHeartbeat(meta, server)

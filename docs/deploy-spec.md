@@ -80,7 +80,7 @@ For "I'll run a couple commands myself."
 - **Fly:** copy `fly.toml` → `fly launch` → `fly ips allocate-v4` → `fly secrets
   set BEAMD_DNS_PROVIDER_CREDS=…`.
 - **Any VM:** paste one `cloud-init.yaml` at droplet-create (or a DO Marketplace
-  1-click image / pre-filled deep link), **or** `curl -fsSL https://get.beamd.sh
+  1-click image / pre-filled deep link), **or** `curl -fsSL https://get.beamd.run
   | bash` on a box you already have.
 
 ### Path C — Guided manual  *(most control)*
@@ -117,7 +117,7 @@ one `login`. Steps 5–10 are the `beamd bootstrap` one-shot (planned).
 | **npm** | `npm i -g @beamd/cli` | Node on the box | dev laptops (the client); quick edge if Node's already there |
 | **Go** | `go install github.com/dynamismlabs/beamd/cmd/beamd@vX.Y.Z` | Go toolchain | Go users |
 | **Docker** | `ghcr.io/dynamismlabs/beamd:latest` | Docker | the **edge** — self-contained, no runtime deps |
-| **Installer** | `curl -fsSL https://get.beamd.sh \| bash` | nothing | one-shot VM setup |
+| **Installer** | `curl -fsSL https://get.beamd.run \| bash` | nothing | one-shot VM setup |
 
 > So yes — **`npm i -g @beamd/cli`** is the canonical *client* install, and works
 > for the edge too if the box has Node. For a server we'd steer toward the
@@ -164,7 +164,7 @@ signal.
 - [ ] **`fly.toml` + `cloud-init.yaml`** — the two blueprint artifacts (PaaS +
       all VMs); optionally a DO Marketplace image / deep-link wrapping the
       cloud-init.
-- [ ] **`get.beamd.sh` installer** — for "I already have a box."
+- [ ] **`get.beamd.run` installer** — for "I already have a box."
 - [ ] (later) **A second DNS provider** (Route53 or DigitalOcean DNS) to prove
       pluggability and widen reach.
 

@@ -49,13 +49,13 @@ func TestHostname(t *testing.T) {
 		shape             Shape
 		want              string
 	}{
-		{"api", "acme", "beamd.sh", ShapeHyphen, "api-acme.beamd.sh"},
-		{"pr-123-api", "acme", "beamd.sh", ShapeHyphen, "pr-123-api-acme.beamd.sh"},
-		{"api", "acme", "beamd.sh", ShapeSubdomain, "api.acme.beamd.sh"},
-		{"api", "acme", "beamd.sh", ShapeFlat, "api.beamd.sh"},
+		{"api", "acme", "beamd.run", ShapeHyphen, "api-acme.beamd.run"},
+		{"pr-123-api", "acme", "beamd.run", ShapeHyphen, "pr-123-api-acme.beamd.run"},
+		{"api", "acme", "beamd.run", ShapeSubdomain, "api.acme.beamd.run"},
+		{"api", "acme", "beamd.run", ShapeFlat, "api.beamd.run"},
 		// empty slug always collapses to flat
-		{"api", "", "beamd.sh", ShapeHyphen, "api.beamd.sh"},
-		{"api", "", "beamd.sh", ShapeSubdomain, "api.beamd.sh"},
+		{"api", "", "beamd.run", ShapeHyphen, "api.beamd.run"},
+		{"api", "", "beamd.run", ShapeSubdomain, "api.beamd.run"},
 	}
 	for _, c := range cases {
 		if got := Hostname(c.label, c.slug, c.base, c.shape); got != c.want {
@@ -80,8 +80,8 @@ func TestSlugFromHostRoundTrip(t *testing.T) {
 		{"pr-123-api", "acmeinc", ShapeSubdomain},
 	}
 	for _, v := range golden {
-		host := Hostname(v.name, v.slug, "beamd.sh", v.shape)
-		if got := SlugFromHost(host, "beamd.sh", v.shape); got != v.slug {
+		host := Hostname(v.name, v.slug, "beamd.run", v.shape)
+		if got := SlugFromHost(host, "beamd.run", v.shape); got != v.slug {
 			t.Errorf("SlugFromHost(%q,%q) = %q, want %q", host, v.shape, got, v.slug)
 		}
 	}
@@ -91,18 +91,18 @@ func TestSlugFromHostRoundTrip(t *testing.T) {
 		host  string
 		shape Shape
 	}{
-		{"api.beamd.sh", ShapeFlat},
+		{"api.beamd.run", ShapeFlat},
 		{"app.acme.com", ShapeHyphen},      // custom domain
 		{"api-acme.other.sh", ShapeHyphen}, // outside base
 	}
 	for _, e := range empties {
-		if got := SlugFromHost(e.host, "beamd.sh", e.shape); got != "" {
+		if got := SlugFromHost(e.host, "beamd.run", e.shape); got != "" {
 			t.Errorf("SlugFromHost(%q,%q) = %q, want \"\"", e.host, e.shape, got)
 		}
 	}
 
 	// strips a port
-	if got := SlugFromHost("api-acme.beamd.sh:443", "beamd.sh", ShapeHyphen); got != "acme" {
+	if got := SlugFromHost("api-acme.beamd.run:443", "beamd.run", ShapeHyphen); got != "acme" {
 		t.Errorf("SlugFromHost with port = %q, want acme", got)
 	}
 }

@@ -625,16 +625,21 @@ func buildCertManager(cfg *config.Server) (certs.Manager, error) {
 		"dns_provider", cfg.DNSProvider,
 		"storage_dir", storageDir,
 	)
+	// Manage the apex eagerly so /.well-known/beam-auth (and /healthz, /metrics)
+	// serve a real cert. For the hyphen/flat shapes the single `*.<base>` wildcard
+	// covers every tunnel, so issue it eagerly too (instant tunnels); the subdomain
+	// shape's per-slug `*.<slug>.<base>` certs stay lazy (issued on first handshake).
+	eager := []string{cfg.BaseDomain}
+	if cfg.Shape() != naming.ShapeSubdomain {
+		eager = append(eager, "*."+cfg.BaseDomain)
+	}
 	return certs.NewMagicManager(certs.MagicConfig{
 		BaseDomain:  cfg.BaseDomain,
 		ACMEEmail:   cfg.ACMEEmail,
 		ACMECA:      cfg.ACMECA,
 		DNSProvider: dp,
 		StorageDir:  storageDir,
-		// Manage the apex eagerly so /.well-known/beam-auth (and
-		// /healthz, /metrics) serve a real cert. The per-slug wildcard
-		// `*.<slug>.<base>` doesn't cover the apex.
-		EagerNames: []string{cfg.BaseDomain},
+		EagerNames:  eager,
 		// Custom domains (url-model §8.2, path B): On-Demand TLS gated by the
 		// control plane's verified-domain allowlist (resolve-host).
 		OnDemandDecision: onDemandDecision(cfg),

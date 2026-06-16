@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"path/filepath"
 	"testing"
@@ -107,7 +108,7 @@ func TestMagicManager_ApexServesManagedCertNotFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.cm.CacheUnmanagedTLSCertificate(context.Background(), apexCert, nil); err != nil {
+	if _, err := m.cmWild.CacheUnmanagedTLSCertificate(context.Background(), apexCert, nil); err != nil {
 		t.Fatalf("cache apex cert: %v", err)
 	}
 
@@ -121,6 +122,57 @@ func TestMagicManager_ApexServesManagedCertNotFallback(t *testing.T) {
 	fb := servedCert(t, m.GetCertificate, "nope.example.org")
 	if !bytes.Equal(fb.Certificate[0], m.fallbackCert.Certificate[0]) {
 		t.Error("unknown SNI did not fall back to the self-signed cert")
+	}
+}
+
+// TestMagicManager_UnderBaseDoesNotHitOnDemandDecision is the regression guard for
+// the two-config split: a host UNDER the base domain (apex or tunnel) must be served
+// by the eager DNS-01 wildcard config and must NEVER consult the custom-domain
+// On-Demand DecisionFunc. (The old single-config setup had On-Demand defer eager
+// issuance, so every base host hit the authorizer — which refuses them — and no
+// base/wildcard cert ever issued.)
+func TestMagicManager_UnderBaseDoesNotHitOnDemandDecision(t *testing.T) {
+	dir := t.TempDir()
+	var decisionCalled bool
+	m, err := NewMagicManager(MagicConfig{
+		BaseDomain:  "beam.example.com",
+		ACMEEmail:   "ops@example.com",
+		ACMECA:      "https://acme-staging-v02.api.letsencrypt.org/directory",
+		DNSProvider: stubProvider{},
+		StorageDir:  filepath.Join(dir, "certs"),
+		OnDemandDecision: func(_ context.Context, _ string) error {
+			decisionCalled = true
+			return fmt.Errorf("refuse")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stand in for the eager DNS-01 wildcard by caching it directly.
+	wildCert, err := generateSelfSignedCert("*.beam.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.cmWild.CacheUnmanagedTLSCertificate(context.Background(), wildCert, nil); err != nil {
+		t.Fatalf("cache wildcard: %v", err)
+	}
+
+	// A tunnel host under the base serves the wildcard and does NOT consult the
+	// custom-domain authorizer.
+	got := servedCert(t, m.GetCertificate, "demo-acme.beam.example.com")
+	if decisionCalled {
+		t.Error("under-base host wrongly consulted the on-demand DecisionFunc (the bug)")
+	}
+	if len(got.Certificate) == 0 || !bytes.Equal(got.Certificate[0], wildCert.Certificate[0]) {
+		t.Error("under-base tunnel host did not serve the cmWild wildcard cert")
+	}
+
+	// A genuine custom domain (not under the base) SHOULD consult the authorizer.
+	decisionCalled = false
+	_ = servedCert(t, m.GetCertificate, "api.acme.com")
+	if !decisionCalled {
+		t.Error("custom domain did not consult the on-demand DecisionFunc")
 	}
 }
 

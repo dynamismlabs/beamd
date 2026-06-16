@@ -82,8 +82,8 @@ customers are partitioned so names don't collide, and what that costs in certs.
 The "scope" below is a personal handle or a team slug (see org model).
 
 **1. Shared flat pool — a reserved subdomain ("no-namespace" lane).**
-`<name>.tunnel.beamd.sh` (pick the word: `tunnel` / `go` / `t` / `url` …). One
-`*.tunnel.beamd.sh` wildcard for *everyone* in the pool; `tunnel` is reserved
+`<name>.tunnel.beamd.run` (pick the word: `tunnel` / `go` / `t` / `url` …). One
+`*.tunnel.beamd.run` wildcard for *everyone* in the pool; `tunnel` is reserved
 (nobody can claim it as a scope). Names are one global pool → auto-hashed
 (ngrok's `cabbage-tuesday`) or first-come reservations. For users who just want
 a URL and don't care about owning names. **One cert, instant, infinite scale,
@@ -91,17 +91,17 @@ shortest** — but no per-user name ownership, and a shared pool to keep clean.
 
 **1′. Same, on a separate domain.** `<name>.beamd-free.sh`. Identical to #1 but
 on its own registrable domain → **reputation isolation** (free-tier abuse can't
-get `beamd.sh` blocklisted) and one label shorter. The natural home for a free
+get `beamd.run` blocklisted) and one label shorter. The natural home for a free
 tier — buy a couple `beamd-free.<tld>` to reserve it.
 
-**2. Per-account subdomain (dot-nested).** `<name>.<scope>.beamd.sh` →
-`api.acme.beamd.sh`. A `*.<scope>.beamd.sh` wildcard **per account**. Names are
+**2. Per-account subdomain (dot-nested).** `<name>.<scope>.beamd.run` →
+`api.acme.beamd.run`. A `*.<scope>.beamd.run` wildcard **per account**. Names are
 clean, grouped, and *owned* — `api`/`web` are yours, collision-free across
 accounts. Prettiest; true per-account namespace — but a **cert per account**
 (provisioning wait + LE ceiling, below). This is beamd's current model.
 
 **3. Scope-in-label (hyphen-flattened — the Vercel shape).**
-`<name>-<scope>.beamd.sh` → `api-acme.beamd.sh`. **One shared `*.beamd.sh`**
+`<name>-<scope>.beamd.run` → `api-acme.beamd.run`. **One shared `*.beamd.run`**
 covers it. Names are *owned per scope* (`api-acme` ≠ `api-trey` — contained,
 collision-free) but the scope is jammed into the label, so **every URL is
 longer**. The containment of #2 with the one-cert/instant economics of #1 —
@@ -110,16 +110,16 @@ hash to be fully collision-proof.
 
 **4. Custom domain (premium).** `<name>.acme.com` — the customer points their
 own domain at your edge. Per-hostname cert, issued on-demand (see below). Fully
-theirs, no `beamd.sh` in sight.
+theirs, no `beamd.run` in sight.
 
 ### The one constraint that decides cert cost
 
-A wildcard is **exactly one label deep**: `*.beamd.sh` covers `x.beamd.sh`,
-never `x.y.beamd.sh`. So:
+A wildcard is **exactly one label deep**: `*.beamd.run` covers `x.beamd.run`,
+never `x.y.beamd.run`. So:
 
 - One label under the cert base (#1, #1′, #3) → **one shared wildcard**, issued
   once, instant, unlimited accounts.
-- Two labels (#2's `api.acme.beamd.sh`) → a **wildcard per account**, with a
+- Two labels (#2's `api.acme.beamd.run`) → a **wildcard per account**, with a
   provisioning step and a rate ceiling.
 
 There is no way to get dot-nesting under a single cert — which is the whole
@@ -130,7 +130,7 @@ single flat pool (#1) you lean on hashes instead.)
 
 ### The provisioning wait (#2 only) — and how to erase it
 
-Issuing `*.<scope>.beamd.sh` via ACME DNS-01 took **~8 seconds** in our own
+Issuing `*.<scope>.beamd.run` via ACME DNS-01 took **~8 seconds** in our own
 deploy (Cloudflare TXT write → LE validates → issued). One-time per account.
 
 - **Don't issue lazily at first `open`** — that puts the 8s in the user's face.
@@ -150,8 +150,8 @@ Not exclusive — mix them. A reasonable shape:
 | Tier | URL | Mechanism |
 |---|---|---|
 | **Free** | `myapp-x7k2.beamd-free.sh` | shared flat pool (#1′), hashed names |
-| **Standard** | `api-acme.beamd.sh` | scope-in-label (#3) — contained, one cert, instant |
-| **Pro (pretty)** | `api.acme.beamd.sh` | per-account subdomain (#2), pre-warmed at upgrade |
+| **Standard** | `api-acme.beamd.run` | scope-in-label (#3) — contained, one cert, instant |
+| **Pro (pretty)** | `api.acme.beamd.run` | per-account subdomain (#2), pre-warmed at upgrade |
 | **Enterprise** | `api.acme.com` | custom domain (#4) |
 
 Reframings from the design discussion:
@@ -161,7 +161,7 @@ Reframings from the design discussion:
   *pretty* it renders — hyphen (#3) → dot-subdomain (#2) → custom domain (#4) —
   plus reputation (free domain vs the main one).
 - **"No namespace" is its own lane** (#1/#1′) for people who just want a URL — a
-  reserved subdomain (`*.tunnel.beamd.sh`) or the free domain. Some *paid* users
+  reserved subdomain (`*.tunnel.beamd.run`) or the free domain. Some *paid* users
   will prefer this (short, flat) over a namespace, so don't force one on them.
 - **Agents can't exhaust a global pool** under #3 — the scope partitions them —
   which is the case for the scope being always-present, achieved without

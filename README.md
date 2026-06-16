@@ -16,8 +16,8 @@ By default tunnels live at `<name>.<base>`. On a shared edge you can
 
 ## Status
 
-Pre-alpha. See [`prd.md`](prd.md) for the spec and [`TASKS.md`](TASKS.md)
-for the implementation checklist + open deferred work.
+Launched and generally available. See [`prd.md`](prd.md) for the spec and
+[`TASKS.md`](TASKS.md) for the implementation checklist + open deferred work.
 
 ## How it works (operator view)
 

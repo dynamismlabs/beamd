@@ -67,7 +67,7 @@ npm login
 # 2. publish the npm package(s) — builds all 4 platforms, then publishes.
 #    For the HOSTED CLI, bake in the control-plane host so a bare `beamd login`
 #    targets it (omit for an OSS/self-host build → login requires --server):
-BEAMD_DEFAULT_HOST=app.beamd.sh make publish-npm VERSION=0.0.1
+BEAMD_DEFAULT_HOST=beamd.ai make publish-npm VERSION=0.0.1
 
 # 3. tag + push — this is what makes `go install …@v0.0.1` work
 git tag v0.0.1

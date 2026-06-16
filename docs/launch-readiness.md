@@ -61,7 +61,7 @@ a set of correctness/security bugs — all landed, all gates re-run green:
 ### 1. PSL submission — START NOW (long lead time, out-of-band)
 
 Cookie isolation under the shared-base shape depends on the tunnel base being a
-**public suffix**, so `x.beamd.sh` and `app.beamd.sh` become separate cookie jars.
+**public suffix**, so `x.beamd.run` and `app.beamd.run` become separate cookie jars.
 PSL additions take **weeks-to-months** to ship in browser releases — the lead
 time, not the work, is the bottleneck. File the PR today.
 
@@ -69,9 +69,9 @@ time, not the work, is the bottleneck. File the PR today.
   `public_suffix_list.dat`, in the **`// ===BEGIN PRIVATE DOMAINS===`** section.
 - **Entry** (alphabetical within the section):
   ```
-  // Beamd : https://beamd.sh
-  // Submitted by <name> <ops@beamd.sh>
-  beamd.sh
+  // Beamd : https://beamd.run
+  // Submitted by <name> <ops@beamd.ai>
+  beamd.run
   ```
   Add the free-tier domain too if/when bought (e.g. `beamd-free.sh`).
 - Until it lands in shipped browsers, the hyphen shape is **not** cookie-safe for
@@ -85,8 +85,8 @@ so an untrusted tunneled app can't set/read the dashboard's session cookie.
 
 - **Code (done):** `beamd-web/src/lib/env.ts` `assertCookieIsolation()` refuses to
   boot in production if `NEXT_PUBLIC_APP_URL`'s host is the tunnel base or nested
-  under it. Once `beamd.sh` is a confirmed public suffix (step 1), a shared parent
-  like `app.beamd.sh` is safe — set `COOKIE_ISOLATION_OK=true` to acknowledge.
+  under it. Once `beamd.run` is a confirmed public suffix (step 1), a shared parent
+  like `app.beamd.run` is safe — set `COOKIE_ISOLATION_OK=true` to acknowledge.
 - **Deployment (yours):** pick the domains. Either dashboard on a separate
   registrable domain (`app.beamd-app.com`), or rely on the PSL + the env opt-out.
   Also keep free vs paid tunnels on different registrable domains (reputation).
@@ -110,7 +110,7 @@ LE-staging smoke test is still worth doing before relying on it. Runbook:
    verify-token URL (so `resolve-host` is reachable) + `BEAMD_AUTH_VERIFY_SECRET`.
 2. In the dashboard, add a custom domain you control (`test.example.com`), add the
    DNS records, click **Verify** → status `verified`.
-3. Point the host at the edge: `*.test.example.com CNAME edge.beamd.sh` (or A → edge IP).
+3. Point the host at the edge: `*.test.example.com CNAME edge.beamd.run` (or A → edge IP).
 4. `curl -v https://api.test.example.com/` → edge logs should show
    `certs: on-demand issuance authorized` then an LE-staging cert issued via
    TLS-ALPN-01, and the request routes to your tunnel. (Browsers flag the staging

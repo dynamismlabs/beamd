@@ -5,8 +5,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,10 +39,12 @@ type MagicConfig struct {
 	// record to propagate. Default 2 minutes; tests can lower.
 	PropagationTimeout time.Duration
 
-	// EagerNames are managed (and issued if needed) at construction
-	// time. Typically the operator's apex (`base_domain`) so the edge
-	// can serve `/healthz`, `/metrics`, and `/.well-known/beam-auth`
-	// with a real cert — the per-slug wildcard doesn't cover the apex.
+	// EagerNames are obtained (via DNS-01) at construction time so the edge has a
+	// real cert before serving traffic. Typically the apex (`base_domain`, for
+	// `/healthz` + `/.well-known/beam-auth`) and — for the hyphen/flat shapes —
+	// the base wildcard `*.<base>` (one cert covering every tunnel). Best-effort:
+	// a transient DNS hiccup logs a warning and is retried on first handshake
+	// rather than blocking startup.
 	EagerNames []string
 
 	// OnDemandDecision, when set, enables certmagic **On-Demand TLS** for hosts
@@ -52,8 +54,8 @@ type MagicConfig struct {
 	// NewResolveHostAuthorizer so only control-plane-verified hosts get a cert —
 	// that allowlist is what makes On-Demand safe. nil → custom domains are not
 	// served (the host falls back to the self-signed cert). On-Demand certs use
-	// HTTP-01 / TLS-ALPN-01 (only need the host to resolve to the edge), since we
-	// don't control the customer's DNS.
+	// TLS-ALPN-01 (only need the host to resolve to the edge), since we don't
+	// control the customer's DNS.
 	OnDemandDecision func(ctx context.Context, name string) error
 
 	// --- Advanced / integration-testing knobs — leave zero/nil in production. ---
@@ -77,24 +79,29 @@ type DNSProvider interface {
 	libdns.RecordDeleter
 }
 
-// MagicManager is the production Manager. Backed by certmagic with
-// ACME DNS-01 issuance via a libdns provider. On the first TLS
-// handshake for a slug, it triggers issuance of `*.<slug>.<base>`
-// and caches it; subsequent handshakes for that slug return the
-// cached cert. Renewals are handled by certmagic in the background.
+// MagicManager is the production Manager. It runs TWO certmagic configs because
+// the two issuance modes are mutually exclusive on a single config:
 //
-// **Not exercised in automated tests** — verifying real ACME requires
-// either Pebble in CI or LE-staging with a real domain. Operators
-// should validate locally against LE-staging before pointing
-// production traffic. PRD §M4 lists this as v1's most important
-// reclamation target.
+//   - cmWild: DNS-01 issuer, NO On-Demand. ManageSync OBTAINS eagerly here, which
+//     is how the base apex + the `*.<base>` wildcard (covering every tunnel) get
+//     real certs. Wildcards are DNS-01-only, and we control the base zone.
+//   - cmOnDemand: TLS-ALPN-01 issuer + On-Demand DecisionFunc, for customer
+//     **custom domains** whose DNS we do NOT control (issued per-host on the first
+//     handshake, gated by the control plane's resolve-host allowlist).
+//
+// They MUST be separate: certmagic's ManageSync does not obtain certs ahead of
+// time when On-Demand is configured (config.go: it defers to the DecisionFunc),
+// so putting both on one config means the base/wildcard certs never issue and
+// every handshake hits the custom-domain authorizer (which correctly refuses
+// them). GetCertificate routes by whether the SNI is under the base domain.
 type MagicManager struct {
-	cm           *certmagic.Config
+	cmWild       *certmagic.Config // DNS-01, eager: base apex + *.<base>
+	cmOnDemand   *certmagic.Config // TLS-ALPN-01 + On-Demand: custom domains (nil if disabled)
 	baseDomain   string
 	fallbackCert *tls.Certificate
 
 	mu        sync.Mutex
-	managed   map[string]struct{} // slug → already managed
+	inflight  map[string]bool // background DNS-01 issuance in progress, by name-set
 	issuances int
 }
 
@@ -114,36 +121,26 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 
 	storage := &certmagic.FileStorage{Path: cfg.StorageDir}
 
-	// We construct a fresh Config rather than mutating Default so
-	// multiple Edges in one process don't share state. Cache is per
-	// Config.
-	cache := certmagic.NewCache(certmagic.CacheOptions{
-		GetConfigForCert: func(cert certmagic.Certificate) (*certmagic.Config, error) {
-			// All certs we manage share one config.
-			return nil, nil
-		},
-	})
-
-	cm := certmagic.New(cache, certmagic.Config{
-		Storage: storage,
-		// Silence certmagic's internal logger; we route via slog.
-		Logger: nil,
-	})
-
 	propagationTimeout := cfg.PropagationTimeout
 	if propagationTimeout == 0 {
 		propagationTimeout = 2 * time.Minute
 	}
-
 	acmeCA := cfg.ACMECA
 	if acmeCA == "" {
 		acmeCA = certmagic.LetsEncryptProductionCA
 	}
 
-	// DNS-01 issuer: the only way to get the per-slug WILDCARD certs
-	// (`*.<slug>.<base>` / `*.<base>`) the default URL shapes need — wildcards
-	// are DNS-01-only, and the edge controls the base domain's DNS.
-	dnsIssuer := certmagic.NewACMEIssuer(cm, certmagic.ACMEIssuer{
+	// A fresh cache per config (cache is per-config in certmagic); shared storage
+	// is fine (certmagic namespaces by issuer/account).
+	newCache := func() *certmagic.Cache {
+		return certmagic.NewCache(certmagic.CacheOptions{
+			GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) { return nil, nil },
+		})
+	}
+
+	// --- cmWild: DNS-01, NO On-Demand → ManageSync obtains eagerly. ---
+	cmWild := certmagic.New(newCache(), certmagic.Config{Storage: storage})
+	cmWild.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(cmWild, certmagic.ACMEIssuer{
 		CA:           acmeCA,
 		Email:        cfg.ACMEEmail,
 		Agreed:       true,
@@ -154,37 +151,24 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 				PropagationTimeout: propagationTimeout,
 			},
 		},
-	})
-	// TLS-ALPN-01 issuer: for on-demand custom-domain certs (url-model §8.2,
-	// path B). We do NOT control the customer's DNS, so DNS-01 is unavailable for
-	// `api.acme.com`; instead certmagic solves the challenge over the edge's own
-	// :443 (the listener advertises `acme-tls/1`). Setting DNS01Solver disables
-	// the HTTP-01/TLS-ALPN-01 solvers entirely (certmagic enables them only when
-	// DNS01Solver is nil), which is exactly why a single DNS-01 issuer can't serve
-	// custom domains — hence this second issuer. HTTP-01 is disabled (no :80
-	// listener), leaving TLS-ALPN-01. Ordered AFTER the DNS issuer so the hot
-	// wildcard path issues directly via DNS-01; a custom domain fails the DNS
-	// issuer fast (its zone isn't in our provider) and falls through to here.
-	alpnIssuer := certmagic.NewACMEIssuer(cm, certmagic.ACMEIssuer{
-		CA:                   acmeCA,
-		Email:                cfg.ACMEEmail,
-		Agreed:               true,
-		TrustedRoots:         cfg.ACMETrustedRoots,
-		DisableHTTPChallenge: true,
-		// 0 → certmagic default (:443, per the ACME spec). The integration test
-		// points this at Pebble's TLS-ALPN validation port.
-		AltTLSALPNPort: cfg.ChallengeTLSPort,
-	})
-	cm.Issuers = []certmagic.Issuer{dnsIssuer, alpnIssuer}
+	})}
 
-	// On-Demand TLS for custom domains (url-model §8.2, path B). The
-	// DecisionFunc is the allowlist: certmagic asks it before issuing a per-host
-	// cert, so only control-plane-verified hosts can mint one. Wildcard base
-	// hosts continue to use the eager/managed DNS-01 path above — On-Demand only
-	// kicks in for names certmagic isn't already managing (custom domains).
+	// --- cmOnDemand: TLS-ALPN-01 + On-Demand → custom domains only. ---
+	var cmOnDemand *certmagic.Config
 	if cfg.OnDemandDecision != nil {
+		cmOnDemand = certmagic.New(newCache(), certmagic.Config{Storage: storage})
+		cmOnDemand.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(cmOnDemand, certmagic.ACMEIssuer{
+			CA:                   acmeCA,
+			Email:                cfg.ACMEEmail,
+			Agreed:               true,
+			TrustedRoots:         cfg.ACMETrustedRoots,
+			DisableHTTPChallenge: true, // no :80 listener — TLS-ALPN-01 only
+			// 0 → certmagic default (:443, per the ACME spec). The integration
+			// test points this at Pebble's TLS-ALPN validation port.
+			AltTLSALPNPort: cfg.ChallengeTLSPort,
+		})}
 		decide := cfg.OnDemandDecision
-		cm.OnDemand = &certmagic.OnDemandConfig{
+		cmOnDemand.OnDemand = &certmagic.OnDemandConfig{
 			DecisionFunc: func(ctx context.Context, name string) error {
 				if err := decide(ctx, name); err != nil {
 					slog.Warn("certs: on-demand issuance refused", "host", name, "err", err.Error())
@@ -204,56 +188,109 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 	}
 
 	m := &MagicManager{
-		cm:           cm,
+		cmWild:       cmWild,
+		cmOnDemand:   cmOnDemand,
 		baseDomain:   cfg.BaseDomain,
 		fallbackCert: &fallback,
-		managed:      make(map[string]struct{}),
+		inflight:     make(map[string]bool),
 	}
 
-	// Eagerly manage operator-specified names (typically the apex
-	// domain) so the discovery + /healthz endpoints have a real cert.
+	// Eagerly obtain the operator names (apex + base wildcard) via DNS-01 so the
+	// edge is cert-ready before traffic. Best-effort: on failure, log and let the
+	// handshake path retry (GetCertificate → kickWild), rather than block boot.
 	if len(cfg.EagerNames) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		if err := cm.ManageSync(ctx, cfg.EagerNames); err != nil {
-			cancel()
-			return nil, fmt.Errorf("manage eager names %v: %w", cfg.EagerNames, err)
+		if err := cmWild.ManageSync(ctx, cfg.EagerNames); err != nil {
+			slog.Warn("certs: eager issuance failed (will retry on handshake)",
+				"names", cfg.EagerNames, "err", err.Error())
+		} else {
+			m.mu.Lock()
+			m.issuances += len(cfg.EagerNames)
+			m.mu.Unlock()
+			slog.Info("certs: eager names issued via DNS-01", "names", cfg.EagerNames)
 		}
 		cancel()
-		slog.Info("certs: eager names managed", "names", cfg.EagerNames)
 	}
 
 	return m, nil
 }
 
 func (m *MagicManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	slug, ok := extractSlug(hello.ServerName, m.baseDomain)
-	if !ok {
-		// No per-developer slug in the SNI — this is the apex / an eagerly-
-		// managed name, OR a customer **custom domain** (url-model §8). Consult
-		// certmagic: it returns the managed cert for the apex, and — when
-		// On-Demand is enabled — issues a per-host cert for a verified custom
-		// domain (gated by the DecisionFunc) and solves the ACME challenge
-		// (incl. TLS-ALPN-01 over this very handshake). certmagic needs the
-		// handshake context, so only consult it when there is one (real
-		// handshakes always set it); for genuinely unknown SNIs / beam control
-		// connections — which skip verification anyway — use the self-signed
-		// fallback.
-		if hello.Context() != nil {
-			if cert, err := m.cm.GetCertificate(hello); err == nil {
-				return cert, nil
-			}
+	name := strings.ToLower(strings.TrimSuffix(hello.ServerName, "."))
+
+	// Under the base domain (the apex or a tunnel host) → the DNS-01 wildcard
+	// config. The cert is eager-managed (or issued by a prior handshake); if it's
+	// not cached yet, kick a background DNS-01 issuance and serve the fallback for
+	// this one handshake (so we never block the handshake on a DNS round-trip).
+	if name == m.baseDomain || strings.HasSuffix(name, "."+m.baseDomain) {
+		if cert, err := m.cmWild.GetCertificate(hello); err == nil {
+			return cert, nil
 		}
+		m.kickWild(name)
 		return m.fallbackCert, nil
 	}
 
-	if err := m.ensureManaged(hello.Context(), slug); err != nil {
-		return nil, fmt.Errorf("ensure wildcard for slug %q: %w", slug, err)
+	// Not under the base → a customer custom domain → on-demand TLS-ALPN-01
+	// (gated by the resolve-host DecisionFunc). Needs the handshake context.
+	if m.cmOnDemand != nil && hello.Context() != nil {
+		if cert, err := m.cmOnDemand.GetCertificate(hello); err == nil {
+			return cert, nil
+		}
 	}
-	return m.cm.GetCertificate(hello)
+	return m.fallbackCert, nil
 }
 
+// kickWild issues the cert(s) covering an under-base host via DNS-01 in the
+// background (deduped per name-set), so the next handshake serves a real cert.
+func (m *MagicManager) kickWild(name string) {
+	names := m.wildNamesFor(name)
+	if len(names) == 0 {
+		return
+	}
+	key := strings.Join(names, ",")
+
+	m.mu.Lock()
+	if m.inflight[key] {
+		m.mu.Unlock()
+		return
+	}
+	m.inflight[key] = true
+	m.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		slog.Info("certs: issuing via DNS-01", "names", names)
+		err := m.cmWild.ManageSync(ctx, names)
+		m.mu.Lock()
+		m.inflight[key] = false
+		if err == nil {
+			m.issuances += len(names)
+		}
+		m.mu.Unlock()
+		if err != nil {
+			slog.Warn("certs: DNS-01 issuance failed", "names", names, "err", err.Error())
+			return
+		}
+		slog.Info("certs: issued via DNS-01", "names", names)
+	}()
+}
+
+// wildNamesFor returns the cert SAN set for an under-base host: the per-slug
+// wildcard (subdomain shape) or the base wildcard (hyphen/flat), or the apex.
+func (m *MagicManager) wildNamesFor(name string) []string {
+	if slug, ok := extractSlug(name, m.baseDomain); ok {
+		return certNamesFor(slug, m.baseDomain)
+	}
+	if name == m.baseDomain {
+		return []string{m.baseDomain}
+	}
+	return nil // deeper nesting under the base — unsupported
+}
+
+// PreWarm obtains a slug's wildcard ahead of its first handshake (DNS-01).
 func (m *MagicManager) PreWarm(slug string) error {
-	return m.ensureManaged(context.Background(), slug)
+	return m.cmWild.ManageSync(context.Background(), certNamesFor(slug, m.baseDomain))
 }
 
 func (m *MagicManager) IssuanceCount() int {
@@ -261,30 +298,3 @@ func (m *MagicManager) IssuanceCount() int {
 	defer m.mu.Unlock()
 	return m.issuances
 }
-
-func (m *MagicManager) ensureManaged(ctx context.Context, slug string) error {
-	m.mu.Lock()
-	if _, ok := m.managed[slug]; ok {
-		m.mu.Unlock()
-		return nil
-	}
-	m.mu.Unlock()
-
-	names := certNamesFor(slug, m.baseDomain)
-
-	slog.Info("certs: managing wildcard via ACME", "slug", slug, "names", names)
-	if err := m.cm.ManageSync(ctx, names); err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	m.managed[slug] = struct{}{}
-	m.issuances++
-	m.mu.Unlock()
-	slog.Info("certs: ACME wildcard issued", "slug", slug, "issuance_count", m.issuances)
-	return nil
-}
-
-// silence unused-import warnings in environments where certmagic's
-// generic logger is the only reason io is referenced.
-var _ = io.Discard

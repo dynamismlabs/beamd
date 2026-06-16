@@ -467,7 +467,7 @@ tables, and enrich:
   `SUM(requests)`, `SUM(bytes_in)`, `SUM(bytes_out)`, total = in+out, per org over N days.
 - `series` → `usage_daily` grouped by `day`.
 - `byTunnel` → group by `host`: requests + bytes in/out/total per URL. (This is
-  the `api-<org>.beamd.sh → 1000 req, 200MB in, 500MB out, 700MB total` view.)
+  the `api-<org>.beamd.run → 1000 req, 200MB in, 500MB out, 700MB total` view.)
 - `recent` → newest `request_event` rows (method, path, status, outcome, ttfb)
   for an activity/debug view.
 - `tunnels` → unchanged (`tunnel` registry).

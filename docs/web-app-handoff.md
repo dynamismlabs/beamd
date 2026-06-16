@@ -10,7 +10,7 @@
 
 ## Architecture: control plane vs edges (this drives everything)
 
-- **Control plane = your app** (one domain, e.g. `app.beamd.sh`). It serves the
+- **Control plane = your app** (one domain, e.g. `beamd.ai`). It serves the
   dashboard, device-code login, `verify-token`, usage ingestion, and owns the
   Postgres source of truth. The published CLI **bakes this host in** (a bare
   `beamd login` targets it).
@@ -46,9 +46,9 @@ response shape (set vs single slug).
 ### 1. `GET /.well-known/beam-auth` (on the control plane)
 The first thing the CLI fetches. Return the device-code URLs:
 ```json
-{ "device_code_url":  "https://app.beamd.sh/api/device/code",
-  "token_url":        "https://app.beamd.sh/api/device/token",
-  "verification_uri": "https://app.beamd.sh/device" }
+{ "device_code_url":  "https://beamd.ai/api/device/code",
+  "token_url":        "https://beamd.ai/api/device/token",
+  "verification_uri": "https://beamd.ai/device" }
 ```
 (Empty/404 means "no device-code offered" — that's the OSS case, N/A for you.)
 
@@ -56,7 +56,7 @@ The first thing the CLI fetches. Return the device-code URLs:
 Req: `{}`. Res (RFC 8628-shaped):
 ```json
 { "device_code":"<32 random bytes, hex>", "user_code":"WXYZ-7K9P",
-  "verification_uri":"https://app.beamd.sh/device", "expires_in":600, "interval":5 }
+  "verification_uri":"https://beamd.ai/device", "expires_in":600, "interval":5 }
 ```
 Persist a `device_codes` row (**hash** the device_code; `user_code` may be plaintext, case-insensitive lookup, short TTL).
 
@@ -109,9 +109,9 @@ they're a member of (drives the `scopes` array in #3 and #5).
 ## How each edge connects back to you (the edge's `beamd.yaml`)
 ```yaml
 base_domain: beamd.app          # the paid edge (run a second serve on beamd-free.sh for free)
-token_store: "https://app.beamd.sh/api/internal/verify-token"
+token_store: "https://beamd.ai/api/internal/verify-token"
 usage_reporter:
-  webhook_url: "https://app.beamd.sh/api/internal/usage"
+  webhook_url: "https://beamd.ai/api/internal/usage"
   interval_seconds: 60
 # set BEAMD_AUTH_VERIFY_SECRET (and the usage secret) in the edge's env
 ```
@@ -138,7 +138,7 @@ wildcard cert; provisioning details in [`setup.md`](setup.md) /
 ## Publish the hosted CLI (when ready)
 Bake the control-plane host into the published `@beamd/cli`:
 ```
-BEAMD_DEFAULT_HOST=app.beamd.sh make publish-npm VERSION=x.y.z
+BEAMD_DEFAULT_HOST=beamd.ai make publish-npm VERSION=x.y.z
 ```
 
 ## Open item on the CLI side

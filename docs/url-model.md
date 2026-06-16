@@ -180,7 +180,7 @@ invariants — keep these true:**
 - Org-last (§7) is chosen so the eventual migration is **order-preserving** — see §7.
 
 **When we do it (later) it's a dual-serve, not a flip** — live URLs aren't
-interchangeable (`api-acme.beamd.sh` ≠ `api.acme.beamd.sh`):
+interchangeable (`api-acme.beamd.run` ≠ `api.acme.beamd.run`):
 
 1. Issue per-slug `*.<slug>.<base>` certs (subdomain) while keeping the shared
    `*.<base>` (hyphen).
@@ -199,7 +199,7 @@ host collision. The fix is to make the `(name, slug) → host` map **injective**
 keeping exactly one side hyphen-free.
 
 **Decision (locked): forbid hyphens in the org slug; keep them in tunnel names;
-render org-last `<name>-<slug>`** (e.g. `pr-123-api-acme.beamd.sh` — name
+render org-last `<name>-<slug>`** (e.g. `pr-123-api-acme.beamd.run` — name
 `pr-123-api`, slug `acme`). A hyphen-free slug makes the **last** hyphen the
 unambiguous name/slug boundary → injective, collision-free, and tunnel names stay
 expressive (`pr-123-api`, `feat-x-web` — the per-worktree / per-branch workflow
@@ -268,13 +268,13 @@ in the scope's hostname set (§1).
 ### 8.2 Cert strategy — two paths, B-first
 
 Our base domains use ACME **DNS-01 wildcards** (`internal/certs/magic.go`:
-`*.<slug>.<base>`), which works because we control `beamd.sh`'s DNS. We do **not**
+`*.<slug>.<base>`), which works because we control `beamd.run`'s DNS. We do **not**
 control a customer's DNS, so:
 
 | Path | How | Customer adds | Result |
 |---|---|---|---|
 | **B. On-Demand per-host** *(ship first — the 90%)* | certmagic **On-Demand TLS** + a `DecisionFunc` calling `resolve-host` (§4). Per-host certs via **HTTP-01 / TLS-ALPN-01**, which only need the host to *resolve to the edge*. | routing record + ownership TXT | **One cert per hostname**, lazily issued, under LE per-cert limits (fine — premium/low-volume). Covers single host / apex. |
-| **A. Delegated wildcard** *(upgrade — many subdomains)* | Customer delegates the ACME challenge: `_acme-challenge.acme.com CNAME _acme-challenge.<token>.beamd.sh`. The edge solves DNS-01 by writing the TXT in **our** zone; LE follows the CNAME. | routing + ownership TXT + **one** `_acme-challenge` CNAME | **One** `*.acme.com` cert, auto-renews. The only path for wildcards. |
+| **A. Delegated wildcard** *(upgrade — many subdomains)* | Customer delegates the ACME challenge: `_acme-challenge.acme.com CNAME _acme-challenge.<token>.beamd.run`. The edge solves DNS-01 by writing the TXT in **our** zone; LE follows the CNAME. | routing + ownership TXT + **one** `_acme-challenge` CNAME | **One** `*.acme.com` cert, auto-renews. The only path for wildcards. |
 
 **Why B first:** least customer DNS, no delegation concept to explain, matches
 Vercel / Netlify / Render, and the single-host case (`app.acme.com`) is the common
@@ -287,18 +287,18 @@ payoff — many subdomains under one cert — is the advanced case.)*
 
 **Path B (on-demand single host):**
 ```
-app.acme.com              CNAME  edge.beamd.sh                       # routing (apex → A/ALIAS)
+app.acme.com              CNAME  edge.beamd.run                       # routing (apex → A/ALIAS)
 _beamd-verify.acme.com    TXT    beamd-domain-verify=<verifyToken>   # ownership (§8.4)
 ```
 
 **Path A (delegated wildcard)** adds the ACME delegation:
 ```
-*.acme.com                CNAME  edge.beamd.sh
-_acme-challenge.acme.com  CNAME  _acme-challenge.<token>.beamd.sh
+*.acme.com                CNAME  edge.beamd.run
+_acme-challenge.acme.com  CNAME  _acme-challenge.<token>.beamd.run
 _beamd-verify.acme.com    TXT    beamd-domain-verify=<verifyToken>
 ```
 *(Apex `acme.com` can't CNAME — use an A/ALIAS record to the edge IP for routing.)*
-`edge.beamd.sh` is the single stable routing target customers point at,
+`edge.beamd.run` is the single stable routing target customers point at,
 independent of which droplet serves the scope.
 
 ### 8.4 Ownership verification [CP]
@@ -409,7 +409,7 @@ export const hostBinding = pgTable("host_binding", {
       (allow only verified hosts). Inbound Host→scope via the open-tunnel map /
       `resolve-host`. §8.2
 - [ ] **Cert path A**: manage `*.<domain>` via DNS-01, writing the TXT to the
-      delegation target in *our* zone (`_acme-challenge.<token>.beamd.sh`). Verify
+      delegation target in *our* zone (`_acme-challenge.<token>.beamd.run`). Verify
       certmagic/libdns CNAME-delegation against LE-staging. §8.2
 - [ ] `beamd.yaml`: delegation-zone base, `scope-hostnames`/`resolve-host` URLs +
       secret.
@@ -504,14 +504,14 @@ export const hostBinding = pgTable("host_binding", {
 - **Hyphen collision** (§7) — **resolved**: a hyphen-free org slug makes
   `(name, slug) → host` injective, so no two tenants can collide on a host.
   Org-last does put the *attacker-chosen* name as the leading label (the owned slug
-  doesn't lead) — a minor brand-impersonation surface on `*.beamd.sh`, acceptable
+  doesn't lead) — a minor brand-impersonation surface on `*.beamd.run`, acceptable
   for dev/preview hosts (low brand-trust); custom domains (§8) are the answer for
   brand-trusted URLs.
 - **Cookie isolation + PSL lead time** — tunnels on a *different registrable
   domain* than the dashboard (and free ≠ paid), and submit tunnel base(s) to the
   **Public Suffix List** so sibling tunnels can't cookie-poison each other
   (load-bearing under any shared-base shape — hyphen/flat/subdomain). **Submit
-  `beamd.sh` + the free domain to the PSL now, out of band** — additions take
+  `beamd.run` + the free domain to the PSL now, out of band** — additions take
   weeks-to-months to propagate into shipped browser releases, so the lead time, not
   the code, is the bottleneck; until it lands, the hyphen shape isn't safe for
   auth-cookie traffic. See `hosted-mode.md` §"Domains & PSL".
