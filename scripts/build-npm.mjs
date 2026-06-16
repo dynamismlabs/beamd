@@ -23,9 +23,11 @@ const outDir = join(root, "npm", "build");
 
 const version = process.argv[2];
 const publish = process.argv.includes("--publish");
-// Hosted builds bake in the control-plane host so a bare `beamd login` targets
-// it (OSS builds leave it empty → login requires --server). Set at publish:
-//   BEAMD_DEFAULT_HOST=app.beamd.sh make publish-npm VERSION=x.y.z
+// The control-plane host the CLI logs into defaults to production in code
+// (cmd/beamd/client.go: DefaultHost = "beamd.ai"), so a normal publish needs no
+// env. Set BEAMD_DEFAULT_HOST only to bake a *different* default into a build
+// (rare — e.g. a private hosted deployment); for staging/dev, users override at
+// runtime via the BEAMD_DEFAULT_HOST env var instead.
 const defaultHost = process.env.BEAMD_DEFAULT_HOST || "";
 if (!version || version.startsWith("-")) {
   console.error("usage: node scripts/build-npm.mjs <version> [--publish]");

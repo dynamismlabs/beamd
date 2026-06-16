@@ -65,13 +65,28 @@ func isInteractive() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
-// DefaultHost is the hosted control-plane address baked into the published
-// CLI at build time (`-X main.DefaultHost=…`, like Version). When set, a bare
-// `beamd login` targets it for browser/device-code login; the login then
-// assigns the actual edge (paid vs free live on different domains). Empty on
-// OSS builds, so self-host requires --server. It is the *control plane*, not an
-// edge — see docs/identity-and-accounts.md.
-var DefaultHost string
+// DefaultHost is the hosted control plane the CLI logs in against — the *control
+// plane* (the web app), NOT an edge (see docs/identity-and-accounts.md). A bare
+// `beamd login` device-code logs in here; the login then assigns the actual edge
+// (paid vs free live on different domains).
+//
+// It defaults to production in code so the published CLI Just Works with no build
+// flag. Point it at a staging / self-hosted control plane at runtime with the
+// BEAMD_DEFAULT_HOST env var (like `GH_HOST` for the gh CLI) — same published
+// binary, different environment. A `-X main.DefaultHost=…` build override still
+// works for special builds. (Self-hosters can also ignore all this and use
+// `--server <edge> --token`.)
+var DefaultHost = "beamd.ai"
+
+// controlPlaneHost is the effective hosted control plane: the BEAMD_DEFAULT_HOST
+// env override if set, else the baked-in default. Lets the same published binary
+// target staging/dev without a special build.
+func controlPlaneHost() string {
+	if h := os.Getenv("BEAMD_DEFAULT_HOST"); h != "" {
+		return h
+	}
+	return DefaultHost
+}
 
 func loginCmd(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
@@ -83,11 +98,11 @@ func loginCmd(args []string) {
 	_ = fs.Parse(hoistFlags(args, map[string]bool{"server": true, "token": true, "scope": true, "config": true}))
 
 	// Hosted default: a bare `beamd login` (no server, no token) targets the
-	// built-in control plane and does browser/device-code login. OSS builds
-	// have no DefaultHost, so they fall through to requiring --server. (A
-	// pasted --token comes with its own edge, so it always needs --server.)
+	// control plane (production by default, or BEAMD_DEFAULT_HOST) and does
+	// browser/device-code login. (A pasted --token comes with its own edge, so it
+	// always needs --server.)
 	if *server == "" && *token == "" {
-		*server = DefaultHost
+		*server = controlPlaneHost()
 	}
 	if *server == "" && isInteractive() {
 		r := bufio.NewReader(os.Stdin)

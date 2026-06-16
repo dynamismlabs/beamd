@@ -107,3 +107,21 @@ func TestWaitListening(t *testing.T) {
 		t.Errorf("waitListening with an exited child = true, want false")
 	}
 }
+
+// controlPlaneHost: production by default (baked in code), overridable at runtime
+// with BEAMD_DEFAULT_HOST so the same published binary can target staging/dev.
+func TestControlPlaneHost(t *testing.T) {
+	orig := DefaultHost
+	defer func() { DefaultHost = orig }()
+	DefaultHost = "beamd.ai"
+
+	t.Setenv("BEAMD_DEFAULT_HOST", "") // empty → treated as unset
+	if got := controlPlaneHost(); got != "beamd.ai" {
+		t.Errorf("no env: controlPlaneHost() = %q, want the baked default beamd.ai", got)
+	}
+
+	t.Setenv("BEAMD_DEFAULT_HOST", "staging.beamd.ai")
+	if got := controlPlaneHost(); got != "staging.beamd.ai" {
+		t.Errorf("env override: controlPlaneHost() = %q, want staging.beamd.ai", got)
+	}
+}
