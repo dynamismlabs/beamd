@@ -23,7 +23,7 @@ import (
 )
 
 // NamingDefaults are the global fallback for tunnel naming. Mirrors the
-// `.beamd` keys so the precedence ladder is uniform.
+// `beamd.yaml` keys so the precedence ladder is uniform.
 type NamingDefaults struct {
 	From string `yaml:"from,omitempty"`
 	Name string `yaml:"name,omitempty"`

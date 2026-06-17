@@ -9,9 +9,9 @@
 > replaced by the accounts + scope model in
 > [`identity-and-accounts.md`](identity-and-accounts.md): credentials are keyed
 > per **server** (an *account*, not a "profile"), orgs are a **scope selector**
-> (`--scope` / `.beamd` / `beamd default`), and there is **no `beamd use`**.
+> (`--scope` / `beamd.yaml` / `beamd default`), and there is **no `beamd use`**.
 > The **naming half is current and accurate** — §2 (`--as`/`--from`), §3
-> (`.beamd`), Convergence, and the `run` framework-reachability work all stand
+> (`beamd.yaml`), Convergence, and the `run` framework-reachability work all stand
 > as shipped. The CLI migration from profiles→accounts is tracked in
 > [`cli-identity-plan.md`](cli-identity-plan.md).
 
@@ -34,9 +34,9 @@ precedence ladder** and one project file — and both commands consume the
 result through the same code path (see "Convergence" below).
 
 **Decisions locked (apply throughout):**
-- **One ladder** (highest wins): `CLI flag` → `env` → project `.beamd`
+- **One ladder** (highest wins): `CLI flag` → `env` → project `beamd.yaml`
   (nearest, walking up from cwd) → global config → built-in default.
-- **Secrets are global-only.** A `.beamd` file references a profile/server;
+- **Secrets are global-only.** A `beamd.yaml` file references a profile/server;
   it never contains a token. That's what makes it safe to share.
 - **No naming DSL.** Derivation is a small fixed menu on a `--from` flag
   (`--from dir`); an explicit literal is `--as`. No `@token` template —
@@ -45,7 +45,7 @@ result through the same code path (see "Convergence" below).
   out from under anyone.
 - **The programmatic path is unaffected.** Automation (Flow) passes
   `--config <path>` + `--as <name>` explicitly and bypasses all of this;
-  profiles / `.beamd` / strategies are human-CLI ergonomics. (`--config`
+  profiles / `beamd.yaml` / strategies are human-CLI ergonomics. (`--config`
   takes precedence over `--profile`.)
 
 **Suggested order:** §1 → §2 → §3 → Convergence (incl. the
@@ -72,7 +72,7 @@ Be logged into every edge at once; switch with a flag, env, or a default.
 - [ ] Profile store: load/save `profiles/<name>`, read/write the `current`
       pointer, and the one-time legacy-config → `default` migration.
 - [ ] Profile resolution helper: `--profile/-p <name>` → `BEAMD_PROFILE`
-      env → `.beamd` `profile:` (§3) → `current`. An explicit `--config
+      env → `beamd.yaml` `profile:` (§3) → `current`. An explicit `--config
       <path>` short-circuits this (loads that file directly).
 - [ ] Add `-p/--profile` to every client command: `login`, `open`, `close`,
       `list`, `status`, `run`, `mcp`.
@@ -94,7 +94,7 @@ Be logged into every edge at once; switch with a flag, env, or a default.
 
 ## 2. Tunnel naming — `--as` (literal) + `--from` (derive), no DSL  `[P1]`
 
-Precedence: `--as` / `--from` → project `.beamd` → global default → `port`.
+Precedence: `--as` / `--from` → project `beamd.yaml` → global default → `port`.
 
 - **`--as <label>`** — an explicit literal label (e.g. `web-api`).
 - **`--from <source>`** — derive the label from a fixed menu:
@@ -107,7 +107,7 @@ Two crisp, **unambiguous** flags: `--from repo` always derives, `--as repo`
 always means the literal "repo". `--from` is short enough to type;
 `--help` / `beamd init` document the menu. If both are given, `--as`
 (explicit) wins. Config keys mirror them — `name:` (literal) or `from:`
-(source) — in both `.beamd` and the global config.
+(source) — in both `beamd.yaml` and the global config.
 
 **Tasks**
 - [ ] `--as` and `--from` on `open` and `run` (mutually exclusive; `--as` wins).
@@ -132,7 +132,7 @@ always means the literal "repo". `--from` is short enough to type;
     in the primary checkout. Treat this as an optional `--from worktree`
     source, not a change to `dir`/`repo`/`branch`.
 - [ ] Name resolution helper wired into `open`/`run` following the ladder
-      (`--as`/`--from` → `.beamd` `name:`/`from:` → global → `port`).
+      (`--as`/`--from` → `beamd.yaml` `name:`/`from:` → global → `port`).
 - **Acceptance:** in `~/work/myapp`, `beamd open 3000 --from dir` →
   `myapp.<slug>.<base>`; `--from branch` on `feat/x` → `feat-x.…`; `--from
   repo` outside a git repo errors clearly; with nothing set the label is
@@ -140,24 +140,24 @@ always means the literal "repo". `--from` is short enough to type;
 
 ---
 
-## 3. Project context `.beamd`  `[P1 personal · P2 team]`
+## 3. Project context `beamd.yaml`  `[P1 personal · P2 team]`
 
 A per-project file (YAML, **never a secret**) supplying the identity and/or
-naming default, found by **walking up from cwd** to the first `.beamd`
+naming default, found by **walking up from cwd** to the first `beamd.yaml`
 (stop at `$HOME` or the filesystem root). Two ways to point at an edge:
 
 ```yaml
-# personal .beamd — gitignore it, like .env
+# personal beamd.yaml — gitignore it, like .env
 profile: acme             # references a global profile by name
 from: repo                # a derive source, or `name: <literal>` (see §2)
 ```
 ```yaml
-# shared/committed .beamd — references the edge canonically
+# shared/committed beamd.yaml — references the edge canonically
 server: tunnel.acme.com   # globally unique; matched against your profiles
 from: repo
 ```
 
-- [ ] **(P1)** Discover `.beamd` by walking up from cwd; parse
+- [ ] **(P1)** Discover `beamd.yaml` by walking up from cwd; parse
       `profile`/`server` and `name`. `profile:` → that named profile; if it
       doesn't exist locally, error "this project uses profile `acme` — run
       `beamd login --profile acme`". Personal/gitignored convention.
@@ -169,22 +169,22 @@ from: repo
       it).
 - [ ] **(P2) First-use trust.** *(DEFERRED — hosted-era; interactive y/N +
       `trusted_servers` in the global config. Server-matching that this gates
-      is implemented; the prompt is not.)* The first time a `.beamd` points your client
+      is implemented; the prompt is not.)* The first time a `beamd.yaml` points your client
       at a **new** server, confirm before connecting ("This project wants to
       tunnel through `tunnel.acme.com` — allow? [y/N]") and remember the
       answer. A committed file silently redirecting your local ports to an
       arbitrary edge is a real risk; one y/n closes it without nagging.
-- **Acceptance (P1):** a personal `.beamd` `{profile: acme, from: repo}` →
+- **Acceptance (P1):** a personal `beamd.yaml` `{profile: acme, from: repo}` →
   bare `beamd open 3000` anywhere in the tree uses `acme` + the repo name;
   flags override; outside the tree it's `current` + `port`.
-- **Acceptance (P2):** a committed `.beamd` `{server: tunnel.acme.com, from:
+- **Acceptance (P2):** a committed `beamd.yaml` `{server: tunnel.acme.com, from:
   repo}` → a teammate already logged into that edge (under any profile name)
   gets the right edge + repo-named tunnel after one trust prompt; someone
   not logged in is guided to log in.
 
-### Why a shared `.beamd` is a growth lever (and how to earn it)
+### Why a shared `beamd.yaml` is a growth lever (and how to earn it)
 
-A committed `.beamd` carries the team's institutional knowledge — *which
+A committed `beamd.yaml` carries the team's institutional knowledge — *which
 edge, named how* — so a new dev does `git clone` → `beamd open` (or `npm run
 dev` wired to `beamd run`) and gets a working preview URL with **near-zero
 setup**. That's the spread mechanic: one person adds it, the whole team
@@ -197,11 +197,11 @@ hosted-era** play, not P1:
   for that edge." With self-hosted static tokens that's a manual hand-off;
   the lever only fully unlocks with **device-code / SSO login** (the
   deferred hosted feature) — clone → `beamd login` (browser) → go. So design
-  `.beamd`'s `server:` form now (above) to keep that door open.
+  `beamd.yaml`'s `server:` form now (above) to keep that door open.
 - **Trust has to be explicit** (the first-use confirmation above) — otherwise
   a shared config is a vector for redirecting someone's traffic.
 
-For the hosted product this doubles as the funnel: a committed `.beamd` +
+For the hosted product this doubles as the funnel: a committed `beamd.yaml` +
 device-code login means each teammate who clones becomes a signed-in,
 attributable user on the org's account.
 
@@ -218,23 +218,23 @@ in §1–§3 applies to it identically:
 - [ ] `beamd run` resolves profile (§1) and name (§2/§3) exactly like
       `open` — same resolver, same `dialAndRegister`, no separate path.
 - [ ] Let `beamd run` **omit the `<name>` positional** and derive the label
-      from the ladder (`--as`/`--from` → `.beamd` → default). Today `run`
+      from the ladder (`--as`/`--from` → `beamd.yaml` → default). Today `run`
       requires a name; after this, `beamd run -- npm run dev` works whenever
-      a `.beamd` or `--from` supplies the name.
+      a `beamd.yaml` or `--from` supplies the name.
 
 This is the **payoff the whole spec builds toward** — the seamless
 end-state lives in `run`:
 
 ```
 # package.json:  "dev:tunnel": "beamd run -- npm run dev"
-# repo has a committed .beamd { server: tunnel.acme.com, from: repo }
+# repo has a committed beamd.yaml { server: tunnel.acme.com, from: repo }
 
 $ npm run dev:tunnel
 → right account (acme) + right name (the repo) + a working preview URL,
   zero flags, cleans up on exit.
 ```
 
-- **Acceptance:** with a `.beamd` supplying profile + `from`, a bare `beamd
+- **Acceptance:** with a `beamd.yaml` supplying profile + `from`, a bare `beamd
   run -- <cmd>` (no name, no flags) brings the command up on the right edge
   with the right label; `-p`/`--as`/`--from` override exactly as for `open`.
 
@@ -292,7 +292,7 @@ portless; see `ignore/portless-deep-dive.md` §5.)
 
 > **DEFERRED: `beamd init` already exists** as the *edge* setup command
 > (writes `beamd.yaml`, used in docs/setup.md). The client `init` here (write
-> `.beamd`) collides with it. Resolve the verb before building — e.g. client
+> `beamd.yaml`) collides with it. Resolve the verb before building — e.g. client
 > project setup under a different name (`beamd setup` / `beamd project init`),
 > or move edge init under `beamd serve init`. Not built to avoid breaking the
 > documented edge command.
@@ -302,10 +302,10 @@ So the first run is taught, not looked up.
 - [ ] `beamd init` (interactive, in a project dir): pick a profile (from
       existing, or "log in to a new one" → runs §1 login), pick a naming
       source (`port`/`dir`/`repo`/`branch`/custom literal), then write
-      `.beamd`. Reuse the prompt UX.
+      `beamd.yaml`. Reuse the prompt UX.
 - [ ] Non-interactive: `beamd init --profile <name> [--name-from <src> |
       --as <literal>]`.
-- **Acceptance:** `beamd init` in a fresh project writes a valid `.beamd`;
+- **Acceptance:** `beamd init` in a fresh project writes a valid `beamd.yaml`;
   a subsequent bare `beamd open 3000` honors it.
 
 ---
@@ -337,7 +337,7 @@ Build these seams in P1 even though only the personal path uses them:
       name must not be the currency anywhere downstream.)
 - [ ] **Profiles store their `server`** (they already do) → P2's
       `findByServer()` is a free `list()` + filter, no storage change.
-- [ ] **Parse `.beamd` into a struct that tolerates unknown keys.** P2 just
+- [ ] **Parse `beamd.yaml` into a struct that tolerates unknown keys.** P2 just
       adds a `Server` field; a P1 client meeting a future `server:` file
       ignores it and falls back (forward-compatible) instead of erroring.
 - [ ] **`~/.beamd/config` is an extensible struct** (`current` + room for
@@ -347,20 +347,20 @@ Build these seams in P1 even though only the personal path uses them:
       the trust prompt — one place to grow, not N call sites.
 
 **File story (no format change, no new filenames):** the project file is
-**always `.beamd`**, distinguished by *content*, not name:
-- `.beamd` with `profile:` (a personal alias) → personal; gitignore it.
-- `.beamd` with `server:` + naming → shareable; **commit it** — this *is*
+**always `beamd.yaml`**, distinguished by *content*, not name:
+- `beamd.yaml` with `profile:` (a personal alias) → personal; gitignore it.
+- `beamd.yaml` with `server:` + naming → shareable; **commit it** — this *is*
   the "team" file, it just keeps the plain name.
-- `.beamd.local` → personal override, always gitignored, overrides `.beamd`.
+- `beamd.local.yaml` → personal override, always gitignored, overrides `beamd.yaml`.
 
-We suffix the **personal** file (`.beamd.local`), following `.env` /
-`.env.local` — **not** a `.beamd.team` / `.beamd.shared`. Rationale: zero new
+We suffix the **personal** file (`beamd.local.yaml`), following `.env` /
+`.env.local` — **not** a `beamd.team.yaml` / `beamd.shared.yaml`. Rationale: zero new
 convention to learn; the *override* is the special/local one, so it gets the
 suffix; and "personal overrides shared" falls out for free (the precedence
 ladder already lets `--profile` / `BEAMD_PROFILE` / `current` beat the
-committed file). `.beamd.local` is just the persistent, project-scoped form
-of that override (a small P2 addition to discovery: load `.beamd`, then merge
-`.beamd.local`). Distinct from `~/.beamd/` — your *global* identity/secrets,
+committed file). `beamd.local.yaml` is just the persistent, project-scoped form
+of that override (a small P2 addition to discovery: load `beamd.yaml`, then merge
+`beamd.local.yaml`). Distinct from `~/.beamd/` — your *global* identity/secrets,
 never in a repo.
 
 ## Open questions (only the genuinely unresolved)
@@ -378,7 +378,7 @@ never in a repo.
      case of the broader "owner is gone" problem and solve it once with
      `prune` (a small P2 add to §5).
 
-*(Resolved: `.beamd` supports **both** `profile:` (personal/gitignored, P1)
+*(Resolved: `beamd.yaml` supports **both** `profile:` (personal/gitignored, P1)
 and `server:` (committed/team, P2) — see §3.)*
 
 ---

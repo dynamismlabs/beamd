@@ -389,7 +389,7 @@ func splitRunArgs(args []string) (runArgs, cmdArgs []string, ok bool) {
 }
 
 // runCmd wraps a command as a tunnel: it resolves the edge + name like
-// `open` (profiles, .beamd, --as/--from), connects to the edge *first*
+// `open` (account, beamd.yaml, --as/--from), connects to the edge *first*
 // (fail fast on a bad token before booting the dev server), then runs the
 // command with $PORT/$HOST/$BEAMD_URL set and any framework flags injected,
 // waits for it to listen, registers, and cleans up (tunnel + the command's
@@ -427,7 +427,7 @@ func runCmd(args []string) {
 	}
 
 	// A positional name is an explicit literal (like --as); otherwise walk
-	// the naming ladder (--as/--from → .beamd → global → port).
+	// the naming ladder (--as/--from → beamd.yaml → global → port).
 	var label string
 	if fs.NArg() == 1 {
 		label = fs.Arg(0)
@@ -718,7 +718,8 @@ func statusCmd(args []string) {
 			Slug         string `json:"slug"`
 			Scope        string `json:"scope"`
 			Healthy      bool   `json:"healthy"`
-		}{running, server, slug, rc.Scope, healthy})
+			ProjectFile  string `json:"projectFile,omitempty"`
+		}{running, server, slug, rc.Scope, healthy, projectFileLocation(rc)})
 		return
 	}
 
@@ -727,6 +728,9 @@ func statusCmd(args []string) {
 	}
 	if rc.Scope != "" {
 		fmt.Printf("scope:   %s\n", rc.Scope)
+	}
+	if line := projectStatusLine(rc); line != "" {
+		fmt.Printf("project: %s\n", line)
 	}
 	fmt.Printf("agent:   %s\n", boolWord(running, "running", "not running"))
 	if slug != "" {
@@ -744,6 +748,46 @@ func boolWord(b bool, yes, no string) string {
 	return no
 }
 
+// projectFileLocation is the path to the discovered project file — just
+// "beamd.yaml" when it's in the cwd, otherwise the full path to the dir it was
+// found in. "" when no project file is in effect.
+func projectFileLocation(rc *tunnelContext) string {
+	if rc.Project == nil {
+		return ""
+	}
+	if rc.ProjectDir == "" || rc.ProjectDir == rc.Cwd {
+		return config.ProjectFile
+	}
+	return filepath.Join(rc.ProjectDir, config.ProjectFile)
+}
+
+// projectStatusLine renders the active project file plus the fields it pins,
+// e.g. `beamd.yaml (scope=trey, server=staging.beamd.run)`. Makes the otherwise
+// invisible file visible during normal use.
+func projectStatusLine(rc *tunnelContext) string {
+	loc := projectFileLocation(rc)
+	if loc == "" {
+		return ""
+	}
+	var pins []string
+	if rc.Project.Server != "" {
+		pins = append(pins, "server="+rc.Project.Server)
+	}
+	if rc.Project.Scope != "" {
+		pins = append(pins, "scope="+rc.Project.Scope)
+	}
+	if rc.Project.Name != "" {
+		pins = append(pins, "name="+rc.Project.Name)
+	}
+	if rc.Project.From != "" {
+		pins = append(pins, "from="+rc.Project.From)
+	}
+	if len(pins) == 0 {
+		return loc
+	}
+	return loc + " (" + strings.Join(pins, ", ") + ")"
+}
+
 // ensureAgent makes sure the selected profile's background agent (the
 // long-lived worker that holds the tunnel session) is running, spawning it
 // on demand against its own socket, and returns a client to that socket.
@@ -759,7 +803,7 @@ func ensureAgent(configPath, socket, scope string, insecure bool) *daemon.LocalC
 	if scope != "" {
 		// Propagate the resolved scope so the detached agent requests the same
 		// org the foreground command would have (the account file holds a
-		// default, but a one-off --scope / .beamd scope: must reach the agent).
+		// default, but a one-off --scope / beamd.yaml scope: must reach the agent).
 		env = append(env, "BEAMD_SCOPE="+scope)
 	}
 	if insecure {

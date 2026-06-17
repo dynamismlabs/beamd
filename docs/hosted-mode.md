@@ -200,7 +200,7 @@ Moderately easy; certmagic is built for it:
   multiple teams**, each its own scope (e.g. `acme`).
 - A tunnel belongs to a scope; the scope is what appears in the URL (`…-acme`
   flat, or `.acme.` nested). The user/agent never types it — it's resolved from
-  the project `.beamd`, a `--scope` flag, or their default (see
+  the project `beamd.yaml`, a `--scope` flag, or their default (see
   [`identity-and-accounts.md`](identity-and-accounts.md)).
 - **Scope is carried by the credential — two ways, not "per membership":**
   - a **user session** (interactive login) authorizes the user's **whole set**
@@ -211,7 +211,7 @@ Moderately easy; certmagic is built for it:
     returns that single slug. This is the headless/automation credential, and
     its narrow blast radius is the point.
 - **Client side:** one login per *server* spans all your orgs; the org is a
-  lightweight **selector** (`--scope` / `.beamd` / `beamd default`), never a
+  lightweight **selector** (`--scope` / `beamd.yaml` / `beamd default`), never a
   separate login. (The old per-org `beamd use` / `beamd profiles` model is
   replaced — see the canonical doc.)
 - Schema (extends §8): add `teams` + `memberships` (user↔team + role) — these
@@ -951,7 +951,7 @@ working tunnel:
    The CLI stores a **user session** keyed by that edge; `acme` becomes the
    default scope. (Self-host instead passes `--server <edge> --token`.)
 4. User runs `beamd open 3001 --as api` — it lands in scope `acme` (their
-   default; `--scope` or a project `.beamd` would pick another).
+   default; `--scope` or a project `beamd.yaml` would pick another).
 5. Client dials beamd at `:443`, ALPN `beam/1`, sends `hello` with the
    session token and the requested scope `acme`.
 6. Beamd POSTs `/api/internal/verify-token` → web app returns the session's

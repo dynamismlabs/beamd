@@ -5,7 +5,7 @@ package main
 // resolved scope + agent socket + project/global context for naming —
 // commands consume *that*, never an account/profile name.
 //
-// Two axes resolve the same way (CLI flag > project .beamd > default):
+// Two axes resolve the same way (CLI flag > project beamd.yaml > default):
 //   - which server (→ which account)   via selectAccount
 //   - which scope (org, within a login) via resolveScope
 // An explicit --config bypasses all of it (the automation path). See
@@ -56,7 +56,8 @@ type tunnelContext struct {
 	Scope       string          // resolved requested scope ("" = personal/default)
 	ConfigPath  string          // path to hand the detached agent (account file or --config)
 	AgentSocket string          // this account's detached-agent socket
-	Project     *config.Project // nearest .beamd (may be nil)
+	Project     *config.Project // nearest beamd.yaml (may be nil)
+	ProjectDir  string          // dir the project file was found in ("" if none)
 	Global      *config.Global  // global config (current + naming defaults)
 	Cwd         string
 	authErr     string // why Client is nil/unusable, as an actionable message
@@ -93,7 +94,7 @@ func resolveContext(cf *clientFlags) *tunnelContext {
 
 	if server == "" {
 		if source == "ambiguous" {
-			ctx.authErr = "you have multiple accounts — pass --server <edge>, add a .beamd, or set a current one with `beamd login`"
+			ctx.authErr = "you have multiple accounts — pass --server <edge>, run `beamd link`, or set a current one with `beamd login`"
 		} else {
 			ctx.authErr = "no account configured — run `beamd login`"
 		}
@@ -131,9 +132,9 @@ func resolveContext(cf *clientFlags) *tunnelContext {
 // loadProjectAndGlobal populates ctx.Project + ctx.Global, surfacing a parse
 // error in either file rather than silently falling back.
 func (ctx *tunnelContext) loadProjectAndGlobal() {
-	p, _, perr := config.DiscoverProject(ctx.Cwd)
+	p, dir, perr := config.DiscoverProject(ctx.Cwd)
 	if perr != nil {
-		fmt.Fprintln(os.Stderr, "read .beamd:", perr)
+		fmt.Fprintln(os.Stderr, "read beamd.yaml:", perr)
 		os.Exit(1)
 	}
 	g, gerr := config.LoadGlobal()
@@ -142,10 +143,11 @@ func (ctx *tunnelContext) loadProjectAndGlobal() {
 		os.Exit(1)
 	}
 	ctx.Project = p
+	ctx.ProjectDir = dir
 	ctx.Global = g
 }
 
-// selectAccount walks the server ladder: --server → BEAMD_SERVER → .beamd
+// selectAccount walks the server ladder: --server → BEAMD_SERVER → beamd.yaml
 // server: → global current → the only account. Returns the chosen server
 // (normalized) and where it came from. "" with source "ambiguous" means
 // multiple accounts and nothing selected one.
@@ -181,7 +183,7 @@ func selectAccount(cf *clientFlags, project *config.Project, global *config.Glob
 	}
 }
 
-// resolveScope walks the scope ladder: --scope → .beamd scope: → the account's
+// resolveScope walks the scope ladder: --scope → beamd.yaml scope: → the account's
 // default scope → personal (""). An empty result means "the server picks"
 // (personal for a session, the fixed slug for an OSS/key account).
 func resolveScope(cf *clientFlags, project *config.Project, a *config.Account) string {
@@ -211,7 +213,7 @@ func (ctx *tunnelContext) mustAuth() *config.Client {
 	return ctx.Client
 }
 
-// resolveLabel applies the naming ladder (§2): --as / --from → .beamd
+// resolveLabel applies the naming ladder (§2): --as / --from → beamd.yaml
 // name:/from: → global defaults → port. Returns a concrete, validated label
 // (never empty; defaults to the port number).
 func resolveLabel(asFlag, fromFlag string, ctx *tunnelContext, port int) (string, error) {
@@ -225,11 +227,11 @@ func resolveLabel(asFlag, fromFlag string, ctx *tunnelContext, port int) (string
 	if fromFlag != "" {
 		return naming.DeriveLabel(fromFlag, port, ctx.Cwd)
 	}
-	// Project .beamd: literal name beats a derive source.
+	// Project beamd.yaml: literal name beats a derive source.
 	if ctx.Project != nil {
 		if ctx.Project.Name != "" {
 			if err := naming.ValidateLabel(ctx.Project.Name); err != nil {
-				return "", fmt.Errorf(".beamd name %q: %w", ctx.Project.Name, err)
+				return "", fmt.Errorf("beamd.yaml name %q: %w", ctx.Project.Name, err)
 			}
 			return ctx.Project.Name, nil
 		}

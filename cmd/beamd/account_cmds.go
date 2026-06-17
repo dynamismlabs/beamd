@@ -18,7 +18,7 @@ import (
 
 // defaultCmd shows or sets the current account's default scope — a set-once
 // preference, not a sticky mode. `beamd default` prints it; `beamd default
-// acme` sets it. Overridden per-command by --scope and per-repo by .beamd.
+// acme` sets it. Overridden per-command by --scope and per-repo by beamd.yaml.
 func defaultCmd(args []string) {
 	fs := flag.NewFlagSet("default", flag.ExitOnError)
 	cf := addClientFlags(fs)

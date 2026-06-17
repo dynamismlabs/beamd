@@ -19,15 +19,15 @@ func TestResolveLabel(t *testing.T) {
 	if l, err := resolveLabel("", "dir", ctx, 3000); err != nil || l != "myapp" {
 		t.Errorf("--from dir: got %q, %v", l, err)
 	}
-	// .beamd name: literal.
+	// beamd.yaml name: literal.
 	ctx.Project = &config.Project{Name: "proj"}
 	if l, err := resolveLabel("", "", ctx, 3000); err != nil || l != "proj" {
-		t.Errorf(".beamd name: got %q, %v", l, err)
+		t.Errorf("beamd.yaml name: got %q, %v", l, err)
 	}
-	// .beamd from: derive.
+	// beamd.yaml from: derive.
 	ctx.Project = &config.Project{From: "dir"}
 	if l, err := resolveLabel("", "", ctx, 3000); err != nil || l != "myapp" {
-		t.Errorf(".beamd from: got %q, %v", l, err)
+		t.Errorf("beamd.yaml from: got %q, %v", l, err)
 	}
 	// global default from: port.
 	ctx.Project = nil
@@ -64,7 +64,7 @@ func TestSelectAccount_Ladder(t *testing.T) {
 		t.Errorf("env: got %q/%q", srv, src)
 	}
 	t.Setenv("BEAMD_SERVER", "")
-	// .beamd server beats current.
+	// beamd.yaml server beats current.
 	if srv, src := selectAccount(mk(""), &config.Project{Server: "proj.test"}, &config.Global{Current: "cur.test:443"}); srv != "proj.test:443" || src != "project" {
 		t.Errorf("project: got %q/%q", srv, src)
 	}

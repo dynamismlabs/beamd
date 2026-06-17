@@ -4,7 +4,7 @@
 > beamd client authenticates, stores credentials, and decides *where a tunnel
 > lands* (which server, which org). `hosted-mode.md` defines the server-side
 > contract that backs it; `profiles-and-naming-spec.md`'s identity half is
-> **superseded** by this doc (its naming / `.beamd` / `run` half still stands).
+> **superseded** by this doc (its naming / `beamd.yaml` / `run` half still stands).
 >
 > **Implemented:** the CLI ships the account store + `--server`/`--scope` +
 > `default`/`accounts`/`orgs`/`whoami` (no `beamd use`), and scope is carried on
@@ -26,7 +26,7 @@ concept conflated:
 |---|---|---|---|
 | **Account** | a credential bound to **a beamd server** | usually **1**; more only with multiple beamd instances | `beamd login` |
 | **Scope** (org) | which org you're **acting as**, *within* one login | all the orgs you belong to | a selector, not a credential |
-| **Project** | a `.beamd` file pinning `{server, scope, name}` for a repo | per project | committed config |
+| **Project** | a `beamd.yaml` file pinning `{server, scope, name}` for a repo | per project | `beamd link` (committed config) |
 
 beamd is `gh` × Vercel: **per-server login** (like `gh`'s multi-host) **plus
 per-org scope within a login** (like `vercel --scope`), degrading to a plain
@@ -43,7 +43,7 @@ and secure.
 |---|---|---|
 | Principal | **you** (the user) | **a workspace** (the org) |
 | Reaches | **all orgs you belong to** | exactly one workspace |
-| Pick scope | per-command / `.beamd` / your default — **no re-login** | fixed; the key *is* the scope |
+| Pick scope | per-command / `beamd.yaml` / your default — **no re-login** | fixed; the key *is* the scope |
 | Lifetime | session-grade: refreshable, revoked on logout, MFA/SSO-gateable | long-lived, named, independently revocable |
 | Acquired via | **device-code** (browser approval — inherits every dashboard auth method) | **dashboard "Create API key"**, shown once |
 | Used by | humans at a terminal | CI, agents, `--config` files |
@@ -65,15 +65,15 @@ Two things must resolve for every `open` / `run`: **which server** and **which
 scope**. Both use the same ladder; the project file supplies both:
 
 ```
-1. --server / --scope flag        # this command   (explicit one-off; beats everything)
-2. .beamd  (server + scope + name) # this repo       (committed, shared — the ONLY persistence)
-3. default                         # your only/primary account · scope you set with `beamd default` (personal unless set)
+1. --server / --scope flag             # this command  (explicit one-off; beats everything)
+2. beamd.yaml (server + scope + name)  # this repo     (committed, shared — the ONLY persistence)
+3. default                             # your only/primary account · scope you set with `beamd default` (personal unless set)
 ```
 
 **There is no `beamd use`.** There is no sticky, machine-global "current scope"
 that you toggle day-to-day — that hidden, easily-stale mode is the footgun we
 deliberately removed. The only *persistent* routing lives in the repo's
-`.beamd`, where it's visible, committed, and shared.
+`beamd.yaml` (write it with `beamd link`), where it's visible, committed, and shared.
 
 ### The one standing default — `beamd default`
 
@@ -89,7 +89,7 @@ beamd default           # show the current default
   acme` (or a pick at login when you belong to several orgs) sets it once.
 - It is a **preference** (set once, rarely changed), not a *mode* (toggled
   constantly). That distinction is the whole reason it isn't a footgun.
-- Always overridden by `--scope` and by a project `.beamd`, so inside real work
+- Always overridden by `--scope` and by a project `beamd.yaml`, so inside real work
   it's irrelevant; it only applies to bare, projectless commands.
 - Visible everywhere (`whoami`, `status`, and the scope is in every URL), so a
   standing default can never silently misroute you.

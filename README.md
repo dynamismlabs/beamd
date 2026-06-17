@@ -242,24 +242,24 @@ beamd open 3001 --scope beta    # one-off override
 beamd whoami                    # show the resolved account + scope
 ```
 
-Precedence: `--scope` > a project `.beamd` `scope:` > `beamd default` > personal.
+Precedence: `--scope` > a project `beamd.yaml` `scope:` > `beamd default` > personal.
 A self-hosted OSS edge has no scopes — your token fixes the namespace.
 
-### Project config (`.beamd`)
+### Project config (`beamd.yaml`)
 
-Commit a `.beamd` so the right edge + scope + name come from context — `open` /
-`run` then need zero flags:
+Pin the right edge + scope + name to a repo so `open` / `run` need zero flags.
+Create it with `beamd link` (interactive, like `vercel link`), or by hand:
 
 ```yaml
-# .beamd
+# beamd.yaml
 server: acme.com   # which edge (account)
 scope: acme        # which org (hosted; omit for an OSS edge)
 from: repo         # how to name the tunnel (or `name: <literal>`)
 ```
 
-beamd walks up from the cwd to find it; a gitignored `.beamd.local` overrides
-it (like `.env` / `.env.local`). A `.beamd` references an edge + scope —
-**never a token** — so it's safe to commit.
+beamd walks up from the cwd to find it; a gitignored `beamd.local.yaml`
+overrides it (like `.env` / `.env.local`). A `beamd.yaml` references an edge +
+scope — **never a token** — so it's safe to commit.
 
 ### Wrap a command (`beamd run`)
 
@@ -268,11 +268,11 @@ waits for it to listen, opens the tunnel, and tears everything (tunnel +
 process tree) down on exit:
 
 ```
-beamd run -- npm run dev       # name from .beamd / --from / port
+beamd run -- npm run dev       # name from beamd.yaml / --from / port
 beamd run api -- npm run dev    # explicit name
 ```
 
-`run` resolves the edge + scope + name exactly like `open` (accounts, `.beamd`,
+`run` resolves the edge + scope + name exactly like `open` (accounts, `beamd.yaml`,
 `--as` / `--from`) and makes **any** framework reachable through the tunnel:
 it sets `$BEAMD_URL` (the public URL, for OAuth callbacks / absolute links),
 injects the allowed-host env so Vite/Next don't reject the tunnel domain,

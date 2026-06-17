@@ -53,6 +53,8 @@ func main() {
 		loginCmd(os.Args[2:])
 	case "logout":
 		logoutCmd(os.Args[2:])
+	case "link":
+		linkCmd(os.Args[2:])
 	case "default":
 		defaultCmd(os.Args[2:])
 	case "accounts":
@@ -110,6 +112,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  accounts        list the edges you're logged into, marking the current one")
 	fmt.Fprintln(os.Stderr, "  orgs            list the orgs/scopes your current account can act in")
 	fmt.Fprintln(os.Stderr, "  default         show or set your account's default scope (default [<scope>])")
+	fmt.Fprintln(os.Stderr, "  link            pin this repo to an org/edge — writes beamd.yaml (link [--scope <org>])")
 	fmt.Fprintln(os.Stderr, "  whoami          show the resolved account + scope")
 	fmt.Fprintln(os.Stderr, "  check           verify credentials against the edge (no tunnel, no agent)")
 	fmt.Fprintln(os.Stderr, "  open            expose a local port as a public URL (foreground; -d to detach)")

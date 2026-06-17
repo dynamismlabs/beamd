@@ -418,7 +418,7 @@ export const hostBinding = pgTable("host_binding", {
 
 - [ ] Print the edge-assigned `primaryHost` (incl. the custom-domain URL); after a
       rename, refresh cached scopes at next login / `beamd orgs`.
-- [ ] *(optional)* `--domain <d>` on `open`/`run` + `.beamd` to pick which of the
+- [ ] *(optional)* `--domain <d>` on `open`/`run` + `beamd.yaml` to pick which of the
       scope's hosts to land on (default: primary).
 
 **Hardening & UX (tracked — fold in as phases land)**

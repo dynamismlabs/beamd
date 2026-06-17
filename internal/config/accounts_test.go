@@ -82,11 +82,11 @@ func TestDiscoverProject(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// .beamd at root pins server + scope; .beamd.local overlays `from`.
-	if err := os.WriteFile(filepath.Join(root, ".beamd"), []byte("server: edge.acme.com\nscope: acme\nfrom: repo\n"), 0o644); err != nil {
+	// beamd.yaml at root pins server + scope; beamd.local.yaml overlays `from`.
+	if err := os.WriteFile(filepath.Join(root, ProjectFile), []byte("server: edge.acme.com\nscope: acme\nfrom: repo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".beamd.local"), []byte("from: branch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ProjectLocalFile), []byte("from: branch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,13 +104,13 @@ func TestDiscoverProject(t *testing.T) {
 		t.Errorf("Scope = %q, want acme", p.Scope)
 	}
 	if p.From != "branch" {
-		t.Errorf("From = %q, want branch (.beamd.local should override)", p.From)
+		t.Errorf("From = %q, want branch (beamd.local.yaml should override)", p.From)
 	}
 	if dir != root {
 		t.Errorf("found dir = %q, want %q", dir, root)
 	}
 
-	// No .beamd anywhere → nil, no error.
+	// No beamd.yaml anywhere → nil, no error.
 	empty := t.TempDir()
 	p2, _, err := DiscoverProject(empty)
 	if err != nil {
@@ -121,19 +121,19 @@ func TestDiscoverProject(t *testing.T) {
 	}
 }
 
-// A `.beamd` *directory* (e.g. the global ~/.beamd config dir, which shares
-// the name) must be ignored — only a regular .beamd file is a project file.
+// A directory that happens to share the project-file name (e.g. someone's
+// `beamd.yaml/` dir) must be ignored — only a regular file is a project file.
 func TestDiscoverProject_IgnoresDirectory(t *testing.T) {
 	withHome(t)
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".beamd"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ProjectFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p, _, err := DiscoverProject(root)
 	if err != nil {
-		t.Fatalf("DiscoverProject must not error on a .beamd directory: %v", err)
+		t.Fatalf("DiscoverProject must not error on a %s directory: %v", ProjectFile, err)
 	}
 	if p != nil {
-		t.Errorf("a .beamd directory should not be treated as a project file, got %+v", p)
+		t.Errorf("a %s directory should not be treated as a project file, got %+v", ProjectFile, p)
 	}
 }

@@ -50,11 +50,11 @@ name. No edge/proto changes; `--config` untouched.
       OSS accounts set just `{Server, Token}` (+ optional `Slug`).
 - [ ] **`cmd/beamd/resolve.go`:** `clientFlags` drops `-p/--profile`, gains
       `--server` + `--scope`. `selectProfile` → `selectAccount` with the ladder
-      `--server` → `.beamd server:` → `Global.current` → the only account.
-      Add `resolveScope`: `--scope` → `.beamd scope:` → account `DefaultScope`
+      `--server` → `beamd.yaml server:` → `Global.current` → the only account.
+      Add `resolveScope`: `--scope` → `beamd.yaml scope:` → account `DefaultScope`
       → personal (`""`/the account's single slug). `resolveContext` returns
       `{Account, Scope, …}`. **`--config` short-circuit stays byte-identical.**
-- [ ] **`.beamd` gains `scope:`** (alongside `server:` / `name:` / `from:`).
+- [ ] **`beamd.yaml` gains `scope:`** (alongside `server:` / `name:` / `from:`).
       `config.Project` adds `Scope`; parser tolerates it (already
       unknown-key-tolerant).
 - [ ] **`cmd/beamd/profile_cmds.go` → `account_cmds.go`:** delete `useCmd` and
@@ -134,7 +134,7 @@ Hold these until the commands exist (avoid documenting unshipped behavior).
 
 - [ ] **`README.md`:** replace the "Profiles" section (`beamd login --profile` /
       `beamd profiles` / `beamd use`) with accounts + `beamd default` /
-      `beamd orgs` / `beamd accounts`; update the `.beamd` example to show
+      `beamd orgs` / `beamd accounts`; update the `beamd.yaml` example to show
       `scope:`.
 - [ ] **`docs/consuming-beamd.md`:** confirm the `--config` automation path is
       unchanged (it is) and add one line that automation uses a workspace
@@ -144,7 +144,7 @@ Hold these until the commands exist (avoid documenting unshipped behavior).
 - [ ] **Output:** `open`/`run` print the resolved destination
       (`→ https://3000-acme.beamd.ai`); `status` / `whoami` show account +
       scope; when the account default is used implicitly with >1 account, echo
-      it (`primary account; --server / .beamd to change`).
+      it (`primary account; --server / beamd.yaml to change`).
 - [ ] **MCP:** add `whoami` (and optionally `scopes`) tool so an agent can see
       where it's pointed; keep `expose_port` returning the URL synchronously.
 - **Acceptance:** a fresh reader following README can log in, see their orgs, set

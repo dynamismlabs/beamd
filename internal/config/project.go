@@ -1,10 +1,10 @@
 package config
 
-// Project context (.beamd) supplies a per-project identity and/or naming
-// default. It is never a secret — it references a profile or an edge by
-// hostname, so it is safe to commit. Discovery walks up from cwd to the
-// first .beamd, and a sibling .beamd.local (gitignored) overlays it, the
-// way .env / .env.local work.
+// Project context (beamd.yaml) supplies a per-project identity and/or naming
+// default. It is never a secret — it references an org by slug or an edge by
+// hostname, so it is safe to commit. Discovery walks up from cwd to the first
+// beamd.yaml, and a sibling beamd.local.yaml (gitignored) overlays it, the
+// way .env / .env.local work. Write one interactively with `beamd link`.
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Project is a parsed .beamd. yaml.v3 ignores unknown keys, so a P1 client
+// Project is a parsed beamd.yaml. yaml.v3 ignores unknown keys, so a P1 client
 // meeting a future key falls back gracefully instead of erroring
 // (forward-compatible by construction).
 type Project struct {
@@ -24,20 +24,23 @@ type Project struct {
 	From   string `yaml:"from,omitempty"`   // derive source (§2)
 
 	// Profile is the superseded per-edge alias (pre-accounts). Still parsed so
-	// an old .beamd doesn't error, but no longer used for resolution — pin the
-	// edge with `server:` instead. See docs/identity-and-accounts.md.
+	// an old project file doesn't error, but no longer used for resolution —
+	// pin the edge with `server:` instead. See docs/identity-and-accounts.md.
 	Profile string `yaml:"profile,omitempty"`
 }
 
+// ProjectFile is the committable per-project config; ProjectLocalFile is its
+// gitignored overlay. Exported so the CLI (`beamd link`) writes the same names
+// discovery reads.
 const (
-	projectFile      = ".beamd"
-	projectLocalFile = ".beamd.local"
+	ProjectFile      = "beamd.yaml"
+	ProjectLocalFile = "beamd.local.yaml"
 )
 
 // DiscoverProject walks up from startDir to the first directory containing a
-// .beamd (or .beamd.local), stopping at $HOME or the filesystem root. It
-// returns the merged config (.beamd.local overlaying .beamd) and the
-// directory it was found in. A nil Project with no error means none was
+// beamd.yaml (or beamd.local.yaml), stopping at $HOME or the filesystem root.
+// It returns the merged config (beamd.local.yaml overlaying beamd.yaml) and
+// the directory it was found in. A nil Project with no error means none was
 // found — callers fall back to the global config.
 func DiscoverProject(startDir string) (*Project, string, error) {
 	dir, err := filepath.Abs(startDir)
@@ -50,11 +53,10 @@ func DiscoverProject(startDir string) (*Project, string, error) {
 	}
 
 	for {
-		// Match only a regular *file* named .beamd / .beamd.local — never a
-		// directory. This matters at $HOME, where `~/.beamd` is the global
-		// config directory, not a project file (same name, different thing).
-		base := filepath.Join(dir, projectFile)
-		local := filepath.Join(dir, projectLocalFile)
+		// Match only a regular *file* — guard against a stray directory that
+		// happens to share the name (e.g. someone's `beamd.yaml/` dir).
+		base := filepath.Join(dir, ProjectFile)
+		local := filepath.Join(dir, ProjectLocalFile)
 		baseOK := isRegularFile(base)
 		localOK := isRegularFile(local)
 		if baseOK || localOK {
@@ -86,7 +88,7 @@ func isRegularFile(path string) bool {
 }
 
 // loadProjectFile unmarshals path into p. Non-empty fields overlay whatever
-// p already holds (so .beamd.local wins over .beamd).
+// p already holds (so beamd.local.yaml wins over beamd.yaml).
 func loadProjectFile(path string, p *Project) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
