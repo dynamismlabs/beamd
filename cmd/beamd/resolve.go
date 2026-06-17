@@ -160,7 +160,15 @@ func selectAccount(cf *clientFlags, project *config.Project, global *config.Glob
 		return normalizeServerAddr(project.Server), "project"
 	}
 	if global != nil && global.Current != "" {
-		return normalizeServerAddr(global.Current), "current"
+		// Honor the saved current only if it still names a real account. A
+		// dangling pointer (left by an old binary, a removed account, a
+		// hand-edited config) must not shadow a valid single login or surface a
+		// nonsense "log into <ghost>" error — fall through the ladder instead.
+		// (flag/env/project are left to error on a missing account: those are
+		// explicit per-command intent, so "not logged into X" is the right hint.)
+		if cur := normalizeServerAddr(global.Current); config.AccountExists(cur) {
+			return cur, "current"
+		}
 	}
 	accts, _ := config.ListAccounts()
 	switch len(accts) {

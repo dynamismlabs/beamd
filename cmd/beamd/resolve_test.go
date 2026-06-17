@@ -68,13 +68,42 @@ func TestSelectAccount_Ladder(t *testing.T) {
 	if srv, src := selectAccount(mk(""), &config.Project{Server: "proj.test"}, &config.Global{Current: "cur.test:443"}); srv != "proj.test:443" || src != "project" {
 		t.Errorf("project: got %q/%q", srv, src)
 	}
-	// global current is the fallback.
+	// Nothing + no accounts → empty. (Checked before any account exists.)
+	if srv, src := selectAccount(mk(""), nil, &config.Global{}); srv != "" || src != "" {
+		t.Errorf("none: got %q/%q", srv, src)
+	}
+	// global current is the fallback — but only when it names a real account.
+	if err := config.SaveAccount(&config.Account{Server: "cur.test:443", Token: "T"}); err != nil {
+		t.Fatal(err)
+	}
 	if srv, src := selectAccount(mk(""), nil, &config.Global{Current: "cur.test:443"}); srv != "cur.test:443" || src != "current" {
 		t.Errorf("current: got %q/%q", srv, src)
 	}
-	// Nothing + no accounts → empty.
-	if srv, src := selectAccount(mk(""), nil, &config.Global{}); srv != "" || src != "" {
-		t.Errorf("none: got %q/%q", srv, src)
+}
+
+// TestSelectAccount_DanglingCurrentIgnored guards the self-heal: a `current`
+// that names a non-existent account (old binary, removed account, hand-edited
+// config) must not shadow a real login — it falls through the ladder rather
+// than returning the ghost (which downstream turns into a nonsense "log into
+// <ghost>" error).
+func TestSelectAccount_DanglingCurrentIgnored(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BEAMD_SERVER", "")
+	empty := ""
+	cf := &clientFlags{server: &empty, scope: &empty, config: &empty}
+
+	// One real account + a dangling current → fall through to the only account.
+	if err := config.SaveAccount(&config.Account{Server: "real.test:443", Token: "T"}); err != nil {
+		t.Fatal(err)
+	}
+	if srv, src := selectAccount(cf, nil, &config.Global{Current: "ghost.test:443"}); srv != "real.test:443" || src != "only" {
+		t.Errorf("dangling current, one account: got %q/%q, want real.test:443/only", srv, src)
+	}
+
+	// Dangling current with no accounts at all → empty, never the ghost.
+	t.Setenv("HOME", t.TempDir()) // fresh home, zero accounts
+	if srv, src := selectAccount(cf, nil, &config.Global{Current: "ghost.test:443"}); srv != "" || src != "" {
+		t.Errorf("dangling current, no accounts: got %q/%q, want \"\"/\"\"", srv, src)
 	}
 }
 

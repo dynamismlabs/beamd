@@ -174,8 +174,11 @@ func loginCmd(args []string) {
 		fmt.Fprintln(os.Stderr, "load global config:", err)
 		os.Exit(1)
 	}
-	firstAccount := g.Current == ""
-	if firstAccount {
+	// Adopt this account as the current default when there isn't a usable one
+	// already — none set, or one left dangling (names an account that no longer
+	// exists). A valid current for a *different* account is preserved, so a
+	// multi-account user's choice isn't hijacked by a fresh login.
+	if g.Current == "" || !config.AccountExists(normalizeServerAddr(g.Current)) {
 		g.Current = acctServer
 		if err := config.SaveGlobal(g); err != nil {
 			fmt.Fprintln(os.Stderr, "save global config:", err)
@@ -183,8 +186,8 @@ func loginCmd(args []string) {
 		}
 	}
 	fmt.Printf("logged in (%s)\n", acctServer)
-	if !firstAccount && g.Current != acctServer {
-		fmt.Printf("current account is %s — use `--server %s` or `beamd default` to change defaults\n", g.Current, acctServer)
+	if g.Current != acctServer {
+		fmt.Printf("current account is still %s — pass `--server %s` to target this one\n", g.Current, acctServer)
 	}
 }
 
