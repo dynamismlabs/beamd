@@ -82,11 +82,12 @@ func TestDiscoverProject(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// beamd.yaml at root pins server + scope; beamd.local.yaml overlays `from`.
-	if err := os.WriteFile(filepath.Join(root, ProjectFile), []byte("server: edge.acme.com\nscope: acme\nfrom: repo\n"), 0o644); err != nil {
+	// beamd.yaml at root pins server + scope + services; beamd.local.yaml
+	// overlays `from` and repoints a single service (per-key merge).
+	if err := os.WriteFile(filepath.Join(root, ProjectFile), []byte("server: edge.acme.com\nscope: acme\nfrom: repo\nservices:\n  api: 3000\n  web: 8080\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ProjectLocalFile), []byte("from: branch\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ProjectLocalFile), []byte("from: branch\nservices:\n  api: 3999\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -105,6 +106,13 @@ func TestDiscoverProject(t *testing.T) {
 	}
 	if p.From != "branch" {
 		t.Errorf("From = %q, want branch (beamd.local.yaml should override)", p.From)
+	}
+	// Services merge per-key: overlay repoints api, web is preserved.
+	if p.Services["api"] != 3999 {
+		t.Errorf("Services[api] = %d, want 3999 (beamd.local.yaml override)", p.Services["api"])
+	}
+	if p.Services["web"] != 8080 {
+		t.Errorf("Services[web] = %d, want 8080 (preserved from beamd.yaml)", p.Services["web"])
 	}
 	if dir != root {
 		t.Errorf("found dir = %q, want %q", dir, root)

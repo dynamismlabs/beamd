@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -262,20 +261,28 @@ func openCmd(args []string) {
 	cf := addClientFlags(fs)
 	_ = fs.Parse(hoistFlags(args, clientFlagValueNames("as", "from")))
 
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beamd open <port> [--as name | --from src] [-p profile] [-d] [--json]")
-		os.Exit(2)
-	}
-	port, err := strconv.Atoi(fs.Arg(0))
-	if err != nil || port < 1 || port > 65535 {
-		fmt.Fprintln(os.Stderr, "invalid port:", fs.Arg(0))
+	ctx := resolveContext(cf)
+
+	// Target a port number, a beamd.yaml `services:` name, or — with no arg —
+	// the repo's sole service.
+	arg, errMsg := chooseOpenArg(fs.NArg(), fs.Arg(0), ctx.Project)
+	if errMsg != "" {
+		fmt.Fprintln(os.Stderr, errMsg)
 		os.Exit(2)
 	}
 
-	ctx := resolveContext(cf)
+	port, svcLabel, terr := resolveOpenTarget(arg, ctx.Project)
+	if terr != nil {
+		fmt.Fprintln(os.Stderr, terr)
+		os.Exit(2)
+	}
+
 	cfg := ctx.mustAuth()
 	ins := *insecure || cfg.InsecureSkipVerify
-	label, err := resolveLabel(*asFlag, *fromFlag, ctx, port)
+
+	// A named service contributes its own name as the label unless --as/--from
+	// override; then the normal naming ladder runs.
+	label, err := resolveLabel(effectiveLabel(*asFlag, *fromFlag, svcLabel), *fromFlag, ctx, port)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "name:", err)
 		os.Exit(2)
@@ -711,15 +718,20 @@ func statusCmd(args []string) {
 		cancel()
 	}
 
+	var services map[string]int
+	if rc.Project != nil {
+		services = rc.Project.Services
+	}
 	if *jsonOut {
 		_ = json.NewEncoder(os.Stdout).Encode(struct {
-			AgentRunning bool   `json:"agentRunning"`
-			Server       string `json:"server"`
-			Slug         string `json:"slug"`
-			Scope        string `json:"scope"`
-			Healthy      bool   `json:"healthy"`
-			ProjectFile  string `json:"projectFile,omitempty"`
-		}{running, server, slug, rc.Scope, healthy, projectFileLocation(rc)})
+			AgentRunning bool           `json:"agentRunning"`
+			Server       string         `json:"server"`
+			Slug         string         `json:"slug"`
+			Scope        string         `json:"scope"`
+			Healthy      bool           `json:"healthy"`
+			ProjectFile  string         `json:"projectFile,omitempty"`
+			Services     map[string]int `json:"services,omitempty"`
+		}{running, server, slug, rc.Scope, healthy, projectFileLocation(rc), services})
 		return
 	}
 
@@ -731,6 +743,13 @@ func statusCmd(args []string) {
 	}
 	if line := projectStatusLine(rc); line != "" {
 		fmt.Printf("project: %s\n", line)
+	}
+	if names := serviceNames(rc.Project); len(names) > 0 {
+		parts := make([]string, len(names))
+		for i, n := range names {
+			parts[i] = fmt.Sprintf("%s→%d", n, rc.Project.Services[n])
+		}
+		fmt.Printf("services: %s\n", strings.Join(parts, ", "))
 	}
 	fmt.Printf("agent:   %s\n", boolWord(running, "running", "not running"))
 	if slug != "" {

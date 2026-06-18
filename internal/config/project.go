@@ -23,6 +23,12 @@ type Project struct {
 	Name   string `yaml:"name,omitempty"`   // literal label (§2)
 	From   string `yaml:"from,omitempty"`   // derive source (§2)
 
+	// Services maps a name → local port for the repo's apps, so `beamd open
+	// api` exposes the right port under the label `api` (and `beamd open web`
+	// the other). The shared identity (server/scope) is reused; only the label
+	// + port differ per service. Names must be valid subdomain labels.
+	Services map[string]int `yaml:"services,omitempty"`
+
 	// Profile is the superseded per-edge alias (pre-accounts). Still parsed so
 	// an old project file doesn't error, but no longer used for resolution —
 	// pin the edge with `server:` instead. See docs/identity-and-accounts.md.
@@ -112,6 +118,14 @@ func loadProjectFile(path string, p *Project) error {
 	}
 	if overlay.From != "" {
 		p.From = overlay.From
+	}
+	// Services merge per-key (not whole-map replace) so beamd.local.yaml can
+	// add or repoint a single service without restating the rest.
+	for name, port := range overlay.Services {
+		if p.Services == nil {
+			p.Services = map[string]int{}
+		}
+		p.Services[name] = port
 	}
 	return nil
 }

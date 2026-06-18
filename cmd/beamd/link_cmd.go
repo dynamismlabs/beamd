@@ -26,10 +26,11 @@ func linkCmd(args []string) {
 	nameFlag := fs.String("name", "", "fixed tunnel label for this repo (default: none — derive from the port)")
 	fromFlag := fs.String("from", "", "derive the label from one of: "+strings.Join(naming.DeriveSources, ", "))
 	serverFlag := fs.String("server", "", "edge to pin (default: your current account's edge)")
+	servicesFlag := fs.String("services", "", "named services to expose, e.g. api=3000,web=8080")
 	local := fs.Bool("local", false, "write beamd.local.yaml (gitignored overlay) instead of beamd.yaml")
 	force := fs.Bool("force", false, "overwrite an existing file")
 	yes := fs.Bool("yes", false, "non-interactive: take defaults, never prompt")
-	_ = fs.Parse(hoistFlags(args, map[string]bool{"scope": true, "name": true, "from": true, "server": true}))
+	_ = fs.Parse(hoistFlags(args, map[string]bool{"scope": true, "name": true, "from": true, "server": true, "services": true}))
 
 	if *nameFlag != "" && *fromFlag != "" {
 		fmt.Fprintln(os.Stderr, "link: pass at most one of --name / --from")
@@ -93,11 +94,23 @@ func linkCmd(args []string) {
 		os.Exit(2)
 	}
 
+	// Named services (api=3000,web=8080) so `beamd open api` Just Works.
+	servicesSpec := strings.TrimSpace(*servicesFlag)
+	if servicesSpec == "" && !*yes && isInteractive() {
+		r := bufio.NewReader(os.Stdin)
+		servicesSpec = prompt(r, "named services (optional, e.g. api=3000,web=8080)", "")
+	}
+	services, err := parseServices(servicesSpec)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "link:", err)
+		os.Exit(2)
+	}
+
 	// Pin the edge by bare host (drop the cosmetic :443; normalizeServerAddr
 	// re-adds it on read), so the committed file reads cleanly.
 	server := strings.TrimSuffix(rc.Account.Server, ":443")
 
-	content := renderProjectFile(server, scope, name, from, *local)
+	content := renderProjectFile(server, scope, name, from, services, *local)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "write:", err)
 		os.Exit(1)
@@ -109,6 +122,9 @@ func linkCmd(args []string) {
 		summary = "org=" + scope + ", " + summary
 	}
 	fmt.Printf("  tunnels in this repo now use %s\n", summary)
+	if names := serviceNames(&config.Project{Services: services}); len(names) > 0 {
+		fmt.Printf("  services: %s  →  e.g. `beamd open %s`\n", strings.Join(names, ", "), names[0])
+	}
 	switch {
 	case *local:
 		fmt.Println("  this is a personal overlay — add beamd.local.yaml to .gitignore")
@@ -117,6 +133,41 @@ func linkCmd(args []string) {
 	default:
 		fmt.Println("  commit this file so your team shares the same defaults")
 	}
+}
+
+// parseServices parses a "name=port,name=port" spec into a validated map.
+// Empty input yields a nil map (no services). Names must be valid subdomain
+// labels and ports must be in 1–65535.
+func parseServices(spec string) (map[string]int, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+	out := map[string]int{}
+	for _, pair := range strings.Split(spec, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		name, portStr, ok := strings.Cut(pair, "=")
+		name = strings.TrimSpace(name)
+		portStr = strings.TrimSpace(portStr)
+		if !ok || name == "" || portStr == "" {
+			return nil, fmt.Errorf("bad service %q (want name=port, e.g. api=3000)", pair)
+		}
+		if err := naming.ValidateLabel(name); err != nil {
+			return nil, fmt.Errorf("invalid service name %q: %w", name, err)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("invalid port %q for service %q", portStr, name)
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("duplicate service %q", name)
+		}
+		out[name] = port
+	}
+	return out, nil
 }
 
 // chooseScope picks the org to pin: nothing for a self-hosted/OSS account (no
@@ -158,7 +209,7 @@ func chooseScope(a *config.Account, noninteractive bool) string {
 
 // renderProjectFile builds the committable YAML with a self-documenting header,
 // emitting only the fields that are set.
-func renderProjectFile(server, scope, name, from string, local bool) string {
+func renderProjectFile(server, scope, name, from string, services map[string]int, local bool) string {
 	var b strings.Builder
 	if local {
 		b.WriteString("# beamd local overrides — DO NOT COMMIT (add to .gitignore).\n")
@@ -177,6 +228,12 @@ func renderProjectFile(server, scope, name, from string, local bool) string {
 	}
 	if from != "" {
 		fmt.Fprintf(&b, "from: %s\n", from)
+	}
+	if names := serviceNames(&config.Project{Services: services}); len(names) > 0 {
+		b.WriteString("services: # `beamd open <name>` exposes the matching port under that label\n")
+		for _, n := range names {
+			fmt.Fprintf(&b, "  %s: %d\n", n, services[n])
+		}
 	}
 	return b.String()
 }

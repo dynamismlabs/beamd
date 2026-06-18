@@ -261,6 +261,26 @@ beamd walks up from the cwd to find it; a gitignored `beamd.local.yaml`
 overrides it (like `.env` / `.env.local`). A `beamd.yaml` references an edge +
 scope — **never a token** — so it's safe to commit.
 
+**Multiple apps?** Add a `services:` map so each gets its own URL by name:
+
+```yaml
+# beamd.yaml
+server: acme.com
+scope: acme
+services:
+  api: 3000
+  web: 8080
+```
+
+```bash
+beamd open api     # → api-acme.acme.com   (port 3000)
+beamd open web     # → web-acme.acme.com   (port 8080)
+beamd open         # in this repo, lists the services to pick from
+```
+
+The service name becomes the label (override with `--as`). `beamd link
+--services api=3000,web=8080` writes the block for you.
+
 ### Wrap a command (`beamd run`)
 
 Run a dev server and expose it in one step — picks a free port, sets `$PORT`,

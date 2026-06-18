@@ -15,6 +15,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/dynamismlabs/beamd/internal/config"
 	"github.com/dynamismlabs/beamd/internal/naming"
@@ -253,4 +256,93 @@ func resolveLabel(asFlag, fromFlag string, ctx *tunnelContext, port int) (string
 	}
 	// Built-in default: the port number.
 	return naming.LabelFromPort(port), nil
+}
+
+// resolveOpenTarget maps an `open` argument to a concrete local port plus a
+// default label. An argument matching a beamd.yaml `services:` name resolves to
+// that service's port and returns the name as serviceLabel (so `beamd open api`
+// lands on api-<slug>.<base>); otherwise the argument must be a port number and
+// serviceLabel is "" (the caller then walks the normal naming ladder).
+func resolveOpenTarget(arg string, p *config.Project) (port int, serviceLabel string, err error) {
+	if p != nil {
+		if pt, ok := p.Services[arg]; ok {
+			if verr := naming.ValidateLabel(arg); verr != nil {
+				return 0, "", fmt.Errorf("service %q in %s is not a valid subdomain label: %w", arg, config.ProjectFile, verr)
+			}
+			if pt < 1 || pt > 65535 {
+				return 0, "", fmt.Errorf("service %q in %s has an invalid port %d", arg, config.ProjectFile, pt)
+			}
+			return pt, arg, nil
+		}
+	}
+	if n, aerr := strconv.Atoi(arg); aerr == nil {
+		if n < 1 || n > 65535 {
+			return 0, "", fmt.Errorf("invalid port: %s", arg)
+		}
+		return n, "", nil
+	}
+	if names := serviceNames(p); len(names) > 0 {
+		return 0, "", fmt.Errorf("%q is not a port or a service — %s defines: %s", arg, config.ProjectFile, strings.Join(names, ", "))
+	}
+	return 0, "", fmt.Errorf("invalid port %q (or define it as a service in %s)", arg, config.ProjectFile)
+}
+
+// soleService returns the single defined service when the repo defines exactly
+// one, so a bare `beamd open` can target it without an argument.
+func soleService(p *config.Project) (name string, port int, ok bool) {
+	if p == nil || len(p.Services) != 1 {
+		return "", 0, false
+	}
+	for n, pt := range p.Services {
+		return n, pt, true
+	}
+	return "", 0, false
+}
+
+// serviceNames returns the repo's service names, sorted, for stable display.
+func serviceNames(p *config.Project) []string {
+	if p == nil || len(p.Services) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(p.Services))
+	for n := range p.Services {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+const openUsageMsg = "usage: beamd open <port|service> [--as name | --from src] [-d] [--json]"
+
+// chooseOpenArg picks the `open` target from the parsed positional args and the
+// project: the single positional if given, else the repo's sole service when no
+// arg is passed. It returns the chosen argument, or a non-empty errMsg the
+// caller should print before exiting (usage, or a "pick one of N services"
+// hint). Pure, so the branching is unit-testable without the command machinery.
+func chooseOpenArg(nargs int, arg0 string, p *config.Project) (arg, errMsg string) {
+	switch {
+	case nargs == 1:
+		return arg0, ""
+	case nargs > 1:
+		return "", openUsageMsg
+	}
+	// No positional: fall back to the repo's sole service, if any.
+	if name, _, ok := soleService(p); ok {
+		return name, ""
+	}
+	if names := serviceNames(p); len(names) > 1 {
+		return "", fmt.Sprintf("%s defines multiple services — pick one: beamd open <%s>", config.ProjectFile, strings.Join(names, "|"))
+	}
+	return "", openUsageMsg
+}
+
+// effectiveLabel resolves what to feed the naming ladder as the `--as` value: a
+// matched service contributes its own name as the label, but only when the user
+// didn't override naming explicitly with --as or --from. Precedence:
+// --as > --from(derive) > service name > (the rest of the ladder).
+func effectiveLabel(asFlag, fromFlag, serviceLabel string) string {
+	if asFlag == "" && fromFlag == "" && serviceLabel != "" {
+		return serviceLabel
+	}
+	return asFlag
 }
