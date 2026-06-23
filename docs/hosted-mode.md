@@ -2,7 +2,7 @@
 
 Beamd has hooks for "hosted mode": a web app issues and revokes
 credentials, owns the customer dashboard, runs the interactive
-(device-code) login flow, mints workspace API keys, and receives usage
+(device-code) login flow, mints workspace API keys, and receives per-request
 events for billing. Beamd itself stays stateless — it just validates a
 bearer credential against your web app on each connection.
 
@@ -34,11 +34,11 @@ the OSS happy path from [`setup.md`](setup.md).
                                                 │   · /.well-known/beam-auth +     │
                                                 │     device-code (CLI logs in here)│
                                                 │   · verify-token   ◀── each edge  │
-                                                │   · usage (60s)    ◀── each edge  │
+                                                │   · request events ◀── each edge  │
                                                 │   · DNS + cert provisioning       │
                                                 └─────┬────────────────────▲────────┘
                                        Cloudflare API │                     │
-                                                      ▼          verify-token + usage
+                                                      ▼          verify-token + requests
                                                  ┌─────────┐               │
                                                  │   DNS   │               │
                                                  └─────────┘               │
@@ -62,7 +62,7 @@ where tunnels *flow*. Login assigns each account an **edge**, and paid vs free
 tunnels live on **separate registrable domains** (reputation isolation; a
 tunneled app is never same-site with your dashboard). You run one `beamd serve`
 per edge domain, each pointing back at the control plane for verify-token +
-usage. See [`identity-and-accounts.md`](identity-and-accounts.md) and the build
+request events. See [`identity-and-accounts.md`](identity-and-accounts.md) and the build
 brief in [`web-app-handoff.md`](web-app-handoff.md).
 
 ---
@@ -259,7 +259,7 @@ Four HTTP endpoints, all called by beamd. None are user-facing.
 | `POST /api/internal/verify-token` | beamd, per session | Resolve a bearer credential to its scope(s) — a **set** for a user session, a single slug for an API key |
 | `POST /api/device/code` | beamd CLI, once per login | Issue a device + user code |
 | `POST /api/device/token` | beamd CLI, polling | Return the **user session** once the user approves |
-| `POST /api/internal/usage` | beamd, every 60s | Receive per-slug byte/tunnel deltas for billing |
+| `POST /api/internal/requests` | beamd, batched | Receive per-request event batches for billing + analytics |
 
 Plus one user-facing page:
 
@@ -268,7 +268,7 @@ Plus one user-facing page:
 | `GET /device` | developer's browser | Enter the user code + sign in + approve |
 
 Beamd is configured to call these via `auth_discovery:` and
-`usage_reporter:` in `beamd.yaml`. See
+`request_reporter:` in `beamd.yaml`. See
 [`example/beamd.yaml`](../example/beamd.yaml) for the full
 shape.
 
@@ -535,49 +535,58 @@ session. Otherwise the session's personal scope has no DNS yet, and their first
 
 ---
 
-### 2.5 `POST /api/internal/usage`
+### 2.5 `POST /api/internal/requests`
 
-Receives per-slug deltas from beamd on a configurable interval
-(default 60s). Shape from
-[`internal/usage/reporter.go`](../internal/usage/reporter.go).
+Receives **batches of per-request events** that the edge ships as it tails its
+request log. Shape from
+[`internal/reqlog/reqlog.go`](../internal/reqlog/reqlog.go); full contract in
+[`request-events-spec.md`](request-events-spec.md).
 
 **Request:**
 
 ```
-POST /api/internal/usage
+POST /api/internal/requests
 Authorization: Bearer <shared secret>
 Content-Type: application/json
 
 {
   "events": [
     {
-      "slug":           "turing",
-      "bytes":          12345678,
-      "active_tunnels": 3,
-      "period_start":   "2025-06-01T12:00:00Z",
-      "period_end":     "2025-06-01T12:01:00Z"
-    },
-    { "slug": "hopper", "bytes": 0, "active_tunnels": 0, ... }
-  ],
-  "requests_total_delta": 412
+      "request_id":   "0190f7c2-1234-7abc-89de-0123456789ab",
+      "slug":         "turing",
+      "host":         "api-turing.edge.example.com",
+      "method":       "GET",
+      "path":         "/v1/things",
+      "status":       200,
+      "outcome":      "ok",
+      "bytes_in":     412,
+      "bytes_out":    8123,
+      "is_websocket": false,
+      "started_at":   "2025-06-01T12:00:00.123Z",
+      "ended_at":     "2025-06-01T12:00:00.187Z"
+    }
+  ]
 }
 ```
 
-- `bytes` is a **delta** over `(period_start, period_end]`, not a
-  cumulative total. Insert it into a `usage_events` table directly;
-  rollups are your job.
-- `active_tunnels` is a sample at `period_end`, not a delta.
-- Beamd persists last-reported state to disk, so deltas remain
-  correct across beamd restarts.
+- One self-contained event per completed request, plus per-window heartbeats for
+  long-lived connections (`outcome: "in_progress"`). Attribute billing via
+  `slug → organization`; `host` identifies the URL (custom domains included).
+- `request_id` is an **edge-minted uuidv7** and the idempotency key: bulk-insert
+  with `onConflictDoNothing` on it (map wire `request_id` → your `id` PK).
+- Analytics fields (`path`, `client_ip`, `user_agent`, `referer`) are
+  capture-configurable at the edge and may be absent; billing fields always ship.
 
-**Response:** `200 OK` (body ignored).
+**Response:** `200 {"ok": true, "accepted": <n>}`.
 
-**Idempotency.** Beamd does not retry. If your endpoint returns
-non-2xx the delta is **lost**. If billing accuracy matters, accept
-the request, write to a durable queue, and process asynchronously.
+**Delivery is at-least-once, not fire-and-forget.** The edge advances its file
+cursor **only on a 2xx**, so a non-2xx (or your endpoint being down) makes it
+**retry the same window** on the next tick — nothing is lost across an outage,
+but you **will** see replays. Dedupe on `request_id`. Keep the handler cheap and
+idempotent; when in doubt, accept + enqueue.
 
 **Shared secret.** Same model as the verify endpoint:
-`BEAMD_USAGE_SECRET` on beamd, matched on the receiver.
+`BEAMD_REQUESTS_SECRET` on beamd, matched on the receiver.
 
 ---
 
@@ -822,18 +831,19 @@ auth_discovery:
   token_url:        https://app.example.com/api/device/token
   verification_uri: https://app.example.com/device
 
-usage_reporter:
-  webhook_url:      https://app.example.com/api/internal/usage
-  secret_env:       BEAMD_USAGE_SECRET
-  interval_seconds: 60
-  state_file:       /var/lib/beamd/usage-state.json
+request_reporter:
+  webhook_url:      https://app.example.com/api/internal/requests
+  secret_env:       BEAMD_REQUESTS_SECRET
+  batch_size:       500
+  flush_ms:         1000
+  cursor_file:      /var/lib/beamd/requests.cursor
 ```
 
 And these as env vars:
 
 ```
 BEAMD_AUTH_VERIFY_SECRET=<shared secret matching your web app>
-BEAMD_USAGE_SECRET=<another shared secret>
+BEAMD_REQUESTS_SECRET=<another shared secret>
 BEAMD_DNS_PROVIDER_CREDS=<Cloudflare token, if beamd still
                             writes DNS; in pure hosted mode the web
                             app writes DNS and beamd doesn't need it>
@@ -915,13 +925,31 @@ export const droplets = pgTable("droplets", {
   slugCount: integer("slug_count").notNull().default(0),
 });
 
-export const usageEvents = pgTable("usage_events", {
-  id:            uuid("id").primaryKey().defaultRandom(),
-  workspaceId:   uuid("workspace_id").references(() => workspaces.id).notNull(),
-  bytes:         bigint("bytes", { mode: "number" }).notNull(),
-  activeTunnels: integer("active_tunnels").notNull(),
-  periodStart:   timestamp("period_start").notNull(),
-  periodEnd:     timestamp("period_end").notNull(),
+// Raw per-request events shipped by each edge (§2.5). `id` is the edge-minted
+// uuidv7 (wire `request_id`) — the idempotency key, so it has NO DB default.
+// Billing/dashboards read a derived `usage_daily` rollup, not these raw rows.
+// Canonical DDL (indexes + the rollup table) in
+// [`request-events-spec.md`](request-events-spec.md) §5.3.
+export const requestEvent = pgTable("request_event", {
+  id:             uuid("id").primaryKey(),    // = wire request_id; no DB default
+  connectionId:   uuid("connection_id"),      // groups a long connection's heartbeats
+  organizationId: uuid("organization_id").references(() => workspaces.id),
+  slug:           text("slug"),               // NULL on no_route (no session)
+  host:           text("host").notNull(),
+  method:         text("method").notNull(),
+  path:           text("path"),               // NULL when capture.path is off
+  status:         integer("status").notNull(),
+  outcome:        text("outcome").notNull(),
+  bytesIn:        bigint("bytes_in",  { mode: "number" }).notNull(),
+  bytesOut:       bigint("bytes_out", { mode: "number" }).notNull(),
+  ttfbMs:         integer("ttfb_ms"),
+  isWebsocket:    boolean("is_websocket").notNull().default(false),
+  clientIp:       text("client_ip"),
+  userAgent:      text("user_agent"),
+  referer:        text("referer"),
+  startedAt:      timestamp("started_at").notNull(),
+  endedAt:        timestamp("ended_at").notNull(),
+  createdAt:      timestamp("created_at").defaultNow().notNull(),
 });
 ```
 
@@ -961,8 +989,9 @@ working tunnel:
 8. First request to that URL: beamd issues the slug's wildcard (e.g.
    `*.acme.edge.example.com`) from Let's Encrypt via DNS-01 (~10s, one-time).
    Subsequent connects are instant.
-9. Every 60s, beamd POSTs `/api/internal/usage` with byte deltas. Web app
-   inserts into `usage_events`.
+9. As requests flow, beamd ships event batches to `/api/internal/requests`. Web
+   app bulk-inserts `request_event` rows (idempotent on `request_id`) and rolls
+   them up into `usage_daily` for billing.
 
 **Automation / CI / agents** swap steps 3–4: create a workspace **API key** in
 the dashboard and pass it via `beamd open --config <path>` (an `{server, token}`

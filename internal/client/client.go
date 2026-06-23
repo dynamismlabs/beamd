@@ -107,6 +107,7 @@ type Client struct {
 	sess       *session
 	slug       string
 	baseDomain string
+	shape      string         // edge URL shape from hello_ok ("" from older edges → hyphen)
 	intended   map[string]int // name → port; the desired registration state
 	registerMu sync.Mutex     // serializes the *user-initiated* register flow
 
@@ -167,6 +168,15 @@ func (c *Client) BaseDomain() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.baseDomain
+}
+
+// Shape is the edge's URL shape from hello_ok (hyphen|subdomain|flat). Empty
+// when talking to an older edge that predates the field; callers should treat ""
+// as the hyphen default (naming.ParseShape does).
+func (c *Client) Shape() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.shape
 }
 
 // Closed is closed when the user calls Close — NOT when the underlying
@@ -358,6 +368,7 @@ func (c *Client) connectOnce(ctx context.Context, first bool) error {
 	if first {
 		c.slug = hok.Slug
 		c.baseDomain = hok.BaseDomain
+		c.shape = hok.Shape
 	} else if hok.Slug != c.slug {
 		c.mu.Unlock()
 		_ = yamuxSess.Close()

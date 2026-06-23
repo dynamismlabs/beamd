@@ -466,10 +466,13 @@ func runCmd(args []string) {
 	}
 	defer c.Close()
 
-	// Local preview URL; the edge returns the authoritative host on register.
-	// Uses the shipped default shape (hyphen) — a self-host edge on another shape
-	// still routes correctly (it builds the real host), this is display only.
-	host := naming.Hostname(label, c.Slug(), c.BaseDomain(), naming.ShapeHyphen)
+	// Preview URL handed to the child up front (BEAMD_URL, allowed-hosts) since env
+	// is immutable once it starts. Built from the edge's real URL shape (sent in
+	// hello_ok; empty → hyphen for older edges), so self-host subdomain/flat
+	// deployments get the right origin instead of a guessed hyphen host. The edge
+	// still returns the authoritative host on register — which can additionally
+	// carry a custom-domain primary that isn't knowable before the child starts.
+	host := naming.Hostname(label, c.Slug(), c.BaseDomain(), naming.ParseShape(c.Shape()))
 	publicURL := "https://" + host
 	// Vite/Next allowed-hosts: the wildcard parent of the tunnel host —
 	// `.<slug>.<base>` when namespaced, `.<base>` when flat. Derive it from

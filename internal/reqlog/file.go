@@ -21,6 +21,7 @@ type FileSink struct {
 	path     string
 	maxBytes int64
 	fsync    time.Duration
+	tailed   bool
 
 	ch      chan RequestEvent
 	dropped atomic.Int64
@@ -35,6 +36,12 @@ type FileSinkConfig struct {
 	MaxBytes int64         // rotate at this size (default 128 MiB)
 	Fsync    time.Duration // batch-fsync interval (default 250ms)
 	Buffer   int           // channel depth (default 4096)
+	// Tailed means a Shipper is consuming the rotated <path>.1. When set,
+	// rotation will NOT clobber an existing <path>.1 (the shipper hasn't finished
+	// it yet) — it defers, letting the live file grow past MaxBytes until the
+	// shipper drains and removes .1. Untailed (local-only) logs just roll: losing
+	// the oldest rotated chunk is fine since nothing ships it.
+	Tailed bool
 }
 
 // NewFileSink starts the writer goroutine. Call Close to drain + stop.
@@ -55,6 +62,7 @@ func NewFileSink(cfg FileSinkConfig) (*FileSink, error) {
 		path:     cfg.Path,
 		maxBytes: cfg.MaxBytes,
 		fsync:    cfg.Fsync,
+		tailed:   cfg.Tailed,
 		ch:       make(chan RequestEvent, cfg.Buffer),
 		stop:     make(chan struct{}),
 	}
@@ -106,6 +114,7 @@ func (fs *FileSink) run(f *os.File, w *bufio.Writer, size int64) {
 	ticker := time.NewTicker(fs.fsync)
 	defer ticker.Stop()
 	dirty := false
+	rotateBlocked := false // tailed + .1 still unshipped: deferring rotation
 
 	writeOne := func(ev RequestEvent) {
 		if f == nil || w == nil {
@@ -129,6 +138,22 @@ func (fs *FileSink) run(f *os.File, w *bufio.Writer, size int64) {
 			slog.Error("reqlog: write", "path", fs.path, "err", err.Error())
 		}
 		if size >= fs.maxBytes {
+			// When a shipper is tailing, never clobber an unshipped <path>.1: if it
+			// still exists the shipper hasn't finished it, so defer rotation and keep
+			// appending (the live file grows past maxBytes until .1 is drained +
+			// removed). This is what makes the buffer lossless across a slow/down
+			// control plane that would otherwise let a second rotation overwrite the
+			// first's still-unshipped tail.
+			if fs.tailed {
+				if _, err := os.Stat(fs.path + ".1"); err == nil {
+					if !rotateBlocked {
+						slog.Warn("reqlog: rotation deferred; shipper behind, log growing past max", "path", fs.path)
+						rotateBlocked = true
+					}
+					return
+				}
+			}
+			rotateBlocked = false
 			f, w, size = fs.rotate(f, w)
 		}
 	}
@@ -184,7 +209,10 @@ func (fs *FileSink) open() (*os.File, *bufio.Writer, int64) {
 }
 
 // rotate flushes + renames the current file to "<path>.1" and opens a fresh one.
-// The shipper follows rotation via the inode in its cursor.
+// The shipper follows rotation via the inode in its cursor. The caller only
+// invokes rotate when it's safe to (re)place <path>.1 — i.e. untailed (local
+// roll, clobber is fine) or tailed with no .1 present — so the rename never
+// overwrites an unshipped rotated file.
 func (fs *FileSink) rotate(f *os.File, w *bufio.Writer) (*os.File, *bufio.Writer, int64) {
 	_ = w.Flush()
 	_ = f.Sync()

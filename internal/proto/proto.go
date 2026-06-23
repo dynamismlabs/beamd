@@ -49,6 +49,7 @@ type HelloOK struct {
 	Type         string `json:"type"` // "hello_ok"
 	Slug         string `json:"slug"`
 	BaseDomain   string `json:"base_domain"`
+	Shape        string `json:"shape,omitempty"` // edge URL shape (hyphen|subdomain|flat); "" from older edges → hyphen
 	ProtoVersion int    `json:"proto_version"`
 }
 

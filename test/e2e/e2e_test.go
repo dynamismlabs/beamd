@@ -37,11 +37,39 @@ import (
 	"github.com/dynamismlabs/beamd/internal/dns"
 	"github.com/dynamismlabs/beamd/internal/edge"
 	"github.com/dynamismlabs/beamd/internal/mcp"
+	"github.com/dynamismlabs/beamd/internal/naming"
 )
 
 // ====================================================================
 // Tunnel routing
 // ====================================================================
+
+// The edge advertises its URL shape in hello_ok so the client can build the
+// correct public URL (BEAMD_URL) BEFORE registration — even on a self-host
+// subdomain/flat edge. Regression for `beamd run` hardcoding the hyphen shape.
+func TestHandshake_AdvertisesURLShape(t *testing.T) {
+	for _, shape := range []string{"hyphen", "subdomain", "flat"} {
+		t.Run(shape, func(t *testing.T) {
+			_, edgeAddr := startEdgeCfg(t, map[string]string{"T1": "turing"}, func(c *config.Server) {
+				c.URLShape = shape
+			})
+			c := connectClient(t, edgeAddr, "T1")
+			if c.Shape() != shape {
+				t.Fatalf("client Shape() = %q, want %q (hello_ok must carry the edge's shape)", c.Shape(), shape)
+			}
+			// The host the client derives up front (what goes into BEAMD_URL) must
+			// match what the edge actually registers — i.e. the guess is now exact.
+			derived := "https://" + naming.Hostname("api", c.Slug(), c.BaseDomain(), naming.ParseShape(c.Shape()))
+			url, err := c.Register("api", startDummyApp(t, "api"))
+			if err != nil {
+				t.Fatalf("register: %v", err)
+			}
+			if url != derived {
+				t.Fatalf("registered url = %q, but client derives %q from the advertised shape", url, derived)
+			}
+		})
+	}
+}
 
 func TestTunnel_FlatTokenServesAtBaseDomain(t *testing.T) {
 	dummyPort := startDummyApp(t, "dummy")

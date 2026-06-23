@@ -17,9 +17,12 @@ import (
 // log from a persisted (inode, byte-offset) cursor, batches complete lines, and
 // bulk-POSTs them to the control plane. The cursor advances ONLY on a 2xx, so a
 // control-plane outage or edge restart replays the window losslessly (the file is
-// the buffer; the control plane dedupes on request_id). Ships only complete,
-// newline-terminated lines — a partial trailing line is held until its newline
-// arrives, so a flush mid-write never ships a truncated JSON object.
+// the buffer; the control plane dedupes on request_id). It deletes the rotated
+// <path>.1 once fully shipped; the sink defers its next rotation while .1 still
+// exists, so even a multi-rotation backlog during a long outage never overwrites
+// an unshipped file. Ships only complete, newline-terminated lines — a partial
+// trailing line is held until its newline arrives, so a flush mid-write never
+// ships a truncated JSON object.
 type Shipper struct {
 	logPath    string
 	cursorPath string
@@ -96,6 +99,10 @@ func (s *Shipper) drain(cur cursor) cursor {
 		if !s.drainFile(s.logPath+".1", &cur) {
 			return cur // .1 not fully shipped — keep the cursor, retry .1 next tick
 		}
+		// .1 is fully shipped: remove it so the sink can rotate again. The sink
+		// defers rotation while .1 exists (lossless under a slow/down control
+		// plane), so this Remove is what lets rotation resume after a backlog.
+		_ = os.Remove(s.logPath + ".1")
 		cur = cursor{Inode: ino, Offset: 0}
 		s.saveCursor(cur)
 	}

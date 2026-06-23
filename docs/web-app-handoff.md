@@ -11,7 +11,7 @@
 ## Architecture: control plane vs edges (this drives everything)
 
 - **Control plane = your app** (one domain, e.g. `beamd.ai`). It serves the
-  dashboard, device-code login, `verify-token`, usage ingestion, and owns the
+  dashboard, device-code login, `verify-token`, request-event ingestion, and owns the
   Postgres source of truth. The published CLI **bakes this host in** (a bare
   `beamd login` targets it).
 - **Edges = beamd `serve` instances on *separate tunnel domains*.** For
@@ -20,7 +20,7 @@
   registrable domains* so free-tier abuse can't get the paid domain
   blocklisted, and a tunneled app is never same-site with your dashboard (no
   cookie/session theft). Each edge validates credentials by calling **your**
-  `verify-token` and reports usage to **your** usage endpoint. Beamd holds no
+  `verify-token` and ships per-request events to **your** requests endpoint. Beamd holds no
   user data — it caches token lookups ~60s and otherwise asks you.
 - **The CLI bakes in only the control-plane host.** *You* tell the CLI which
   edge a user gets (per tier) in the login response — the edge is **data you
@@ -93,14 +93,18 @@ The edge caches the result ~60s and authorizes the *requested* scope (the CLI
 sends it) against the set; a scope the session can't act in is rejected at
 connect. Anything non-2xx = transient → the edge denies and does not cache.
 
-### 6. `POST /api/internal/usage` (called by each edge, ~60s)
-Per-slug byte/active-tunnel deltas for billing. Shape + verification in
-[`hosted-mode.md`](hosted-mode.md) §2.5; insert into `usage_events`.
+### 6. `POST /api/internal/requests` (called by each edge, batched)
+Batches of per-request events (`{"events":[…]}`) for billing + analytics. Auth
+`Authorization: Bearer <BEAMD_REQUESTS_SECRET>`; the edge advances its cursor
+only on a 2xx, so **insert idempotently on `request_id`** (you will see replays).
+Shape + contract in [`hosted-mode.md`](hosted-mode.md) §2.5 and
+[`request-events-spec.md`](request-events-spec.md): bulk-insert `request_event`,
+roll up into `usage_daily`.
 
 ## Postgres schema
 `users`, `workspaces`, `teams`, `memberships`, `api_tokens` (workspace-scoped,
 plus `created_by_user_id` for attribution only), `device_codes` (with
-`issued_session_id`), `droplets`, `usage_events`. Full Drizzle DDL in
+`issued_session_id`), `droplets`, `request_event` (+ `usage_daily` rollup). Full Drizzle DDL in
 [`hosted-mode.md`](hosted-mode.md) §8. Better-auth manages its own session
 tables on top of `users`; the session that `verify-token` validates is one of
 those. A user's scope set = their personal workspace + the workspaces of teams
@@ -110,10 +114,10 @@ they're a member of (drives the `scopes` array in #3 and #5).
 ```yaml
 base_domain: beamd.app          # the paid edge (run a second serve on beamd-free.sh for free)
 token_store: "https://beamd.ai/api/internal/verify-token"
-usage_reporter:
-  webhook_url: "https://beamd.ai/api/internal/usage"
-  interval_seconds: 60
-# set BEAMD_AUTH_VERIFY_SECRET (and the usage secret) in the edge's env
+request_reporter:
+  webhook_url: "https://beamd.ai/api/internal/requests"
+  secret_env: BEAMD_REQUESTS_SECRET
+# set BEAMD_AUTH_VERIFY_SECRET (and BEAMD_REQUESTS_SECRET) in the edge's env
 ```
 Each edge also needs its tunnel-domain DNS (`A`/`AAAA` + wildcard) and a
 wildcard cert; provisioning details in [`setup.md`](setup.md) /
@@ -132,7 +136,7 @@ wildcard cert; provisioning details in [`setup.md`](setup.md) /
 1. **Schema + better-auth** (users, workspaces, teams, memberships, sessions).
 2. **`/.well-known` + device-code** (#1–#4) → a bare `beamd login` works end to end.
 3. **`verify-token`** (#5) → tunnels actually authorize (and the scope set gates orgs).
-4. **`usage`** (#6) → billing.
+4. **`requests`** (#6) → billing + analytics.
 5. **Dashboard "Create API key"** (workspace-scoped, named, shown once) → CI/agents.
 
 ## Publish the hosted CLI (when ready)

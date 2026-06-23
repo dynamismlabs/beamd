@@ -70,6 +70,30 @@ func TestLoadServer_IPMode(t *testing.T) {
 	}
 }
 
+func TestLoadServer_URLShape(t *testing.T) {
+	// Valid shapes load; empty defaults to hyphen (matches the control plane).
+	for in, want := range map[string]string{"": "hyphen", "hyphen": "hyphen", "subdomain": "subdomain", "flat": "flat"} {
+		body := validServerYAML
+		if in != "" {
+			body += "url_shape: " + in + "\n"
+		}
+		p := writeFile(t, t.TempDir(), "beamd.yaml", body)
+		cfg, err := LoadServer(p)
+		if err != nil {
+			t.Fatalf("url_shape %q: unexpected error: %v", in, err)
+		}
+		if cfg.URLShape != want {
+			t.Errorf("url_shape %q → %q, want %q", in, cfg.URLShape, want)
+		}
+	}
+	// A typo must fail loudly rather than silently become hyphen — otherwise the
+	// edge would route + issue certs for a different shape than the control plane.
+	p := writeFile(t, t.TempDir(), "beamd.yaml", validServerYAML+"url_shape: subdomian\n")
+	if _, err := LoadServer(p); err == nil {
+		t.Fatal("expected an error for unsupported url_shape: subdomian")
+	}
+}
+
 func TestLoadServer_EnvOverride(t *testing.T) {
 	p := writeFile(t, t.TempDir(), "beamd.yaml", validServerYAML)
 	t.Setenv("BEAMD_BASE_DOMAIN", "override.example.com")

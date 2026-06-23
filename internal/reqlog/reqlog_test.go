@@ -174,3 +174,154 @@ func TestShipperTailsAndAdvances(t *testing.T) {
 		t.Errorf("cursor did not advance")
 	}
 }
+
+// A tailed sink must NOT clobber an unshipped <path>.1 on a second rotation: it
+// defers (keeps appending to the live file, growing it past maxBytes) so no
+// events are lost. Regression for the double-rotation billing-loss bug.
+func TestRotateDefersWhenTailedAndDotOneUnshipped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	fs, err := NewFileSink(FileSinkConfig{Path: path, MaxBytes: 300, Fsync: 5 * time.Millisecond, Tailed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const total = 30 // crosses maxBytes many times → would rotate repeatedly
+	for i := 0; i < total; i++ {
+		fs.Record(RequestEvent{RequestID: NewID(), Host: "api-acme.beamd.run", Method: "GET", Status: 200, Outcome: OutcomeOK})
+	}
+	fs.Close() // drains all events to disk
+
+	dotOne := path + ".1"
+	st1, err := os.Stat(dotOne)
+	if err != nil {
+		t.Fatalf("expected a rotated %s after crossing max: %v", dotOne, err)
+	}
+	if st1.Size() == 0 {
+		t.Fatalf("%s is empty — its rotated tail was lost", dotOne)
+	}
+	stLive, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stLive.Size() <= 300 {
+		t.Fatalf("live file did not grow past maxBytes; rotation was not deferred (size=%d)", stLive.Size())
+	}
+	// No loss: every event we wrote survives in (.1 + live) combined. A clobbering
+	// second rotation would have dropped .1's tail → fewer than `total`.
+	if got := countJSONLines(t, dotOne) + countJSONLines(t, path); got != total {
+		t.Fatalf("events across .1+live = %d, want %d (double rotation lost data)", got, total)
+	}
+	if fs.Dropped() != 0 {
+		t.Fatalf("dropped %d events, want 0", fs.Dropped())
+	}
+}
+
+// An untailed (local-only) sink keeps the old rolling behavior: a second
+// rotation may clobber .1, and the live file is bounded near maxBytes.
+func TestRotateClobbersWhenUntailed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	fs, err := NewFileSink(FileSinkConfig{Path: path, MaxBytes: 300, Fsync: 5 * time.Millisecond}) // Tailed: false
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		fs.Record(RequestEvent{RequestID: NewID(), Host: "h", Method: "GET", Status: 200, Outcome: OutcomeOK})
+	}
+	fs.Close()
+	// Live file should have been rotated (reset), so it stays near/under maxBytes
+	// rather than growing without bound.
+	stLive, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stLive.Size() > 300 {
+		t.Fatalf("untailed live file should roll near maxBytes, got %d", stLive.Size())
+	}
+}
+
+// After fully shipping the rotated <path>.1, the shipper must remove it so the
+// sink can rotate again (the sink defers rotation while .1 still exists).
+func TestShipperRemovesDotOneAfterShipping(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	cursorPath := filepath.Join(dir, "requests.cursor")
+	dotOne := path + ".1"
+
+	// A rotated file (.1) with 3 lines + a fresh live file with 2 lines — distinct
+	// inodes, so the shipper treats .1 as the pre-rotation file to finish first.
+	writeJSONLines(t, dotOne, 3)
+	writeJSONLines(t, path, 2)
+
+	ino1, ok := inodeOf(dotOne)
+	if !ok {
+		t.Fatal("inodeOf(.1) failed")
+	}
+	b, _ := json.Marshal(cursor{Inode: ino1, Offset: 0}) // cursor points at .1's inode
+	if err := os.WriteFile(cursorPath, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var received int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Events []RequestEvent `json:"events"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		received += len(body.Events)
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	sh := NewShipper(ShipperConfig{LogPath: path, CursorPath: cursorPath, WebhookURL: srv.URL, Secret: "x", BatchSize: 10})
+	sh.drain(sh.loadCursor())
+
+	if _, err := os.Stat(dotOne); !os.IsNotExist(err) {
+		t.Fatalf("%s should be removed after full shipping, stat err=%v", dotOne, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if received != 5 {
+		t.Fatalf("shipped %d events, want 5 (3 from .1 + 2 from live)", received)
+	}
+}
+
+func countJSONLines(t *testing.T, path string) int {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	n := 0
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if len(sc.Bytes()) == 0 {
+			continue
+		}
+		var ev RequestEvent
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			t.Fatalf("bad line in %s: %v", path, err)
+		}
+		n++
+	}
+	return n
+}
+
+func writeJSONLines(t *testing.T, path string, n int) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for i := 0; i < n; i++ {
+		b, _ := json.Marshal(RequestEvent{RequestID: NewID(), Host: "h", Method: "GET", Status: 200, Outcome: OutcomeOK})
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

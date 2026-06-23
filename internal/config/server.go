@@ -161,8 +161,18 @@ func (s *Server) Validate() error {
 	if s.MaxRequestBodyBytes == 0 {
 		s.MaxRequestBodyBytes = 32 << 20 // 32 MiB default
 	}
-	if s.URLShape == "" {
-		s.URLShape = "hyphen" // the shipped default (matches the control plane)
+	switch naming.Shape(s.URLShape) {
+	case "":
+		s.URLShape = string(naming.ShapeHyphen) // the shipped default (matches the control plane)
+	case naming.ShapeHyphen, naming.ShapeSubdomain, naming.ShapeFlat:
+		// valid — leave as-is.
+	default:
+		// Fail loud rather than silently fall back to hyphen (ParseShape maps any
+		// unknown string to hyphen): a typo like "subdomian" would otherwise make
+		// the edge route + issue certs for a different shape than the control plane
+		// renders.
+		return fmt.Errorf("url_shape %q is not supported (use %q, %q, or %q)",
+			s.URLShape, naming.ShapeHyphen, naming.ShapeSubdomain, naming.ShapeFlat)
 	}
 	switch s.RequestLog.IPMode {
 	case "", "truncate", "off":

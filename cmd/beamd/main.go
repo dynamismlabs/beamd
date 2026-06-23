@@ -218,6 +218,9 @@ func startRequestPipeline(cfg *config.Server, e *edge.Edge) func() {
 		Path:     logPath,
 		MaxBytes: int64(cfg.RequestLog.MaxSizeMB) << 20,
 		Fsync:    time.Duration(cfg.RequestLog.FsyncMs) * time.Millisecond,
+		// A shipper tails the rotated .1 only when a reporter webhook is set; tell
+		// the sink so rotation won't clobber an unshipped .1 (lossless buffer).
+		Tailed: cfg.RequestReporter.WebhookURL != "",
 	})
 	if err != nil {
 		slog.Error("reqlog: file sink init failed", "err", err.Error())

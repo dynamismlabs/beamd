@@ -419,7 +419,7 @@ func (e *Edge) handleClient(c net.Conn) {
 
 	if err := proto.Write(control, &proto.HelloOK{
 		Type: proto.TypeHelloOK, Slug: slug,
-		BaseDomain: e.cfg.BaseDomain, ProtoVersion: proto.ProtoVersion,
+		BaseDomain: e.cfg.BaseDomain, Shape: string(e.cfg.Shape()), ProtoVersion: proto.ProtoVersion,
 	}); err != nil {
 		slog.Error("control: write hello_ok", "err", err.Error())
 		return
