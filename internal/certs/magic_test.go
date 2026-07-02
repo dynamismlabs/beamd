@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/caddyserver/certmagic"
 	"github.com/libdns/libdns"
 )
 
@@ -200,5 +202,154 @@ func TestNewMagicManager_RequiredFields(t *testing.T) {
 				t.Errorf("expected error containing %q, got nil", c.wantErr)
 			}
 		})
+	}
+}
+
+// The cache's GetConfigForCert callback is what certmagic's background
+// maintenance loop uses to find the config that can renew each cert; if it
+// returns nil the loop skips the cert and every eagerly-managed cert (apex +
+// wildcards) silently expires at ~90 days. Pin the wiring: each cache's
+// callback must return the config built on that cache.
+func TestCacheConfigWiring_RenewalStaysEnabled(t *testing.T) {
+	m, err := NewMagicManager(MagicConfig{
+		BaseDomain:       "beam.example.com",
+		ACMEEmail:        "ops@example.com",
+		ACMECA:           "https://acme-staging-v02.api.letsencrypt.org/directory",
+		DNSProvider:      stubProvider{},
+		StorageDir:       filepath.Join(t.TempDir(), "certs"),
+		OnDemandDecision: func(ctx context.Context, name string) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("NewMagicManager: %v", err)
+	}
+
+	cfg, err := m.wildConfigGetter(certmagic.Certificate{})
+	if err != nil {
+		t.Fatalf("wild GetConfigForCert: %v", err)
+	}
+	if cfg != m.cmWild {
+		t.Errorf("wild cache callback returned %p, want the wild config %p", cfg, m.cmWild)
+	}
+
+	od, err := m.onDemandConfigGetter(certmagic.Certificate{})
+	if err != nil {
+		t.Fatalf("on-demand GetConfigForCert: %v", err)
+	}
+	if od != m.cmOnDemand {
+		t.Errorf("on-demand cache callback returned %p, want the on-demand config %p", od, m.cmOnDemand)
+	}
+}
+
+// A failed background issuance must not be retried on the very next handshake
+// — Let's Encrypt rate-limits failed validations per hostname (5/hour).
+func TestKickWild_CooldownAfterFailure(t *testing.T) {
+	m, err := NewMagicManager(MagicConfig{
+		BaseDomain:  "beam.example.com",
+		ACMEEmail:   "ops@example.com",
+		ACMECA:      "https://acme-staging-v02.api.letsencrypt.org/directory",
+		DNSProvider: stubProvider{},
+		StorageDir:  filepath.Join(t.TempDir(), "certs"),
+	})
+	if err != nil {
+		t.Fatalf("NewMagicManager: %v", err)
+	}
+
+	names := m.wildNamesFor("beam.example.com")
+	key := strings.Join(names, ",")
+	m.mu.Lock()
+	m.lastFail[key] = time.Now()
+	m.mu.Unlock()
+
+	m.kickWild("beam.example.com")
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.inflight[key] {
+		t.Error("kickWild started an ACME order during the failure cooldown")
+	}
+}
+
+// Integration guard for the SEC-3/4 wiring AND the lastFail bound: an
+// unauthenticated peer spraying distinct DENIED off-base SNIs through the real
+// GetCertificate path must not grow the cooldown map. recordFailure fires on
+// every on-demand error (including denials), so this proves the authorized-only
+// guard keeps lastFail bounded end-to-end — the persistent-DoS vector the
+// review flagged — while also exercising the DecisionFunc→gate.Decide seam.
+func TestMagicManager_DeniedSNIsDoNotGrowCooldown(t *testing.T) {
+	dir := t.TempDir()
+	var calls int
+	m, err := NewMagicManager(MagicConfig{
+		BaseDomain:  "beam.example.com",
+		ACMEEmail:   "ops@example.com",
+		ACMECA:      "https://acme-staging-v02.api.letsencrypt.org/directory",
+		DNSProvider: stubProvider{},
+		StorageDir:  filepath.Join(dir, "certs"),
+		OnDemandDecision: func(_ context.Context, _ string) error {
+			calls++
+			return fmt.Errorf("unverified") // every off-base name denied → certmagic refuses fast
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 200; i++ {
+		_ = servedCert(t, m.GetCertificate, fmt.Sprintf("a%d.evil.example", i))
+	}
+
+	if calls == 0 {
+		t.Fatal("off-base handshakes should consult the gated authorizer (DecisionFunc→gate.Decide not wired)")
+	}
+	m.gate.mu.Lock()
+	n := len(m.gate.lastFail)
+	m.gate.mu.Unlock()
+	if n != 0 {
+		t.Errorf("denied SNIs grew the cooldown map to %d entries — unbounded DoS vector", n)
+	}
+}
+
+// kickWild must refuse DNS-01 issuance for hosts the edge doesn't serve, so an
+// unauthenticated peer spraying <app>.<slug>.<base> SNIs cannot trigger real
+// ACME orders or grow m.inflight/m.lastFail. Without the gate, each distinct
+// SNI would spawn a background ManageSync (a real ACME order) — the HIGH the
+// review found.
+func TestMagicManager_KickWildGatedByHostAllowed(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewMagicManager(MagicConfig{
+		BaseDomain:  "beam.example.com",
+		ACMEEmail:   "ops@example.com",
+		ACMECA:      "https://acme-staging-v02.api.letsencrypt.org/directory",
+		DNSProvider: stubProvider{},
+		StorageDir:  filepath.Join(dir, "certs"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only one host is "routed"; everything else is refused.
+	m.SetHostAllowed(func(name string) bool { return name == "api.turing.beam.example.com" })
+
+	for i := 0; i < 50; i++ {
+		_ = servedCert(t, m.GetCertificate, fmt.Sprintf("a.evil%d.beam.example.com", i))
+	}
+
+	m.mu.Lock()
+	inflight, lastFail := len(m.inflight), len(m.lastFail)
+	m.mu.Unlock()
+	if inflight != 0 || lastFail != 0 {
+		t.Errorf("attacker SNIs reached issuance state: inflight=%d lastFail=%d (gate not enforced)", inflight, lastFail)
+	}
+	if m.IssuanceCount() != 0 {
+		t.Errorf("attacker SNIs triggered issuance (count=%d)", m.IssuanceCount())
+	}
+
+	// The gate callback itself: known host allowed, unknown refused.
+	m.mu.Lock()
+	fn := m.issueAllowed
+	m.mu.Unlock()
+	if fn == nil || !fn("api.turing.beam.example.com") {
+		t.Error("known routed host should be allowed to issue")
+	}
+	if fn("a.evil.beam.example.com") {
+		t.Error("unrouted host must be refused")
 	}
 }

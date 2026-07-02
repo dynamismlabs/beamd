@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -181,5 +182,69 @@ func TestHTTPStore_BareSlugIsSingleScope(t *testing.T) {
 	}
 	if _, ok := s.Resolve("T1", "elsewhere"); ok {
 		t.Error("bare slug, mismatched scope should reject")
+	}
+}
+
+// The cache is keyed by attacker-supplied tokens pre-auth, so it must stay
+// bounded no matter how many distinct tokens get sprayed at the edge.
+func TestHTTPStore_CacheStaysBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	s := NewHTTPStore(srv.URL, "")
+	// Long TTLs so nothing expires during the test — forcing the hard-cap
+	// eviction path, not just the expired sweep.
+	s.SetTTLs(time.Hour, time.Hour)
+
+	for i := 0; i < httpStoreCacheMax*2; i++ {
+		s.Resolve(fmt.Sprintf("sprayed-token-%d", i), "")
+	}
+
+	s.mu.Lock()
+	n := len(s.cache)
+	s.mu.Unlock()
+	if n > httpStoreCacheMax {
+		t.Errorf("cache grew to %d entries, cap is %d", n, httpStoreCacheMax)
+	}
+}
+
+// Expired entries are preferred for eviction so live results survive a spray.
+func TestHTTPStore_EvictionPrefersExpired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"slug": "turing"})
+	}))
+	defer srv.Close()
+
+	s := NewHTTPStore(srv.URL, "")
+	s.SetTTLs(time.Hour, time.Hour)
+	if _, ok := s.Resolve("live-token", ""); !ok {
+		t.Fatal("live token should resolve")
+	}
+
+	// Fill the rest of the cache with entries that are already expired.
+	s.mu.Lock()
+	for i := 0; i < httpStoreCacheMax; i++ {
+		s.cache[fmt.Sprintf("expired-%d", i)] = httpStoreCacheEntry{
+			result:  httpStoreResult{ok: false},
+			expires: time.Now().Add(-time.Minute),
+		}
+	}
+	s.mu.Unlock()
+
+	// The insert that overflows the cap must sweep the expired spray, not the
+	// live entry.
+	s.Resolve("one-more", "")
+
+	s.mu.Lock()
+	_, liveSurvived := s.cache["live-token"]
+	n := len(s.cache)
+	s.mu.Unlock()
+	if !liveSurvived {
+		t.Error("live entry was evicted while expired entries existed")
+	}
+	if n > httpStoreCacheMax {
+		t.Errorf("cache size %d exceeds cap %d after eviction", n, httpStoreCacheMax)
 	}
 }

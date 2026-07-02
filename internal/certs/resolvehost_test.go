@@ -54,3 +54,33 @@ func TestResolveHostAuthorizerBadSecretDenies(t *testing.T) {
 		t.Errorf("a 401 must deny issuance, got nil")
 	}
 }
+
+// A verified host the operator marked "delegated" (customer serves its own
+// cert) must NOT get an edge-issued on-demand cert.
+func TestResolveHostAuthorizer_DelegatedDenies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"slug":"acme","cert_mode":"delegated"}`))
+	}))
+	defer srv.Close()
+
+	authorize := NewResolveHostAuthorizer(srv.URL, "")
+	if err := authorize(context.Background(), "api.acme.com"); err == nil {
+		t.Error("a delegated host must be refused on-demand issuance, got nil")
+	}
+}
+
+// A 2xx with no cert_mode field must still allow issuance (drop-in: works
+// against a control plane that predates the field, no lockstep deploy).
+func TestResolveHostAuthorizer_MissingCertModeAllows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"slug":"acme"}`)) // no cert_mode
+	}))
+	defer srv.Close()
+
+	authorize := NewResolveHostAuthorizer(srv.URL, "")
+	if err := authorize(context.Background(), "api.acme.com"); err != nil {
+		t.Errorf("missing cert_mode should allow issuance (drop-in), got %v", err)
+	}
+}

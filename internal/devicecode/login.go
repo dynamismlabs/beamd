@@ -153,6 +153,11 @@ func Login(ctx context.Context, hc *http.Client, disc *Discovery, out io.Writer)
 			return nil, fmt.Errorf("login denied")
 		case "expired_token":
 			return nil, fmt.Errorf("device code expired before approval; rerun login")
+		case "invalid_grant", "invalid_request", "invalid_client", "unsupported_grant_type":
+			// Hard OAuth errors — the device code is unusable (already redeemed,
+			// malformed, …). Polling can never succeed; fail now instead of
+			// hanging until the code expires.
+			return nil, fmt.Errorf("login failed: server returned %s", tok.Error)
 		default:
 			// Unknown — keep polling but surface it.
 			fmt.Fprintf(out, "  (server: %s — continuing)\n", tok.Error)

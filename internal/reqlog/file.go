@@ -2,8 +2,11 @@ package reqlog
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -115,10 +118,30 @@ func (fs *FileSink) run(f *os.File, w *bufio.Writer, size int64) {
 	defer ticker.Stop()
 	dirty := false
 	rotateBlocked := false // tailed + .1 still unshipped: deferring rotation
+	pending := 0           // events written into w since its last successful flush
+	writeFailed := false   // a Write errored: w is latched, replace it next tick
+
+	// reopen abandons a writer whose error state has latched (bufio never
+	// recovers after a failed Write/Flush) and starts over with fresh handles.
+	// Without this, one disk-full moment drops every subsequent event until
+	// process restart — even after space is freed, because `size` stops
+	// advancing and rotation (the only other reopen path) never triggers. The
+	// abandoned buffer's events are unrecoverable; count them so the loss is
+	// observable per the sink's contract.
+	reopen := func() {
+		fs.dropped.Add(int64(pending))
+		pending = 0
+		dirty = false
+		writeFailed = false
+		if f != nil {
+			_ = f.Close()
+		}
+		f, w, size = fs.open()
+	}
 
 	writeOne := func(ev RequestEvent) {
 		if f == nil || w == nil {
-			// No open file (a rotation reopen failed) — the event is lost. Count it
+			// No open file (a reopen failed) — the event is lost. Count it
 			// so the loss shows up at /metrics rather than vanishing silently.
 			fs.dropped.Add(1)
 			return
@@ -134,9 +157,14 @@ func (fs *FileSink) run(f *os.File, w *bufio.Writer, size int64) {
 		dirty = true
 		if err != nil {
 			// Partial/failed write (e.g. disk full) — observable, not silent.
+			// Recovery happens on the next tick, not per-event, so sustained
+			// failure doesn't open/close the file thousands of times a second.
 			fs.dropped.Add(1)
+			writeFailed = true
 			slog.Error("reqlog: write", "path", fs.path, "err", err.Error())
+			return
 		}
+		pending++
 		if size >= fs.maxBytes {
 			// When a shipper is tailing, never clobber an unshipped <path>.1: if it
 			// still exists the shipper hasn't finished it, so defer rotation and keep
@@ -155,6 +183,27 @@ func (fs *FileSink) run(f *os.File, w *bufio.Writer, size int64) {
 			}
 			rotateBlocked = false
 			f, w, size = fs.rotate(f, w)
+			pending = 0
+		}
+	}
+
+	flushTick := func() {
+		switch {
+		case writeFailed:
+			reopen()
+		case f == nil || w == nil:
+			// An earlier reopen failed — keep retrying so the sink heals once
+			// the path is writable again.
+			f, w, size = fs.open()
+		case dirty:
+			if err := w.Flush(); err != nil {
+				slog.Error("reqlog: flush", "path", fs.path, "err", err.Error())
+				reopen()
+				return
+			}
+			_ = f.Sync()
+			pending = 0
+			dirty = false
 		}
 	}
 
@@ -163,11 +212,7 @@ func (fs *FileSink) run(f *os.File, w *bufio.Writer, size int64) {
 		case ev := <-fs.ch:
 			writeOne(ev)
 		case <-ticker.C:
-			if dirty && w != nil {
-				_ = w.Flush()
-				_ = f.Sync()
-				dirty = false
-			}
+			flushTick()
 		case <-fs.stop:
 			// Drain whatever's queued, then return.
 			for {
@@ -185,6 +230,17 @@ func (fs *FileSink) run(f *os.File, w *bufio.Writer, size int64) {
 // openOrErr opens the append target, returning an error on failure. Used at
 // startup so a bad/unwritable path is fatal rather than silently dropping events.
 func (fs *FileSink) openOrErr() (*os.File, *bufio.Writer, int64, error) {
+	// A hard kill can leave the file ending mid-line (bufio flushes on buffer
+	// pressure, not line boundaries). Appending after that fragment would merge
+	// it with the next event into one corrupt line, so truncate it first. Best
+	// effort: the shipper also skips non-JSON lines, but repairing here keeps
+	// the on-disk log clean for local consumers too.
+	if repaired, err := repairTail(fs.path); err != nil {
+		slog.Warn("reqlog: tail repair failed", "path", fs.path, "err", err.Error())
+	} else if repaired {
+		fs.dropped.Add(1) // the torn record is gone; keep loss observable
+		slog.Warn("reqlog: truncated crash-torn partial line", "path", fs.path)
+	}
 	f, err := os.OpenFile(fs.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("reqlog: open %s: %w", fs.path, err)
@@ -194,6 +250,52 @@ func (fs *FileSink) openOrErr() (*os.File, *bufio.Writer, int64, error) {
 		size = st.Size()
 	}
 	return f, bufio.NewWriter(f), size, nil
+}
+
+// repairTail truncates a trailing partial line (no final '\n') back to the
+// last complete line. Reports whether anything was removed.
+func repairTail(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	size := st.Size()
+	if size == 0 {
+		return false, nil
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, size-1); err != nil {
+		return false, err
+	}
+	if last[0] == '\n' {
+		return false, nil
+	}
+	// Scan backwards in chunks for the last newline; truncate just after it.
+	const chunk = 64 * 1024
+	end := size
+	for end > 0 {
+		start := end - chunk
+		if start < 0 {
+			start = 0
+		}
+		buf := make([]byte, end-start)
+		if _, err := f.ReadAt(buf, start); err != nil {
+			return false, err
+		}
+		if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
+			return true, f.Truncate(start + int64(i) + 1)
+		}
+		end = start
+	}
+	return true, f.Truncate(0) // no newline at all: the whole file is one torn line
 }
 
 // open is the best-effort reopen used after rotation: it logs and returns nil

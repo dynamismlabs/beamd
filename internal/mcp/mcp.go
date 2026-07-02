@@ -185,7 +185,7 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *jsonR
 		if a.Port < 1 || a.Port > 65535 {
 			return toolError("port must be 1..65535"), nil
 		}
-		resp, err := s.LC.Open(ctx, a.Port, a.Name)
+		resp, err := s.LC.Open(ctx, a.Port, a.Name, s.Scope)
 		if err != nil {
 			return toolError(err.Error()), nil
 		}

@@ -6,6 +6,7 @@ package proto
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 )
 
@@ -75,8 +76,14 @@ type Heartbeat struct {
 }
 
 type Error struct {
-	Type    string `json:"type"` // "error"
-	Code    string `json:"code"`
+	Type string `json:"type"` // "error"
+	Code string `json:"code"`
+	// Name echoes the register this error is about, so the client can drop a
+	// late error meant for an already-abandoned register instead of
+	// misrouting it onto the next one. Empty for connection-scoped errors
+	// (bad_hello, shutdown, …) and from older edges — the client treats an
+	// empty Name as "deliver to whatever register is waiting" (prior behavior).
+	Name    string `json:"name,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -91,11 +98,20 @@ func Write(w io.Writer, msg any) error {
 	return err
 }
 
+// MaxLineBytes caps a single control message. Real messages are well under a
+// kilobyte; the cap exists so a peer streaming bytes with no newline — before
+// authenticating, on the edge side — can't grow the read buffer without bound.
+const MaxLineBytes = 1 << 20 // 1 MiB
+
+// ErrLineTooLong is returned when a control line exceeds MaxLineBytes. The
+// stream is desynced at that point; callers must tear the session down.
+var ErrLineTooLong = errors.New("proto: control line exceeds max length")
+
 // Read reads one NDJSON message from r and returns its type discriminator
 // plus the raw line. Callers json.Unmarshal raw into the matching struct.
 // Returns io.EOF when the stream is cleanly closed.
 func Read(r *bufio.Reader) (typ string, raw []byte, err error) {
-	line, err := r.ReadBytes('\n')
+	line, err := readLineCapped(r, MaxLineBytes)
 	if err != nil {
 		return "", nil, err
 	}
@@ -106,4 +122,25 @@ func Read(r *bufio.Reader) (typ string, raw []byte, err error) {
 		return "", line, err
 	}
 	return env.Type, line, nil
+}
+
+// readLineCapped reads through '\n' like bufio.Reader.ReadBytes, but fails
+// with ErrLineTooLong once the accumulated line passes max instead of growing
+// without bound.
+func readLineCapped(r *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		line = append(line, frag...)
+		if len(line) > max {
+			return nil, ErrLineTooLong
+		}
+		if err == nil {
+			return line, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return nil, err
+	}
 }

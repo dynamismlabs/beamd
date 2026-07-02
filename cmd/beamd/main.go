@@ -87,7 +87,13 @@ func main() {
 		usage()
 	default:
 		// Bare `beamd <port>` is shorthand for `beamd open <port>`.
-		if p, err := strconv.Atoi(os.Args[1]); err == nil && p >= 1 && p <= 65535 {
+		if p, err := strconv.Atoi(os.Args[1]); err == nil {
+			if p < 1 || p > 65535 {
+				// Numeric but not a port: say so, instead of the misleading
+				// "unknown command: 70000" + a usage dump.
+				fmt.Fprintf(os.Stderr, "invalid port: %s (must be 1-65535)\n", os.Args[1])
+				os.Exit(2)
+			}
 			openCmd(os.Args[1:])
 			return
 		}

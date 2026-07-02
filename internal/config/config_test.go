@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -125,5 +128,44 @@ func TestLoadClient_ExplicitAgentSocket(t *testing.T) {
 	}
 	if cfg.AgentSocket != "/tmp/custom.sock" {
 		t.Errorf("AgentSocket = %q, want /tmp/custom.sock", cfg.AgentSocket)
+	}
+}
+
+// SEC-6: an inline dns_provider_creds in a group/world-readable config must
+// warn; a 0600 file (or env-provided creds) must not.
+func TestLoadServer_WarnsOnLooseInlineCreds(t *testing.T) {
+	base := validServerYAML + "dns_provider_creds: cf-secret-token\n"
+
+	capture := func(t *testing.T, mode os.FileMode, body string, envCreds string) string {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "beamd.yaml")
+		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil { // WriteFile mode is umask-masked
+			t.Fatal(err)
+		}
+		if envCreds != "" {
+			t.Setenv("BEAMD_DNS_PROVIDER_CREDS", envCreds)
+		}
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		defer slog.SetDefault(prev)
+		if _, err := LoadServer(p); err != nil {
+			t.Fatalf("LoadServer: %v", err)
+		}
+		return buf.String()
+	}
+
+	if out := capture(t, 0o644, base, ""); !strings.Contains(out, "dns_provider_creds") {
+		t.Errorf("0644 inline creds should warn, log was: %q", out)
+	}
+	if out := capture(t, 0o600, base, ""); strings.Contains(out, "dns_provider_creds") {
+		t.Errorf("0600 inline creds should NOT warn, log was: %q", out)
+	}
+	// Creds via env only (no inline field) — the loose file has no secret.
+	if out := capture(t, 0o644, validServerYAML, "cf-secret-token"); strings.Contains(out, "dns_provider_creds") {
+		t.Errorf("env-provided creds should NOT warn on a loose file, log was: %q", out)
 	}
 }

@@ -10,6 +10,7 @@ package edge
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -120,7 +121,7 @@ func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Ma
 	if cfg.RequestLog.IPMode == "off" {
 		capIP = false
 	}
-	return &Edge{
+	e := &Edge{
 		cfg:              cfg,
 		version:          version,
 		tokens:           tokens,
@@ -143,6 +144,30 @@ func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Ma
 		firstSession:     make(chan struct{}),
 		shutdown:         make(chan struct{}),
 	}
+	// Gate on-demand DNS-01 wildcard issuance on hosts the edge actually serves,
+	// so an unauthenticated peer sending arbitrary <app>.<slug>.<base> SNIs
+	// can't drive real ACME orders for attacker-chosen wildcards (which would
+	// burn the operator's CA rate limits). The production MagicManager honors
+	// this; the dev/test SelfSignedManager doesn't implement it and issues
+	// cheap self-signed certs, so the type-assert simply no-ops there.
+	if hm, ok := certMgr.(interface{ SetHostAllowed(func(string) bool) }); ok {
+		hm.SetHostAllowed(e.hostKnownForCert)
+	}
+	return e
+}
+
+// hostKnownForCert reports whether the edge should obtain a real cert for this
+// SNI: the apex (always the operator's own) or a hostname with a live route.
+// An unregistered host has nothing to serve, so refusing issuance for it costs
+// nothing and closes the ACME-amplification vector.
+func (e *Edge) hostKnownForCert(name string) bool {
+	if strings.EqualFold(name, e.cfg.BaseDomain) {
+		return true
+	}
+	e.mu.RLock()
+	_, ok := e.routes[name]
+	e.mu.RUnlock()
+	return ok
 }
 
 // SetHostnamesEndpoint overrides the scope-hostnames endpoint + secret (tests
@@ -210,6 +235,9 @@ func (e *Edge) flushTrafficPeriodically() {
 func (e *Edge) Serve() error {
 	tlsCfg := &tls.Config{
 		GetCertificate: e.certs.GetCertificate,
+		// Pin the floor explicitly rather than rely on the toolchain default:
+		// a GODEBUG flip or older build must not silently re-enable TLS 1.0/1.1.
+		MinVersion: tls.VersionTLS12,
 		// `acme-tls/1` lets certmagic solve ACME TLS-ALPN-01 challenges over this
 		// listener — how On-Demand custom-domain certs (url-model §8.2, path B)
 		// get issued without a :80 listener. GetCertificate returns the challenge
@@ -226,6 +254,9 @@ func (e *Edge) Serve() error {
 	e.ln = ln
 	e.mu.Unlock()
 	slog.Info("edge listening", "addr", e.cfg.ListenHTTPS)
+	if e.cfg.MetricsToken == "" {
+		slog.Warn("edge: /metrics is disabled (no metrics_token set) — set metrics_token or BEAMD_METRICS_TOKEN to enable operator scraping")
+	}
 
 	go e.flushTrafficPeriodically()
 
@@ -347,12 +378,20 @@ func (e *Edge) CloseAllSessions() {
 	}
 }
 
+// preAuthTimeout bounds everything an unauthenticated peer can make us do:
+// the TLS handshake, and for beam clients the control-stream open + hello
+// exchange. Without it a peer that stalls mid-handshake (or never sends the
+// hello) pins a goroutine and FD forever. Must stay under the yamux keepalive
+// interval (20s) so the deadline can't trip on a legitimate idle keepalive.
+const preAuthTimeout = 15 * time.Second
+
 func (e *Edge) handle(c net.Conn) {
 	tlsConn, ok := c.(*tls.Conn)
 	if !ok {
 		_ = c.Close()
 		return
 	}
+	_ = c.SetDeadline(time.Now().Add(preAuthTimeout))
 	if err := tlsConn.HandshakeContext(context.Background()); err != nil {
 		slog.Debug("tls handshake failed", "err", err.Error())
 		_ = c.Close()
@@ -361,6 +400,8 @@ func (e *Edge) handle(c net.Conn) {
 
 	switch tlsConn.ConnectionState().NegotiatedProtocol {
 	case ALPNBeam:
+		// Deadline stays armed through the hello exchange; handleClient clears
+		// it once the client authenticates.
 		e.handleClient(c)
 	case acmeTLS1:
 		// An ACME TLS-ALPN-01 challenge: validation happened during the
@@ -368,6 +409,10 @@ func (e *Edge) handle(c net.Conn) {
 		// no application data — just close.
 		_ = c.Close()
 	default:
+		// Public HTTP: hand off with no deadline — the http.Server's
+		// ReadHeaderTimeout re-arms reads per request, and writes must stay
+		// unbounded so streaming responses (SSE, websockets) survive.
+		_ = c.SetDeadline(time.Time{})
 		e.handlePublic(c)
 	}
 }
@@ -425,6 +470,10 @@ func (e *Edge) handleClient(c net.Conn) {
 		return
 	}
 
+	// Authenticated: disarm the pre-auth deadline. Liveness from here on is
+	// the heartbeat watchdog's job.
+	_ = c.SetDeadline(time.Time{})
+
 	sess := &Session{
 		yamux:         yamuxSess,
 		slug:          slug,
@@ -472,11 +521,12 @@ func (e *Edge) handleControlMsg(sess *Session, typ string, line []byte) {
 			name = naming.LabelFromPort(msg.Port)
 		}
 		if err := naming.ValidateLabel(name); err != nil {
-			sess.send(&proto.Error{Type: proto.TypeError, Code: proto.CodeInvalidName, Message: err.Error()})
+			sess.send(&proto.Error{Type: proto.TypeError, Code: proto.CodeInvalidName, Name: name, Message: err.Error()})
 			return
 		}
 		url, perr := e.register(sess, name)
 		if perr != nil {
+			perr.Name = name // correlate this error to the register that caused it
 			sess.send(perr)
 			return
 		}
@@ -578,6 +628,7 @@ func (e *Edge) register(sess *Session, name string) (string, *proto.Error) {
 		for h, r := range e.routes {
 			if r.session == dk.sess && r.name == dk.name {
 				delete(e.routes, h)
+				delete(e.proxies, h)
 			}
 		}
 		dk.sess.mu.Lock()
@@ -644,6 +695,7 @@ func (e *Edge) unregister(sess *Session, name string) {
 	for _, h := range hosts {
 		if r, ok := e.routes[h]; ok && r.session == sess {
 			delete(e.routes, h)
+			delete(e.proxies, h) // keep the proxy cache from growing unboundedly
 			removed = true
 		}
 	}
@@ -671,6 +723,7 @@ func (e *Edge) dropSession(sess *Session) {
 	for host, r := range e.routes {
 		if r.session == sess {
 			delete(e.routes, host)
+			delete(e.proxies, host) // keep the proxy cache from growing unboundedly
 			removedNames[r.name] = struct{}{}
 		}
 	}
@@ -713,6 +766,13 @@ func (e *Edge) handlePublic(c net.Conn) {
 	srv := &http.Server{
 		Handler:        http.HandlerFunc(e.handler),
 		MaxHeaderBytes: 1 << 20, // 1 MiB
+		// Slow-loris guard: a peer must finish request headers promptly and
+		// can't hold an idle keep-alive conn forever. Deliberately NO
+		// ReadTimeout/WriteTimeout — tunneled dev apps stream (SSE, HMR
+		// websockets, long polls) and a whole-request/response clock would
+		// sever them mid-flight.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	e.mu.Lock()
 	e.pubSrvs[srv] = struct{}{}
@@ -737,8 +797,15 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	case "/metrics":
-		e.handleMetrics(w, r)
-		return
+		// Operator-only. The dump names every slug, tunnel, and byte count, so
+		// it is (a) served only on the bare base domain — never on tunnel
+		// hostnames, so a tunneled app keeps its own /metrics path — and (b)
+		// authenticated by a bearer token inside handleMetrics. On any other
+		// host, fall through to normal routing.
+		if e.isBaseHost(r.Host) {
+			e.handleMetrics(w, r)
+			return
+		}
 	case "/.well-known/beam-auth":
 		e.handleAuthDiscovery(w, r)
 		return
@@ -828,7 +895,43 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
+// bearerTokenOK reports whether the request carries `Authorization: Bearer
+// <want>` with a constant-time-equal token.
+func bearerTokenOK(r *http.Request, want string) bool {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, prefix) {
+		return false
+	}
+	got := strings.TrimPrefix(h, prefix)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// isBaseHost reports whether the request Host (port stripped) is the bare
+// base domain — the operator surface, as opposed to a tunnel hostname.
+func (e *Edge) isBaseHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	return strings.EqualFold(host, e.cfg.BaseDomain)
+}
+
 func (e *Edge) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Auth. No token configured → the endpoint is disabled (404) so a
+	// misconfigured deploy never exposes the dump. A configured token must be
+	// presented as `Authorization: Bearer <token>`, compared in constant time.
+	token := e.cfg.MetricsToken
+	if token == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !bearerTokenOK(r, token) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="beamd-metrics"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	e.metrics.writeText(w, int64(e.certs.IssuanceCount()))
 	e.traffic.writeMetrics(w)
@@ -864,24 +967,49 @@ func (e *Edge) proxyFor(host string) *httputil.ReverseProxy {
 	}
 
 	p = &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = "http"
-			req.URL.Host = host
-
-			if _, ok := req.Header["User-Agent"]; !ok {
-				req.Header.Set("User-Agent", "")
+		// Rewrite (not Director): the edge is the SOLE trusted hop — it
+		// terminates public TLS on :443 itself — so every inbound forwarding /
+		// client-IP header is attacker-controlled and must be discarded, not
+		// trusted. Rewrite strips them before this runs (and, unlike Director,
+		// isn't undone by hop-by-hop removal, so a client can't delete our
+		// values via `Connection:`). SetXForwarded then sets X-Forwarded-For/
+		// Host/Proto fresh from the real connection.
+		//
+		// WARNING: this is correct ONLY while the edge is the first hop. If it
+		// is ever placed behind a trusted proxy/CDN, this stripping would throw
+		// away the real client IP — revisit before fronting the edge.
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetXForwarded()
+			// SetXForwarded covers only the standard X-Forwarded-* trio. Strip
+			// the non-standard client-IP conventions a backend might trust too;
+			// the list is curated (an allowlist is impossible), so add to it if
+			// a tunneled app trusts another vendor header.
+			for _, h := range []string{
+				"Forwarded",                // RFC 7239
+				"Forwarded-For",            // legacy
+				"X-Forwarded",              // legacy
+				"X-Original-Forwarded-For", // some LBs
+				"X-Real-Ip",                // nginx convention
+				"Client-Ip",                // PHP HTTP_CLIENT_IP — checked BEFORE XFF by the common idiom
+				"True-Client-Ip",           // Akamai / Cloudflare Enterprise
+				"Cf-Connecting-Ip",         // Cloudflare
+				"Fastly-Client-Ip",         // Fastly
+				"X-Client-Ip",              // Heroku / others
+				"X-Cluster-Client-Ip",      // some LBs
+				"Proxy-Client-Ip",          // WebLogic/JBoss family
+				"Wl-Proxy-Client-Ip",       // WebLogic
+				"X-Proxyuser-Ip",           // Google front ends
+			} {
+				pr.Out.Header.Del(h)
 			}
-
-			// X-Forwarded-* per PRD §M6.
-			if ip, _, err := net.SplitHostPort(req.RemoteAddr); err == nil && ip != "" {
-				if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
-					req.Header.Set("X-Forwarded-For", prior+", "+ip)
-				} else {
-					req.Header.Set("X-Forwarded-For", ip)
-				}
+			// The edge always terminates TLS, so the backend's scheme is https
+			// regardless of what SetXForwarded inferred.
+			pr.Out.Header.Set("X-Forwarded-Proto", "https")
+			pr.Out.URL.Scheme = "http"
+			pr.Out.URL.Host = host
+			if _, ok := pr.Out.Header["User-Agent"]; !ok {
+				pr.Out.Header.Set("User-Agent", "")
 			}
-			req.Header.Set("X-Forwarded-Proto", "https")
-			req.Header.Set("X-Forwarded-Host", req.Host)
 		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {

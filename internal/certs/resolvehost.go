@@ -2,11 +2,15 @@ package certs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/dynamismlabs/beamd/internal/beamdapi"
 )
 
 // NewResolveHostAuthorizer returns a certmagic On-Demand decision function that
@@ -36,10 +40,26 @@ func NewResolveHostAuthorizer(endpoint, secret string) func(ctx context.Context,
 			return fmt.Errorf("resolve-host unreachable, denying cert for %q: %w", name, err)
 		}
 		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, resp.Body)
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return nil // verified host → allow issuance
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return fmt.Errorf("host %q is not a verified custom domain (status %d)", name, resp.StatusCode)
 		}
-		return fmt.Errorf("host %q is not a verified custom domain (status %d)", name, resp.StatusCode)
+
+		// Verified. Honor cert_mode: a domain the operator wants to DELEGATE
+		// (the customer serves its own cert) must not get an edge-issued
+		// on-demand cert. Only an EXPLICIT "delegated" denies — a missing field
+		// or "on_demand" allows — so this stays drop-in against a control plane
+		// that predates the field (no lockstep deploy required).
+		var body beamdapi.ResolveHostResponse
+		decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+		_, _ = io.Copy(io.Discard, resp.Body) // drain so the keep-alive conn is reusable
+		if decodeErr != nil {
+			slog.Warn("certs: resolve-host response undecodable; allowing issuance", "host", name, "err", decodeErr.Error())
+			return nil
+		}
+		if body.CertMode != nil && *body.CertMode == beamdapi.ResolveHostResponseCertModeDelegated {
+			return fmt.Errorf("host %q is delegated (customer-managed cert); edge will not issue", name)
+		}
+		return nil // verified + on-demand (or unspecified) → allow issuance
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/caddyserver/certmagic"
@@ -100,10 +101,34 @@ type MagicManager struct {
 	baseDomain   string
 	fallbackCert *tls.Certificate
 
-	mu        sync.Mutex
-	inflight  map[string]bool // background DNS-01 issuance in progress, by name-set
-	issuances int
+	// The GetConfigForCert callbacks wired into each cache, kept so tests can
+	// assert renewal stays wired (a nil-returning callback disables it).
+	wildConfigGetter     configGetter
+	onDemandConfigGetter configGetter
+
+	// gate wraps the on-demand authorizer with a verdict cache + post-failure
+	// cooldown (nil when on-demand is disabled). See decisiongate.go.
+	gate *decisionGate
+
+	mu sync.Mutex
+	// issueAllowed gates DNS-01 wildcard issuance (kickWild) on hosts the edge
+	// actually serves, so an unauthenticated peer sending arbitrary
+	// <app>.<slug>.<base> SNIs can't drive real ACME orders. nil = allow all
+	// (backward-compatible; SelfSignedManager and direct tests never set it).
+	issueAllowed func(name string) bool
+	inflight     map[string]bool      // background DNS-01 issuance in progress, by name-set
+	lastFail     map[string]time.Time // last failed issuance per name-set (cooldown)
+	issuances    int
 }
+
+// configGetter is certmagic's CacheOptions.GetConfigForCert shape.
+type configGetter func(certmagic.Certificate) (*certmagic.Config, error)
+
+// kickWildCooldown is how long kickWild waits after a failed issuance before a
+// handshake may trigger another ACME order for the same name-set. Let's
+// Encrypt allows 5 failed validations per hostname per hour; 15 minutes keeps
+// a persistently-failing name at 4/hour.
+const kickWildCooldown = 15 * time.Minute
 
 func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 	if cfg.BaseDomain == "" {
@@ -131,15 +156,28 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 	}
 
 	// A fresh cache per config (cache is per-config in certmagic); shared storage
-	// is fine (certmagic namespaces by issuer/account).
-	newCache := func() *certmagic.Cache {
-		return certmagic.NewCache(certmagic.CacheOptions{
-			GetConfigForCert: func(certmagic.Certificate) (*certmagic.Config, error) { return nil, nil },
-		})
+	// is fine (certmagic namespaces by issuer/account). The cache's
+	// GetConfigForCert MUST return the config built on that same cache: the
+	// background maintenance loop looks certs up through it, and a nil config is
+	// an error there — returning nil would silently disable renewal, so every
+	// eagerly-managed cert (apex + wildcards) would expire at ~90 days. The
+	// config is created *after* its cache, hence the late-bound atomic pointer.
+	newCache := func() (*certmagic.Cache, *atomic.Pointer[certmagic.Config], configGetter) {
+		var cfgPtr atomic.Pointer[certmagic.Config]
+		getter := func(certmagic.Certificate) (*certmagic.Config, error) {
+			if cfg := cfgPtr.Load(); cfg != nil {
+				return cfg, nil
+			}
+			return nil, fmt.Errorf("certs: cache config not wired yet")
+		}
+		cache := certmagic.NewCache(certmagic.CacheOptions{GetConfigForCert: getter})
+		return cache, &cfgPtr, getter
 	}
 
 	// --- cmWild: DNS-01, NO On-Demand → ManageSync obtains eagerly. ---
-	cmWild := certmagic.New(newCache(), certmagic.Config{Storage: storage})
+	wildCache, wildCfgPtr, wildGetter := newCache()
+	cmWild := certmagic.New(wildCache, certmagic.Config{Storage: storage})
+	wildCfgPtr.Store(cmWild)
 	cmWild.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(cmWild, certmagic.ACMEIssuer{
 		CA:           acmeCA,
 		Email:        cfg.ACMEEmail,
@@ -155,8 +193,13 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 
 	// --- cmOnDemand: TLS-ALPN-01 + On-Demand → custom domains only. ---
 	var cmOnDemand *certmagic.Config
+	var odGetter configGetter
+	var gate *decisionGate
 	if cfg.OnDemandDecision != nil {
-		cmOnDemand = certmagic.New(newCache(), certmagic.Config{Storage: storage})
+		odCache, odCfgPtr, g := newCache()
+		odGetter = g
+		cmOnDemand = certmagic.New(odCache, certmagic.Config{Storage: storage})
+		odCfgPtr.Store(cmOnDemand)
 		cmOnDemand.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(cmOnDemand, certmagic.ACMEIssuer{
 			CA:                   acmeCA,
 			Email:                cfg.ACMEEmail,
@@ -167,10 +210,13 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 			// test points this at Pebble's TLS-ALPN validation port.
 			AltTLSALPNPort: cfg.ChallengeTLSPort,
 		})}
-		decide := cfg.OnDemandDecision
+		// Wrap the resolve-host authorizer in the gate (cache + cooldown). The
+		// gate is created before this closure and referenced by GetCertificate
+		// too, so both call sites share one piece of state.
+		gate = newDecisionGate(cfg.OnDemandDecision)
 		cmOnDemand.OnDemand = &certmagic.OnDemandConfig{
 			DecisionFunc: func(ctx context.Context, name string) error {
-				if err := decide(ctx, name); err != nil {
+				if err := gate.Decide(ctx, name); err != nil {
 					slog.Warn("certs: on-demand issuance refused", "host", name, "err", err.Error())
 					return err
 				}
@@ -188,11 +234,15 @@ func NewMagicManager(cfg MagicConfig) (*MagicManager, error) {
 	}
 
 	m := &MagicManager{
-		cmWild:       cmWild,
-		cmOnDemand:   cmOnDemand,
-		baseDomain:   cfg.BaseDomain,
-		fallbackCert: &fallback,
-		inflight:     make(map[string]bool),
+		cmWild:               cmWild,
+		cmOnDemand:           cmOnDemand,
+		baseDomain:           cfg.BaseDomain,
+		fallbackCert:         &fallback,
+		wildConfigGetter:     wildGetter,
+		onDemandConfigGetter: odGetter,
+		gate:                 gate,
+		inflight:             make(map[string]bool),
+		lastFail:             make(map[string]time.Time),
 	}
 
 	// Eagerly obtain the operator names (apex + base wildcard) via DNS-01 so the
@@ -233,9 +283,18 @@ func (m *MagicManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certific
 	// Not under the base → a customer custom domain → on-demand TLS-ALPN-01
 	// (gated by the resolve-host DecisionFunc). Needs the handshake context.
 	if m.cmOnDemand != nil && hello.Context() != nil {
-		if cert, err := m.cmOnDemand.GetCertificate(hello); err == nil {
+		cert, err := m.cmOnDemand.GetCertificate(hello)
+		if err == nil {
+			m.gate.recordSuccess(name)
 			return cert, nil
 		}
+		// The error is either a gate deny (unverified / cooling down) or a
+		// genuine ACME failure. recordFailure cools the name down ONLY if the
+		// gate had authorized it — a deny is a no-op there, which is what keeps
+		// lastFail bounded against an unauthenticated SNI spray (see
+		// decisiongate.go). Cooling a genuine failure is what stops the
+		// per-handshake ACME storm.
+		m.gate.recordFailure(name)
 	}
 	return m.fallbackCert, nil
 }
@@ -243,6 +302,17 @@ func (m *MagicManager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certific
 // kickWild issues the cert(s) covering an under-base host via DNS-01 in the
 // background (deduped per name-set), so the next handshake serves a real cert.
 func (m *MagicManager) kickWild(name string) {
+	// Refuse issuance for hosts the edge doesn't serve. Called before taking
+	// m.mu (the callback locks the edge's own mutex) — the ordering is only
+	// ever handshake → this, never the reverse, so no inversion.
+	m.mu.Lock()
+	allowed := m.issueAllowed
+	m.mu.Unlock()
+	if allowed != nil && !allowed(name) {
+		slog.Debug("certs: refusing DNS-01 issuance for host with no route", "host", name)
+		return
+	}
+
 	names := m.wildNamesFor(name)
 	if len(names) == 0 {
 		return
@@ -254,6 +324,14 @@ func (m *MagicManager) kickWild(name string) {
 		m.mu.Unlock()
 		return
 	}
+	// Cooldown after a failed order: without it, every handshake for a
+	// persistently-failing name starts a fresh ACME order, burning Let's
+	// Encrypt's failed-validation and new-order budgets for the whole account.
+	if last, ok := m.lastFail[key]; ok && time.Since(last) < kickWildCooldown {
+		m.mu.Unlock()
+		slog.Debug("certs: issuance in cooldown after failure", "names", names)
+		return
+	}
 	m.inflight[key] = true
 	m.mu.Unlock()
 
@@ -263,9 +341,19 @@ func (m *MagicManager) kickWild(name string) {
 		slog.Info("certs: issuing via DNS-01", "names", names)
 		err := m.cmWild.ManageSync(ctx, names)
 		m.mu.Lock()
-		m.inflight[key] = false
+		delete(m.inflight, key) // keep the map to just the in-flight set
 		if err == nil {
 			m.issuances += len(names)
+			delete(m.lastFail, key)
+		} else {
+			// Reclaim entries whose cooldown has elapsed (inert), so lastFail
+			// stays ≈ the currently-cooling set even under legitimate churn.
+			for k, t := range m.lastFail {
+				if time.Since(t) >= kickWildCooldown {
+					delete(m.lastFail, k)
+				}
+			}
+			m.lastFail[key] = time.Now()
 		}
 		m.mu.Unlock()
 		if err != nil {
@@ -290,7 +378,20 @@ func (m *MagicManager) wildNamesFor(name string) []string {
 
 // PreWarm obtains a slug's wildcard ahead of its first handshake (DNS-01).
 func (m *MagicManager) PreWarm(slug string) error {
-	return m.cmWild.ManageSync(context.Background(), certNamesFor(slug, m.baseDomain))
+	// Same ceiling as the eager and kickWild paths — a stalled DNS-01
+	// propagation must not wedge the calling CLI indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	return m.cmWild.ManageSync(ctx, certNamesFor(slug, m.baseDomain))
+}
+
+// SetHostAllowed installs the gate that decides whether kickWild may obtain a
+// real cert for a given SNI. The edge wires this to its route table so only
+// hosts it actually serves can trigger issuance. Set once before serving.
+func (m *MagicManager) SetHostAllowed(fn func(name string) bool) {
+	m.mu.Lock()
+	m.issueAllowed = fn
+	m.mu.Unlock()
 }
 
 func (m *MagicManager) IssuanceCount() int {

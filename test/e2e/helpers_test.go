@@ -23,6 +23,25 @@ import (
 
 const testBaseDomain = "test.example.com"
 
+// testMetricsToken enables the operator /metrics endpoint on test edges.
+const testMetricsToken = "test-metrics-token"
+
+// getMetrics scrapes /metrics on the base domain with the operator bearer
+// token. Fails the test on transport error.
+func getMetrics(t *testing.T, hc *http.Client) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "https://"+testBaseDomain+"/metrics", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testMetricsToken)
+	resp, err := hc.Do(req)
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	return resp
+}
+
 // ---------------------------------------------------------------------
 // Edge setup
 // ---------------------------------------------------------------------
@@ -32,12 +51,13 @@ func startEdge(t *testing.T, tokens map[string]string) (*edge.Edge, string) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
-		URLShape:         "subdomain",
+		URLShape:           "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
 		TokenStore:         "memory:",
 		MaxTunnelsPerToken: 25,
+		MetricsToken:       testMetricsToken,
 	}
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
@@ -61,12 +81,13 @@ func startEdgeWithCertMgr(t *testing.T, tokens map[string]string) (*edge.Edge, *
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
-		URLShape:         "subdomain",
+		URLShape:           "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
 		TokenStore:         "memory:",
 		MaxTunnelsPerToken: 25,
+		MetricsToken:       testMetricsToken,
 	}
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
@@ -90,12 +111,13 @@ func startEdgeCfg(t *testing.T, tokens map[string]string, mutate func(*config.Se
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
-		URLShape:         "subdomain",
+		URLShape:           "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
 		TokenStore:         "memory:",
 		MaxTunnelsPerToken: 25,
+		MetricsToken:       testMetricsToken,
 	}
 	if mutate != nil {
 		mutate(cfg)
@@ -223,6 +245,20 @@ func startDummyApp(t *testing.T, name string) int {
 	}
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// GET /__hdrs reflects the forwarding / client-IP headers the
+			// backend actually received, so tests can assert the edge scrubbed
+			// client-supplied values. One "Header: value" per line.
+			if r.URL.Path == "/__hdrs" {
+				for _, h := range []string{
+					"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host",
+					"X-Real-Ip", "Forwarded", "True-Client-Ip", "Cf-Connecting-Ip",
+					"Fastly-Client-Ip", "X-Client-Ip", "X-Cluster-Client-Ip",
+					"Client-Ip", "Proxy-Client-Ip", "X-Original-Forwarded-For",
+				} {
+					fmt.Fprintf(w, "%s: %s\n", h, r.Header.Get(h))
+				}
+				return
+			}
 			fmt.Fprintf(w, "%s: %s %s\n", name, r.Method, r.URL.Path)
 		}),
 	}

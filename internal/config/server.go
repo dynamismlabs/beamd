@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 
@@ -32,6 +33,13 @@ type Server struct {
 	DNSZone            string `yaml:"dns_zone"`
 	TokenStore         string `yaml:"token_store"`
 	MaxTunnelsPerToken int    `yaml:"max_tunnels_per_token"`
+
+	// MetricsToken gates the operator /metrics endpoint (which exposes every
+	// slug, tunnel name, and byte count). Empty = /metrics is DISABLED (404);
+	// set it (or BEAMD_METRICS_TOKEN) and scrapers must send
+	// `Authorization: Bearer <token>`. Never blank-and-public — the dump is
+	// cross-tenant sensitive.
+	MetricsToken string `yaml:"metrics_token"`
 
 	// DataDir is where beamd persists state (cert cache, ACME
 	// account, etc.). Created if missing.
@@ -129,6 +137,16 @@ func LoadServer(path string) (*Server, error) {
 	if err := yaml.Unmarshal(b, cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
+	// An inline DNS-provider credential (a zone-controlling API token) in a
+	// group/world-readable config is a local-disclosure risk. Warn loudly —
+	// checked against the YAML value before env overrides, so the env-var form
+	// (BEAMD_DNS_PROVIDER_CREDS, the recommended path) doesn't trip it.
+	if cfg.DNSProviderCreds != "" {
+		if fi, statErr := os.Stat(path); statErr == nil && fi.Mode().Perm()&0o077 != 0 {
+			slog.Warn("config: dns_provider_creds is set inline in a group/world-readable file — chmod it 0600 or use the BEAMD_DNS_PROVIDER_CREDS env var",
+				"path", path, "mode", fi.Mode().Perm().String())
+		}
+	}
 	applyServerEnvOverrides(cfg)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate %q: %w", path, err)
@@ -204,6 +222,7 @@ func applyServerEnvOverrides(s *Server) {
 		"BEAMD_DNS_ZONE":           &s.DNSZone,
 		"BEAMD_TOKEN_STORE":        &s.TokenStore,
 		"BEAMD_DATA_DIR":           &s.DataDir,
+		"BEAMD_METRICS_TOKEN":      &s.MetricsToken,
 	}
 	for k, dst := range envs {
 		if v := os.Getenv(k); v != "" {

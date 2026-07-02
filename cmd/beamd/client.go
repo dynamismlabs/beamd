@@ -336,7 +336,7 @@ func openDetached(tc *tunnelContext, port int, label string, jsonOut, insecure b
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	resp, err := lc.Open(ctx, port, label)
+	resp, err := lc.Open(ctx, port, label, tc.Scope)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open failed:", err)
 		os.Exit(1)
@@ -837,9 +837,37 @@ func ensureAgent(configPath, socket, scope string, insecure bool) *daemon.LocalC
 	defer cancel()
 	if err := daemon.EnsureRunning(ctx, exe, socket, env); err != nil {
 		fmt.Fprintln(os.Stderr, "agent not available:", err)
+		// The spawned agent logs its actual failure (bad token, unreachable
+		// edge, …) to agent.log and exits; without this the user only ever
+		// sees "did not start within 5s" and debugs the wrong layer.
+		if tail := agentLogTail(3); tail != "" {
+			fmt.Fprintln(os.Stderr, "recent agent log:")
+			fmt.Fprintln(os.Stderr, tail)
+		}
 		os.Exit(1)
 	}
 	return daemon.NewLocalClient(socket)
+}
+
+// agentLogTail returns the last n lines of the agent log, indented for
+// display, or "" if the log can't be read.
+func agentLogTail(n int) string {
+	path, err := defaultAgentLogPath()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // agentCmd runs the background worker. It is spawned internally by the

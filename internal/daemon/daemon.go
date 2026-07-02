@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dynamismlabs/beamd/internal/client"
@@ -24,9 +25,10 @@ type Daemon struct {
 	client *client.Client
 	socket string
 
-	mu  sync.Mutex
-	ln  net.Listener
-	srv *http.Server
+	mu   sync.Mutex
+	ln   net.Listener
+	srv  *http.Server
+	lock *os.File // flock on <socket>.lock; held for the daemon's lifetime
 
 	// urls caches the public URL returned for each registered name so
 	// GET /list can answer without re-querying the edge.
@@ -48,14 +50,32 @@ func (d *Daemon) Serve() error {
 	if err := os.MkdirAll(filepath.Dir(d.socket), 0o700); err != nil {
 		return fmt.Errorf("mkdir socket dir: %w", err)
 	}
-	_ = os.Remove(d.socket) // stale socket from previous run
+
+	// Exclusive flock before touching the socket. The probe→spawn window in
+	// EnsureRunning means two CLIs can both spawn agents; without the lock the
+	// loser's unconditional Remove unlinks the winner's LIVE socket, orphaning
+	// an agent that still holds edge registrations but that no `beamd
+	// list`/`close`/`reload` can ever reach. The kernel drops the lock if we
+	// die, so a crashed agent never wedges the next one.
+	lock, err := acquireLock(d.socket+".lock", 6*time.Second)
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.lock = lock
+	d.mu.Unlock()
+
+	// Safe now: the lock proves no live agent owns this socket path.
+	_ = os.Remove(d.socket)
 
 	ln, err := net.Listen("unix", d.socket)
 	if err != nil {
+		d.releaseLock()
 		return fmt.Errorf("listen unix %s: %w", d.socket, err)
 	}
 	if err := os.Chmod(d.socket, 0o600); err != nil {
 		_ = ln.Close()
+		d.releaseLock()
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 	slog.Info("agent listening", "socket", d.socket)
@@ -81,7 +101,9 @@ func (d *Daemon) Serve() error {
 }
 
 // Shutdown gracefully stops the daemon's HTTP server and removes the
-// socket file.
+// socket file. The socket removal happens while we still hold the lock, so a
+// replacement agent (already waiting on the flock) can never have its fresh
+// socket unlinked by our teardown.
 func (d *Daemon) Shutdown(ctx context.Context) error {
 	d.mu.Lock()
 	srv := d.srv
@@ -91,7 +113,41 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	}
 	err := srv.Shutdown(ctx)
 	_ = os.Remove(d.socket)
+	d.releaseLock()
 	return err
+}
+
+// acquireLock takes an exclusive flock on path, retrying until the deadline.
+// The retry window covers `beamd reload`: the replacement agent starts while
+// the old one is still draining (up to ~5s) and must wait its turn, not die.
+func acquireLock(path string, wait time.Duration) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock %s: %w", path, err)
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if time.Now().After(deadline) {
+			_ = f.Close()
+			return nil, fmt.Errorf("another agent already holds %s", path)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (d *Daemon) releaseLock() {
+	d.mu.Lock()
+	lock := d.lock
+	d.lock = nil
+	d.mu.Unlock()
+	if lock != nil {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+	}
 }
 
 func (d *Daemon) handleOpen(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +162,15 @@ func (d *Daemon) handleOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Port <= 0 || req.Port > 65535 {
 		writeError(w, http.StatusBadRequest, "port must be 1..65535")
+		return
+	}
+	// The agent's edge session is pinned to one scope from spawn. A caller
+	// that resolved a different scope (other repo's beamd.yaml, --scope, a
+	// re-login) must not be silently served from the wrong org.
+	if req.Scope != "" && req.Scope != d.client.Slug() {
+		writeError(w, http.StatusConflict, fmt.Sprintf(
+			"agent is connected to scope %q but this open resolved scope %q — run `beamd reload` to restart the agent with the new scope",
+			d.client.Slug(), req.Scope))
 		return
 	}
 

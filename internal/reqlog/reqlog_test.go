@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -324,4 +325,252 @@ func writeJSONLines(t *testing.T, path string, n int) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// A hard kill can leave the log ending mid-line; on reopen the sink must
+// truncate the fragment so it never merges with the next append.
+func TestSinkRepairsCrashTornTailOnOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	writeJSONLines(t, path, 2)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"request_id":"torn`) // no newline: simulated crash mid-flush
+	f.Close()
+
+	sink, err := NewFileSink(FileSinkConfig{Path: path, Fsync: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("NewFileSink: %v", err)
+	}
+	sink.Record(RequestEvent{RequestID: NewID(), Host: "h", Method: "GET", Status: 200, Outcome: OutcomeOK})
+	time.Sleep(50 * time.Millisecond)
+	sink.Close()
+
+	// countJSONLines fails the test on any non-JSON line, so this asserts the
+	// fragment is gone AND the post-repair append produced a clean line.
+	if n := countJSONLines(t, path); n != 3 {
+		t.Errorf("lines = %d, want 3 (2 originals + 1 new; torn fragment truncated)", n)
+	}
+	if sink.Dropped() != 1 {
+		t.Errorf("Dropped = %d, want 1 (the torn record must be counted)", sink.Dropped())
+	}
+}
+
+// One corrupt line (e.g. torn by a crash before repair existed) must be
+// skipped and counted — not shipped forever in a poison batch that wedges the
+// pipeline.
+func TestShipperSkipsCorruptLineAndAdvances(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	f, _ := os.Create(path)
+	b, _ := json.Marshal(RequestEvent{RequestID: NewID(), Host: "h", Method: "GET", Status: 200, Outcome: OutcomeOK})
+	f.Write(append(b, '\n'))
+	f.WriteString("{\"torn\":\"fragment{\"request_id\":\"merged\"}\n") // one corrupt merged line
+	b2, _ := json.Marshal(RequestEvent{RequestID: NewID(), Host: "h", Method: "GET", Status: 200, Outcome: OutcomeOK})
+	f.Write(append(b2, '\n'))
+	f.Close()
+
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("shipped batch is not valid JSON: %v", err)
+			w.WriteHeader(400)
+			return
+		}
+		mu.Lock()
+		for _, e := range body.Events {
+			got = append(got, string(e))
+		}
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	s := NewShipper(ShipperConfig{LogPath: path, CursorPath: filepath.Join(dir, "c"), WebhookURL: srv.URL, Secret: "x", BatchSize: 10})
+	cur := cursor{}
+	if !s.drainFile(path, &cur) {
+		t.Fatal("drainFile must fully drain despite the corrupt line")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 {
+		t.Errorf("shipped %d events, want 2 (corrupt line skipped)", len(got))
+	}
+	if cur.Offset == 0 {
+		t.Error("cursor must advance past the corrupt line")
+	}
+}
+
+// A transient read error (here: permissions) must NOT count as "drained" —
+// the caller would delete a rotated file whose events never shipped.
+func TestShipperTransientReadErrorDoesNotDrain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	writeJSONLines(t, path, 3)
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(path, 0o644)
+
+	s := NewShipper(ShipperConfig{LogPath: path, CursorPath: filepath.Join(dir, "c"), WebhookURL: "http://127.0.0.1:0", Secret: "x"})
+	cur := cursor{}
+	if s.drainFile(path, &cur) {
+		t.Error("unreadable file must not report drained (would trigger deletion of unshipped data)")
+	}
+
+	// A genuinely missing file IS drained (nothing left to ship).
+	cur2 := cursor{}
+	if !s.drainFile(filepath.Join(dir, "gone.log"), &cur2) {
+		t.Error("missing file should report drained")
+	}
+}
+
+// A pre-existing rotated .1 with a fresh cursor (webhook enabled later, or
+// cursor lost) must ship and be removed — otherwise rotation defers forever.
+func TestShipperFreshCursorShipsPreexistingDotOne(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	writeJSONLines(t, path+".1", 4)
+	writeJSONLines(t, path, 2)
+
+	var received atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		received.Add(int64(len(body.Events)))
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	s := NewShipper(ShipperConfig{LogPath: path, CursorPath: filepath.Join(dir, "c"), WebhookURL: srv.URL, Secret: "x"})
+	cur := s.drain(cursor{}) // fresh cursor
+
+	if got := received.Load(); got != 6 {
+		t.Errorf("shipped %d events, want 6 (4 from .1 + 2 live)", got)
+	}
+	if _, err := os.Stat(path + ".1"); !os.IsNotExist(err) {
+		t.Error(".1 must be removed after fully shipping")
+	}
+	if ino, _ := inodeOf(path); cur.Inode != ino {
+		t.Errorf("cursor should track the live file after drain")
+	}
+}
+
+// In-place truncation (same inode, e.g. `> requests.log`) leaves the cursor
+// past EOF; the shipper must restart from 0 instead of stalling forever.
+func TestShipperOffsetPastEOFRestartsFromZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	writeJSONLines(t, path, 2)
+
+	var received atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		received.Add(int64(len(body.Events)))
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	s := NewShipper(ShipperConfig{LogPath: path, CursorPath: filepath.Join(dir, "c"), WebhookURL: srv.URL, Secret: "x"})
+	cur := cursor{Offset: 1 << 30} // way past EOF, as if the file was truncated under us
+	if !s.drainFile(path, &cur) {
+		t.Fatal("drainFile should recover from a past-EOF cursor")
+	}
+	if got := received.Load(); got != 2 {
+		t.Errorf("shipped %d events, want 2 (restarted from offset 0)", got)
+	}
+}
+
+// When the cursor's generation is gone entirely (multi-rotation skew), the
+// current .1 must ship from offset 0 — applying the stale offset to the wrong
+// file would silently skip its head.
+func TestShipperGenerationSkewShipsDotOneFromStart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	writeJSONLines(t, path+".1", 5)
+	writeJSONLines(t, path, 1)
+
+	var received atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		received.Add(int64(len(body.Events)))
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	s := NewShipper(ShipperConfig{LogPath: path, CursorPath: filepath.Join(dir, "c"), WebhookURL: srv.URL, Secret: "x"})
+	// A cursor whose inode matches neither the live file nor .1, with a large
+	// offset — the generation it tracked has been removed.
+	stale := cursor{Inode: 999999999, Offset: 1 << 20}
+	s.drain(stale)
+
+	if got := received.Load(); got != 6 {
+		t.Errorf("shipped %d events, want 6 (all of .1 + live from 0)", got)
+	}
+}
+
+// FuzzReadBatch: the shipper reads a file that a crash can leave in any state
+// (torn lines, garbage, no newline). readBatch must never panic; every line it
+// returns is fed to json.Valid downstream, so exercise that too.
+func FuzzReadBatch(f *testing.F) {
+	f.Add([]byte("{\"a\":1}\n{\"b\":2}\n"))
+	f.Add([]byte("no trailing newline"))
+	f.Add([]byte("{torn\n{\"ok\":1}\n"))
+	f.Add([]byte(""))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := filepath.Join(t.TempDir(), "f.log")
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Skip()
+		}
+		lines, consumed, err := readBatch(p, 0, 0, 500)
+		if err != nil {
+			return
+		}
+		if consumed < 0 {
+			t.Fatalf("negative consumed: %d", consumed)
+		}
+		for _, l := range lines {
+			_ = json.Valid(l) // must not panic
+		}
+	})
+}
+
+// FuzzRepairTail: the sink runs repairTail on a file a crash left in any state;
+// it must never panic and must leave the file openable.
+func FuzzRepairTail(f *testing.F) {
+	f.Add([]byte("complete\n"))
+	f.Add([]byte("partial"))
+	f.Add([]byte(""))
+	f.Add([]byte("\n"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := filepath.Join(t.TempDir(), "f.log")
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Skip()
+		}
+		if _, err := repairTail(p); err != nil {
+			return
+		}
+		// After repair the file must still be readable and end at a line boundary.
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("file unreadable after repair: %v", err)
+		}
+		if len(b) > 0 && b[len(b)-1] != '\n' {
+			t.Fatalf("repairTail left a non-newline tail: %q", b)
+		}
+	})
 }

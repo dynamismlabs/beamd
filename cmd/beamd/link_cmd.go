@@ -56,13 +56,27 @@ func linkCmd(args []string) {
 		fileName = config.ProjectLocalFile
 	}
 	path := filepath.Join(cwd, fileName)
-	if _, err := os.Stat(path); err == nil && !*force {
-		fmt.Fprintf(os.Stderr, "%s already exists — use --force to overwrite\n", fileName)
-		os.Exit(2)
+	// Re-linking merges: fields the flags don't set survive from the existing
+	// file, so `link --force --scope neworg` can't silently drop a configured
+	// services: block or name:. (Comments are regenerated, not preserved.)
+	var existing config.Project
+	if _, err := os.Stat(path); err == nil {
+		if !*force {
+			fmt.Fprintf(os.Stderr, "%s already exists — use --force to overwrite\n", fileName)
+			os.Exit(2)
+		}
+		if p, err := config.LoadProjectFile(path); err == nil {
+			existing = *p
+		} else {
+			fmt.Fprintf(os.Stderr, "note: existing %s is unreadable (%v) — rewriting from scratch\n", fileName, err)
+		}
 	}
 
 	// Org / scope.
 	scope := strings.TrimSpace(*scopeFlag)
+	if scope == "" {
+		scope = existing.Scope
+	}
 	if scope == "" {
 		scope = chooseScope(rc.Account, *yes)
 	}
@@ -73,9 +87,14 @@ func linkCmd(args []string) {
 		}
 	}
 
-	// Naming: --name (literal) or --from (derive); otherwise optionally prompt.
+	// Naming: --name (literal) or --from (derive); else whatever the existing
+	// file pinned; otherwise optionally prompt. An explicit flag replaces the
+	// existing name/from PAIR (they're alternatives, not independent).
 	name := strings.TrimSpace(*nameFlag)
 	from := strings.TrimSpace(*fromFlag)
+	if name == "" && from == "" {
+		name, from = existing.Name, existing.From
+	}
 	if name == "" && from == "" && !*yes && isInteractive() {
 		r := bufio.NewReader(os.Stdin)
 		base := filepath.Base(cwd)
@@ -96,7 +115,7 @@ func linkCmd(args []string) {
 
 	// Named services (api=3000,web=8080) so `beamd open api` Just Works.
 	servicesSpec := strings.TrimSpace(*servicesFlag)
-	if servicesSpec == "" && !*yes && isInteractive() {
+	if servicesSpec == "" && len(existing.Services) == 0 && !*yes && isInteractive() {
 		r := bufio.NewReader(os.Stdin)
 		servicesSpec = prompt(r, "named services (optional, e.g. api=3000,web=8080)", "")
 	}
@@ -105,13 +124,18 @@ func linkCmd(args []string) {
 		fmt.Fprintln(os.Stderr, "link:", err)
 		os.Exit(2)
 	}
+	if services == nil {
+		services = existing.Services
+	}
 
 	// Pin the edge by bare host (drop the cosmetic :443; normalizeServerAddr
 	// re-adds it on read), so the committed file reads cleanly.
 	server := strings.TrimSuffix(rc.Account.Server, ":443")
 
 	content := renderProjectFile(server, scope, name, from, services, *local)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	// Atomic (tmp+rename) like tokens.json: a crash mid-write must not leave a
+	// truncated YAML that hard-fails every beamd command in this repo.
+	if err := atomicWrite(path, []byte(content), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "write:", err)
 		os.Exit(1)
 	}

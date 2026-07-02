@@ -6,6 +6,11 @@ package daemon
 type OpenRequest struct {
 	Port int    `json:"port"`
 	Name string `json:"name,omitempty"`
+	// Scope is the org the CLI resolved for this open (flag/project/account).
+	// The agent's session is pinned to ONE scope at spawn; if this doesn't
+	// match, the agent must refuse rather than silently register the tunnel in
+	// whatever org it happens to be connected to. Empty = no pin, accept.
+	Scope string `json:"scope,omitempty"`
 }
 
 // OpenResponse is the success response from POST /open. It carries the

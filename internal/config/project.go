@@ -44,10 +44,14 @@ const (
 )
 
 // DiscoverProject walks up from startDir to the first directory containing a
-// beamd.yaml (or beamd.local.yaml), stopping at $HOME or the filesystem root.
-// It returns the merged config (beamd.local.yaml overlaying beamd.yaml) and
-// the directory it was found in. A nil Project with no error means none was
-// found — callers fall back to the global config.
+// beamd.yaml, stopping at $HOME or the filesystem root. The NEAREST
+// beamd.local.yaml between startDir and the base file overlays it — a directory
+// holding only the local overlay does not stop the walk, so a monorepo can
+// keep beamd.yaml at the root and per-app beamd.local.yaml files in
+// subdirectories without the overlay silently discarding the root's
+// server/scope pin. It returns the merged config and the directory the base
+// file (or, failing that, the overlay) was found in. A nil Project with no
+// error means none was found — callers fall back to the global config.
 func DiscoverProject(startDir string) (*Project, string, error) {
 	dir, err := filepath.Abs(startDir)
 	if err != nil {
@@ -58,22 +62,23 @@ func DiscoverProject(startDir string) (*Project, string, error) {
 		home = filepath.Clean(home)
 	}
 
+	localPath, localDir := "", "" // nearest overlay seen on the way up
+
 	for {
 		// Match only a regular *file* — guard against a stray directory that
 		// happens to share the name (e.g. someone's `beamd.yaml/` dir).
 		base := filepath.Join(dir, ProjectFile)
 		local := filepath.Join(dir, ProjectLocalFile)
-		baseOK := isRegularFile(base)
-		localOK := isRegularFile(local)
-		if baseOK || localOK {
+		if localPath == "" && isRegularFile(local) {
+			localPath, localDir = local, dir
+		}
+		if isRegularFile(base) {
 			p := &Project{}
-			if baseOK {
-				if err := loadProjectFile(base, p); err != nil {
-					return nil, "", err
-				}
+			if err := loadProjectFile(base, p); err != nil {
+				return nil, "", err
 			}
-			if localOK {
-				if err := loadProjectFile(local, p); err != nil { // overlay
+			if localPath != "" {
+				if err := loadProjectFile(localPath, p); err != nil { // overlay
 					return nil, "", err
 				}
 			}
@@ -82,10 +87,29 @@ func DiscoverProject(startDir string) (*Project, string, error) {
 
 		parent := filepath.Dir(dir)
 		if parent == dir || dir == home {
+			// No base file anywhere. An overlay alone still counts as the
+			// project (it may pin everything itself).
+			if localPath != "" {
+				p := &Project{}
+				if err := loadProjectFile(localPath, p); err != nil {
+					return nil, "", err
+				}
+				return p, localDir, nil
+			}
 			return nil, "", nil // reached root or $HOME without a match
 		}
 		dir = parent
 	}
+}
+
+// LoadProjectFile parses a single project file (no discovery, no overlay).
+// Used by `beamd link` to merge an existing file instead of clobbering it.
+func LoadProjectFile(path string) (*Project, error) {
+	p := &Project{}
+	if err := loadProjectFile(path, p); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 func isRegularFile(path string) bool {

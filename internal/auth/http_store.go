@@ -15,6 +15,13 @@ const (
 	defaultHTTPStoreTTL     = 60 * time.Second
 	defaultHTTPStoreNegTTL  = 5 * time.Second
 	defaultHTTPStoreTimeout = 5 * time.Second
+
+	// httpStoreCacheMax caps the verify cache. Entries are keyed by the
+	// (attacker-supplied, pre-auth) token, so without a cap a peer spraying
+	// random tokens grows the map until the edge OOMs. Legitimate deployments
+	// hold a handful of live tokens; 4096 is three orders of magnitude of
+	// headroom.
+	httpStoreCacheMax = 4096
 )
 
 // HTTPStore validates bearer tokens by POSTing to a remote verify
@@ -135,9 +142,31 @@ func (s *HTTPStore) lookup(token string) httpStoreResult {
 		ttl = s.negTTL
 	}
 	s.mu.Lock()
+	if len(s.cache) >= httpStoreCacheMax {
+		s.evictLocked()
+	}
 	s.cache[token] = httpStoreCacheEntry{result: res, expires: time.Now().Add(ttl)}
 	s.mu.Unlock()
 	return res
+}
+
+// evictLocked frees room in a full cache: first drop expired entries (the
+// common case — negative entries from token-spraying expire in seconds), then,
+// if everything is somehow live, drop arbitrary entries down to half capacity.
+// A dropped live entry only costs one re-verify round trip. Caller holds s.mu.
+func (s *HTTPStore) evictLocked() {
+	now := time.Now()
+	for tok, e := range s.cache {
+		if now.After(e.expires) {
+			delete(s.cache, tok)
+		}
+	}
+	for tok := range s.cache {
+		if len(s.cache) <= httpStoreCacheMax/2 {
+			break
+		}
+		delete(s.cache, tok)
+	}
 }
 
 // verifyTokenResponse is the web app's /api/internal/verify-token body. Its

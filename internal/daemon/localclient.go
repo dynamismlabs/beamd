@@ -53,9 +53,10 @@ func (c *LocalClient) Ping(ctx context.Context) (*HealthzResponse, error) {
 }
 
 // Open brings a local port up as a public tunnel via the agent and
-// returns the resolved tunnel identity.
-func (c *LocalClient) Open(ctx context.Context, port int, name string) (*OpenResponse, error) {
-	body, _ := json.Marshal(OpenRequest{Port: port, Name: name})
+// returns the resolved tunnel identity. A non-empty scope pins the request:
+// the agent refuses (409) if its session is connected to a different org.
+func (c *LocalClient) Open(ctx context.Context, port int, name, scope string) (*OpenResponse, error) {
+	body, _ := json.Marshal(OpenRequest{Port: port, Name: name, Scope: scope})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/open", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)

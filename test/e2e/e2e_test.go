@@ -143,6 +143,31 @@ func TestTunnel_SingleRegisteredAppServesPublicURL(t *testing.T) {
 	if resp3.StatusCode != http.StatusOK {
 		t.Errorf("healthz status = %d, want 200", resp3.StatusCode)
 	}
+
+	// /metrics does NOT bypass the route table: on a tunnel host it belongs to
+	// the tunneled app (here the dummy app serves it), never the edge — the
+	// edge dump names every slug/tunnel and must not leak on public hosts.
+	respM, err := hc.Get("https://" + host + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics (tunnel host): %v", err)
+	}
+	defer respM.Body.Close()
+	bodyM, _ := io.ReadAll(respM.Body)
+	if want := "dummy: GET /metrics\n"; string(bodyM) != want {
+		t.Errorf("tunnel-host /metrics = %q, want the app's response %q", string(bodyM), want)
+	}
+
+	// On the bare base domain, /metrics is the edge's operator endpoint
+	// (bearer-authenticated).
+	respB := getMetrics(t, publicHTTPSClient(edgeAddr, testBaseDomain))
+	defer respB.Body.Close()
+	bodyB, _ := io.ReadAll(respB.Body)
+	if respB.StatusCode != http.StatusOK {
+		t.Errorf("base /metrics status = %d, want 200", respB.StatusCode)
+	}
+	if !strings.Contains(string(bodyB), "beam_active_sessions") {
+		t.Errorf("base /metrics missing edge metrics, got: %.120s", string(bodyB))
+	}
 }
 
 // A Host header carrying a port — which happens when the edge serves on a
@@ -387,7 +412,7 @@ func TestRegister_PerSlugTunnelCapReturnsOverLimit(t *testing.T) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
-		URLShape:         "subdomain",
+		URLShape:           "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
@@ -658,7 +683,7 @@ func TestDaemon_OpenListCloseRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	resp, err := lc.Open(ctx, port, "api")
+	resp, err := lc.Open(ctx, port, "api", "")
 	if err != nil {
 		t.Fatalf("Expose: %v", err)
 	}
@@ -722,7 +747,7 @@ func TestDaemon_OpenEmptyNameDerivesPortLabel(t *testing.T) {
 
 	// No name → the edge derives it from the port (naming.LabelFromPort),
 	// and the agent mirrors that derivation in the response.
-	resp, err := lc.Open(ctx, port, "")
+	resp, err := lc.Open(ctx, port, "", "")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1093,7 +1118,7 @@ func TestProxy_OversizedRequestBodyRejected(t *testing.T) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:          testBaseDomain,
-		URLShape:          "subdomain",
+		URLShape:            "subdomain",
 		ListenHTTPS:         edgeAddr,
 		ACMEEmail:           "test@example.com",
 		DNSProvider:         "stub",
@@ -1160,10 +1185,8 @@ func TestMetrics_ExposesExpectedCounters(t *testing.T) {
 	host := "api.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/m", "api: GET /m\n")
 
-	resp, err := publicHTTPSClient(edgeAddr, host).Get("https://" + host + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// /metrics is operator-only: on the base domain and bearer-authenticated.
+	resp := getMetrics(t, publicHTTPSClient(edgeAddr, testBaseDomain))
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	got := string(body)
@@ -1196,27 +1219,22 @@ func TestMetrics_BandwidthCounterReflectsTraffic(t *testing.T) {
 	// "api: GET /x\n" → 13 bytes of egress; the request itself is ingress.
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/x", "api: GET /x\n")
 
-	hc := publicHTTPSClient(edgeAddr, host)
+	// /metrics is operator-only: scraped on the base domain with the bearer.
+	hc := publicHTTPSClient(edgeAddr, testBaseDomain)
 	outKey := `beam_bytes_out_total{slug="turing",name="api"}`
 	inKey := `beam_bytes_in_total{slug="turing",name="api"}`
 
 	// Bytes are recorded when the proxied connection closes, which can lag
 	// the client's read slightly — poll until the egress counter lands.
 	waitUntil(t, "egress bytes recorded per tunnel", 2*time.Second, func() bool {
-		resp, err := hc.Get("https://" + host + "/metrics")
-		if err != nil {
-			return false
-		}
+		resp := getMetrics(t, hc)
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
 		return metricValue(string(b), outKey) >= 13
 	})
 
 	// Confirm ingress (request bytes) is tracked too.
-	resp, err := hc.Get("https://" + host + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := getMetrics(t, hc)
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	if got := metricValue(string(b), inKey); got <= 0 {
@@ -1252,7 +1270,7 @@ func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {
 	edgeAddr := freeListenAddr(t)
 	cfg := &config.Server{
 		BaseDomain:         testBaseDomain,
-		URLShape:         "subdomain",
+		URLShape:           "subdomain",
 		ListenHTTPS:        edgeAddr,
 		ACMEEmail:          "test@example.com",
 		DNSProvider:        "stub",
@@ -1320,7 +1338,7 @@ func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 		edgeAddr := freeListenAddr(t)
 		cfg := &config.Server{
 			BaseDomain:         testBaseDomain,
-			URLShape:         "subdomain",
+			URLShape:           "subdomain",
 			ListenHTTPS:        edgeAddr,
 			ACMEEmail:          "test@example.com",
 			DNSProvider:        "stub",
@@ -1363,4 +1381,241 @@ func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A replay that hits a transient `name_taken` (a rival LIVE session holds the
+// name when we reconnect — e.g. the edge hasn't reaped our zombie yet) must
+// keep retrying on the live session, not give up permanently while `list`
+// reports healthy. Regression for the replay-abandons-on-first-error bug.
+func TestClient_ReplayRetriesUntilNameFrees(t *testing.T) {
+	portA := startDummyApp(t, "appA")
+	portB := startDummyApp(t, "appB")
+	e, edgeAddr := startEdge(t, map[string]string{"T1": "turing", "T2": "turing"})
+
+	a := connectClientWithOpts(t, edgeAddr, "T1", client.Options{
+		HeartbeatInterval: 100 * time.Millisecond,
+		RegisterTimeout:   time.Second,
+		// Slow first reconnect so the rival reliably grabs the name first;
+		// fast retries after that so the reclaim lands quickly.
+		ReconnectInitial: 500 * time.Millisecond,
+		ReconnectMax:     500 * time.Millisecond,
+	})
+	if _, err := a.Register("api", portA); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Drop A's session, then let a rival LIVE session take the name before
+	// A's replay fires. The edge only displaces DEAD sessions, so A's replay
+	// gets name_taken — a transient failure it must retry through.
+	e.CloseAllSessions()
+	b := connectClientWithOpts(t, edgeAddr, "T2", client.Options{
+		HeartbeatInterval: 100 * time.Millisecond,
+		RegisterTimeout:   time.Second,
+	})
+	if _, err := b.Register("api", portB); err != nil {
+		t.Fatalf("rival register: %v", err)
+	}
+
+	host := "api.turing." + testBaseDomain
+	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/who", "appB: GET /who\n")
+
+	// Free the name. A's replay retry loop must reclaim it with NO new user
+	// action and route traffic back to A's port.
+	_ = b.Close()
+	hc := publicHTTPSClient(edgeAddr, host)
+	waitUntil(t, "replay retry to reclaim the freed name", 5*time.Second, func() bool {
+		resp, err := hc.Get("https://" + host + "/who")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body) == "appA: GET /who\n"
+	})
+}
+
+// The agent's session is pinned to one scope at spawn; an open resolved for a
+// different scope must be refused loudly, not silently registered in whatever
+// org the agent happens to be connected to.
+func TestDaemon_OpenRefusesScopeMismatch(t *testing.T) {
+	port := startDummyApp(t, "api")
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
+	c := connectClient(t, edgeAddr, "T1")
+	lc := startDaemon(t, c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Mismatched scope → refused, nothing registered.
+	if _, err := lc.Open(ctx, port, "api", "otherorg"); err == nil {
+		t.Fatal("open with mismatched scope should fail")
+	} else if !strings.Contains(err.Error(), "beamd reload") {
+		t.Errorf("mismatch error should point at `beamd reload`, got: %v", err)
+	}
+
+	// Matching scope (and empty scope) still work.
+	if _, err := lc.Open(ctx, port, "api", "turing"); err != nil {
+		t.Fatalf("open with matching scope: %v", err)
+	}
+	if _, err := lc.Open(ctx, port, "api2", ""); err != nil {
+		t.Fatalf("open with no scope pin: %v", err)
+	}
+}
+
+// The edge is the sole trusted hop, so it must NOT let a public client forge
+// the client IP toward the tunneled backend. A client sending its own
+// X-Forwarded-For / X-Real-IP / Forwarded (and vendor CDN variants) must have
+// them scrubbed; the backend should see only the edge's observed peer IP in
+// X-Forwarded-For.
+func TestProxy_ForgedForwardingHeadersScrubbed(t *testing.T) {
+	port := startDummyApp(t, "api")
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
+	c := connectClient(t, edgeAddr, "T1")
+	if _, err := c.Register("api", port); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	host := "api.turing." + testBaseDomain
+	req, err := http.NewRequest(http.MethodGet, "https://"+host+"/__hdrs", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Forwarded-For", "9.9.9.9")
+	req.Header.Set("X-Real-IP", "9.9.9.9")
+	req.Header.Set("Forwarded", "for=9.9.9.9")
+	req.Header.Set("True-Client-IP", "9.9.9.9")
+	req.Header.Set("CF-Connecting-IP", "9.9.9.9")
+	req.Header.Set("Fastly-Client-IP", "9.9.9.9")
+	req.Header.Set("X-Client-IP", "9.9.9.9")
+	req.Header.Set("X-Cluster-Client-IP", "9.9.9.9")
+	req.Header.Set("Client-IP", "9.9.9.9") // PHP HTTP_CLIENT_IP — checked BEFORE XFF
+	req.Header.Set("Proxy-Client-IP", "9.9.9.9")
+	req.Header.Set("X-Original-Forwarded-For", "9.9.9.9")
+	// A malicious client can name headers in Connection to try to delete the
+	// edge-set values; the Rewrite path must resist that.
+	req.Header.Set("Connection", "X-Forwarded-Proto")
+
+	resp, err := publicHTTPSClient(edgeAddr, host).Do(req)
+	if err != nil {
+		t.Fatalf("GET /__hdrs: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	got := parseHeaderEcho(string(body))
+
+	// The attacker's forged IP must not appear anywhere the backend reads it.
+	if strings.Contains(got["X-Forwarded-For"], "9.9.9.9") {
+		t.Errorf("X-Forwarded-For leaked the forged IP: %q", got["X-Forwarded-For"])
+	}
+	if got["X-Forwarded-For"] == "" {
+		t.Error("X-Forwarded-For should carry the edge's observed peer IP, got empty")
+	}
+	for _, h := range []string{
+		"X-Real-Ip", "Forwarded", "True-Client-Ip", "Cf-Connecting-Ip",
+		"Fastly-Client-Ip", "X-Client-Ip", "X-Cluster-Client-Ip",
+		"Client-Ip", "Proxy-Client-Ip", "X-Original-Forwarded-For",
+	} {
+		if got[h] != "" {
+			t.Errorf("%s should be stripped, backend saw %q", h, got[h])
+		}
+	}
+	// The edge-set X-Forwarded-Proto must survive the Connection-header strip.
+	if got["X-Forwarded-Proto"] != "https" {
+		t.Errorf("X-Forwarded-Proto = %q, want https (Connection strip must not delete it)", got["X-Forwarded-Proto"])
+	}
+}
+
+// parseHeaderEcho parses the /__hdrs body ("Header: value" per line) into a map.
+func parseHeaderEcho(body string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(strings.TrimRight(body, "\n"), "\n") {
+		k, v, ok := strings.Cut(line, ": ")
+		if !ok {
+			k, v, _ = strings.Cut(line, ":")
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out
+}
+
+// /metrics leaks every tenant's slug + traffic volumes, so it must require the
+// operator bearer token — and must not be reachable by spoofing the Host
+// header from a tunnel connection.
+func TestMetrics_RequiresAuth(t *testing.T) {
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
+	hcBase := publicHTTPSClient(edgeAddr, testBaseDomain)
+
+	// No Authorization header → 401.
+	respNoAuth, err := hcBase.Get("https://" + testBaseDomain + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	respNoAuth.Body.Close()
+	if respNoAuth.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no-auth /metrics = %d, want 401", respNoAuth.StatusCode)
+	}
+
+	// Wrong token → 401.
+	reqBad, _ := http.NewRequest(http.MethodGet, "https://"+testBaseDomain+"/metrics", nil)
+	reqBad.Header.Set("Authorization", "Bearer wrong")
+	respBad, err := hcBase.Do(reqBad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respBad.Body.Close()
+	if respBad.StatusCode != http.StatusUnauthorized {
+		t.Errorf("wrong-token /metrics = %d, want 401", respBad.StatusCode)
+	}
+
+	// Correct token → 200.
+	respOK := getMetrics(t, hcBase)
+	respOK.Body.Close()
+	if respOK.StatusCode != http.StatusOK {
+		t.Errorf("authed /metrics = %d, want 200", respOK.StatusCode)
+	}
+
+	// Host-spoof: connect with a tunnel-host SNI but send Host: <base> and the
+	// correct token. Auth still gates it, but confirm the Host decoupling
+	// doesn't bypass auth — an unauth'd spoof must 401.
+	spoof := publicHTTPSClient(edgeAddr, "anything.turing."+testBaseDomain)
+	reqSpoof, _ := http.NewRequest(http.MethodGet, "https://"+testBaseDomain+"/metrics", nil)
+	respSpoof, err := spoof.Do(reqSpoof) // no token
+	if err != nil {
+		t.Fatal(err)
+	}
+	respSpoof.Body.Close()
+	if respSpoof.StatusCode == http.StatusOK {
+		t.Errorf("Host-spoofed unauth'd /metrics returned 200 — auth bypassed")
+	}
+}
+
+// With no metrics_token configured, /metrics must be DISABLED (404) — never
+// silently served unauthenticated. Covers the fail-closed default of SEC-2.
+func TestMetrics_DisabledWithoutToken(t *testing.T) {
+	_, edgeAddr := startEdgeCfg(t, map[string]string{"T1": "turing"}, func(c *config.Server) {
+		c.MetricsToken = "" // disabled
+	})
+	resp, err := publicHTTPSClient(edgeAddr, testBaseDomain).Get("https://" + testBaseDomain + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("disabled /metrics = %d, want 404", resp.StatusCode)
+	}
+}
+
+// SEC-7: the edge must refuse a TLS handshake below 1.2 (proves MinVersion is
+// enforced, not just that 1.2+ still works).
+func TestEdge_RefusesTLSBelow12(t *testing.T) {
+	_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
+	conn, err := tls.Dial("tcp", edgeAddr, &tls.Config{
+		InsecureSkipVerify: true, // self-signed test edge — we're testing the version floor, not the cert
+		MinVersion:         tls.VersionTLS10,
+		MaxVersion:         tls.VersionTLS11, // offer only <1.2
+	})
+	if err == nil {
+		conn.Close()
+		t.Error("edge accepted a TLS 1.1 handshake — MinVersion 1.2 not enforced")
+	}
 }

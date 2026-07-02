@@ -145,3 +145,83 @@ func TestDiscoverProject_IgnoresDirectory(t *testing.T) {
 		t.Errorf("a %s directory should not be treated as a project file, got %+v", ProjectFile, p)
 	}
 }
+
+// A subdirectory holding only beamd.local.yaml must OVERLAY the ancestor
+// beamd.yaml, not shadow it — otherwise a per-app overlay in a monorepo
+// silently discards the root's server/scope pin and tunnels through the
+// wrong edge/org.
+func TestDiscoverProject_LocalOnlyDirOverlaysAncestorBase(t *testing.T) {
+	withHome(t)
+	root := t.TempDir()
+	sub := filepath.Join(root, "apps", "web")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ProjectFile), []byte("server: edge.team.com\nscope: acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ProjectLocalFile), []byte("services:\n  web: 5173\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p, dir, err := DiscoverProject(sub)
+	if err != nil {
+		t.Fatalf("DiscoverProject: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected a project, got nil")
+	}
+	if p.Server != "edge.team.com" || p.Scope != "acme" {
+		t.Errorf("root pin lost: server=%q scope=%q, want edge.team.com/acme", p.Server, p.Scope)
+	}
+	if p.Services["web"] != 5173 {
+		t.Errorf("Services[web] = %d, want 5173 from the subdir overlay", p.Services["web"])
+	}
+	if dir != root {
+		t.Errorf("found dir = %q, want the base file's dir %q", dir, root)
+	}
+
+	// An overlay with NO base anywhere still counts as the project.
+	lone := t.TempDir()
+	loneSub := filepath.Join(lone, "x")
+	if err := os.MkdirAll(loneSub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lone, ProjectLocalFile), []byte("server: solo.example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p2, dir2, err := DiscoverProject(loneSub)
+	if err != nil {
+		t.Fatalf("DiscoverProject(lone overlay): %v", err)
+	}
+	if p2 == nil || p2.Server != "solo.example.com" {
+		t.Fatalf("lone overlay should still resolve, got %+v", p2)
+	}
+	if dir2 != lone {
+		t.Errorf("lone overlay dir = %q, want %q", dir2, lone)
+	}
+}
+
+// LoadProjectFile is what `beamd link` merges an existing file through; it
+// must round-trip everything renderProjectFile can emit.
+func TestLoadProjectFile_SingleFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ProjectFile)
+	body := "server: edge.acme.com\nscope: acme\nname: proj\nservices:\n  api: 3000\n  web: 8080\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadProjectFile(path)
+	if err != nil {
+		t.Fatalf("LoadProjectFile: %v", err)
+	}
+	if p.Server != "edge.acme.com" || p.Scope != "acme" || p.Name != "proj" {
+		t.Errorf("fields lost: %+v", p)
+	}
+	if p.Services["api"] != 3000 || p.Services["web"] != 8080 {
+		t.Errorf("services lost: %+v", p.Services)
+	}
+	if _, err := LoadProjectFile(filepath.Join(dir, "missing.yaml")); err == nil {
+		t.Error("missing file should error")
+	}
+}
