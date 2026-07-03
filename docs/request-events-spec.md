@@ -88,7 +88,7 @@ type (`internal/beamdapi`), and the hand-written sink struct (`internal/reqlog`)
 | `slug`         | string  | no  | From `route.session.slug` when there's a route; **empty on `no_route`** (no session). **Billing attribution is slug-first** (alias-aware `claimed_slug → org`; present on every routed request, no host parse). `host` is the URL **identity** + the org key only for the rare `no_route` enrichment (§5.2). |
 | `host`         | string  | yes | Port-stripped `Host` (`edge.go:643`). The URL **identity** (links to the `tunnel` registry, per-URL grouping); org key **only** for `no_route` enrichment (§5.2) — routed traffic attributes slug-first. |
 | `method`       | string  | yes | `r.Method`. |
-| `path`         | string  | no  | `r.URL.Path` — **query string stripped** (secrets leak). Analytics tier (`capture.path`, §4.6). Optional edge redaction of token-shaped segments (JWT / long hex/base64url / UUID / email → `«redacted»`) — paths carry secrets too. |
+| `path`         | string  | no  | `r.URL.EscapedPath()` — the **percent-encoded** path, NOT the decoded `r.URL.Path`: keeps `%00` / control bytes encoded so a raw control byte never reaches Postgres `text` (`ops/incident-reqlog-nul-wedge.md`). **Query string stripped** (`EscapedPath` omits it; secrets leak). Analytics tier (`capture.path`, §4.6). Optional edge redaction of token-shaped segments (JWT / long hex/base64url / UUID / email → `«redacted»`) — paths carry secrets too. |
 | `status`       | int     | yes | `rr.status`. 0 → see `outcome`. |
 | `outcome`      | enum    | yes | `ok \| in_progress \| no_route \| backend_error \| timeout \| size_limit \| client_closed`. `in_progress` = a long-conn heartbeat (§4.4). Edge-only knowledge the status can't express. |
 | `bytes_in`     | int64   | yes | Request bytes (counted on `r.Body`, see §4.4). |
@@ -187,7 +187,7 @@ This mirrors the existing `trafficStore` sink pattern (`internal/edge/traffic.go
 
 ### 4.4 Edge instrumentation (`internal/edge/edge.go` `handler`, ~613)
 
-Today `handler` already has `method, path(r.URL.Path), host(port-stripped),
+Today `handler` already has `method, path(r.URL.EscapedPath()), host(port-stripped),
 status, bytes_out(rr.bytes), start, slug` and just `slog`s them (`edge.go:665`).
 Capture instead. Additions:
 

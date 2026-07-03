@@ -787,6 +787,24 @@ func (e *Edge) handlePublic(c net.Conn) {
 	}
 }
 
+// requestTarget is the path we record in a request event. It is the
+// percent-ENCODED path (r.URL.EscapedPath), NOT the decoded r.URL.Path:
+//
+//   - Decoding is what caused the reqlog wedge: net/http turns a scanner's
+//     "%00" into a raw 0x00 in r.URL.Path, which Postgres text can't store —
+//     failing the control plane's bulk insert and, via the shipper's
+//     cursor-advances-only-on-2xx retry, blocking ingest forever
+//     (ops/incident-reqlog-nul-wedge.md, fix #2). EscapedPath keeps "%00"
+//     (and every other control byte / non-ASCII byte) percent-encoded, so a
+//     raw control byte never reaches the wire.
+//   - It records what the client actually sent ("/x%00y"), better forensics
+//     than a silently-mangled path.
+//   - The query string is intentionally dropped (EscapedPath omits it): query
+//     strings carry secrets and must not be logged (request-events-spec §5).
+func requestTarget(r *http.Request) string {
+	return r.URL.EscapedPath()
+}
+
 func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/healthz":
@@ -842,7 +860,7 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	if route != nil {
 		slug = route.session.slug
 	}
-	meta := e.metaFor(host, slug, r.Method, r.URL.Path, r.RemoteAddr, r.UserAgent(), r.Referer(), start)
+	meta := e.metaFor(host, slug, r.Method, requestTarget(r), r.RemoteAddr, r.UserAgent(), r.Referer(), start)
 
 	if route == nil {
 		http.Error(rr, "no route for host "+host, http.StatusNotFound)
