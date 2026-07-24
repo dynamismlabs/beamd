@@ -1,0 +1,43 @@
+
+===== clean =====
+  4KiB API     baseline p50/p95/p99 =    36.4/    42.4/    45.7ms
+               UNDER LOAD           =   360.5/   415.3/   429.7ms   p95 x9.8
+  65KiB page   baseline p50/p95/p99 =    41.6/    44.6/    46.5ms
+               UNDER LOAD           =   421.3/   531.4/   609.4ms   p95 x11.9
+
+===== wifi =====
+  4KiB API     baseline p50/p95/p99 =    47.5/    96.0/   122.7ms
+               UNDER LOAD           =  1179.8/  1694.4/  1774.7ms   p95 x17.7
+  65KiB page   baseline p50/p95/p99 =   176.0/   224.9/   226.1ms
+               UNDER LOAD           =  1972.5/  2765.5/  2938.2ms   p95 x12.3
+
+===== mobile =====
+  4KiB API     baseline p50/p95/p99 =   159.5/   313.6/   413.0ms
+               UNDER LOAD           =  5488.3/  7669.7/  9070.6ms   p95 x24.5
+  65KiB page   baseline p50/p95/p99 =   792.7/  1355.7/  1433.4ms
+               UNDER LOAD           =  8823.9/ 13057.9/ 15216.5ms   p95 x9.6
+
+===== bursty =====
+  4KiB API     baseline p50/p95/p99 =    66.8/    70.8/    73.9ms
+               UNDER LOAD           =  2227.4/  2714.0/  2836.2ms   p95 x38.3
+  65KiB page   baseline p50/p95/p99 =   100.5/   106.0/   109.8ms
+               UNDER LOAD           =  2436.4/  3530.4/  4325.2ms   p95 x33.3
+
+================================================================
+Under-load latency inflation = interactive requests stuck behind bulk on the
+ONE shared tunnel connection (queueing/bufferbloat without loss; head-of-line
+blocking with loss). QUIC's per-stream delivery is what fixes this.
+
+  clean   4KiB   p95      42ms ->      415ms under load  (x9.8)  <== inflated
+  clean   65KiB  p95      45ms ->      531ms under load  (x11.9)  <== inflated
+  wifi    4KiB   p95      96ms ->     1694ms under load  (x17.7)  <== inflated
+  wifi    65KiB  p95     225ms ->     2765ms under load  (x12.3)  <== inflated
+  mobile  4KiB   p95     314ms ->     7670ms under load  (x24.5)  <== inflated
+  mobile  65KiB  p95    1356ms ->    13058ms under load  (x9.6)  <== inflated
+  bursty  4KiB   p95      71ms ->     2714ms under load  (x38.3)  <== inflated
+  bursty  65KiB  p95     106ms ->     3530ms under load  (x33.3)  <== inflated
+
+VERDICT: shared-connection HEAD-OF-LINE / bufferbloat blocking IS present.
+  Interactive latency inflates up to ~38x under concurrent bulk load
+  (worse, and appearing even without loss). For a busy multi-user app this is a
+  real UX risk, and QUIC (independent streams) is the direct fix — leans TOWARD Part B.

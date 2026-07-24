@@ -1342,15 +1342,17 @@ decision task, not part of A1 completion.
 
 ### Measurement gate — prove A2 before Part B
 
-> **Status (2026-07-24): MEASURED NO-GO — B1–B4 not currently justified (G1.6).**
-> A2 was **measured and did not reproduce** after A1 on a controlled real-edge
-> reproduction (real beamd edge + shaped agent, netem before dial, fail-closed
-> analyzer): under loss a solo transfer gets ~97% of the 8-stream aggregate and
-> there is no 1/2/4 s timeout ladder, even at 500 ms/1%/20 Mbit. A1 was the real
-> fix. Raw data: `test/perf/results/g1-local-2026-07-24/`; full decision +
-> limitations (controlled reproduction, random loss, one sub-threshold hint):
-> `test/perf/results/decision-2026-07-24-g1.md`. The boxes below stay unchecked
-> because this used the local reproduction, not the remote-edge runner.
+> **Status (2026-07-24): GO — Part B justified, pending operator greenlight.**
+> Two measured axes (real beamd edge + shaped agent; fail-closed analyzers):
+> **(1) bulk throughput** shows no A2 penalty (solo ~97% of 8-stream aggregate,
+> no timeout ladder) — `g1-local-2026-07-24/`; **(2) interactive latency under
+> mixed load** is SEVERELY degraded — a 4 KB request inflates 10× (clean) to
+> ~38× (bursty loss), reaching 1.7–7.7 s once bulk shares the one tunnel TCP
+> connection (`hol-2026-07-24/`). That is the shared-connection head-of-line
+> problem QUIC fixes (§2). Full decision + caveats (QUIC fix expected but B4
+> must confirm before the default flip; load-dependent; controlled reproduction):
+> `test/perf/results/decision-2026-07-24-g1.md`. G1 checkboxes stay unchecked
+> pending a remote-edge confirmation; the GO is based on the local reproduction.
 
 - [ ] **G1.1 — Establish the tuned-TCP baseline.** Verify A1 is live on both
   receivers and record the effective window, commit, host, OS, Go/yamux

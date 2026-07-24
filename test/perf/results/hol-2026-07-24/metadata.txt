@@ -1,0 +1,14 @@
+# HoL / production-scenario test (controlled reproduction, NOT the WAN link)
+date_utc: 2026-07-24T23:03:47Z
+beamd: n/a
+load: 6 concurrent 8 MiB downloads (many visitors) sharing the tunnel
+interactive: 4 KiB (API) and 65 KiB (page) downloads, measured alone vs under load
+profiles: clean wifi mobile bursty
+## clean
+qdisc netem 8012: root refcnt 17 limit 1000 delay 30ms rate 100Mbit seed 11968301465306234692
+## wifi
+qdisc netem 8013: root refcnt 17 limit 1000 delay 40ms loss 1% rate 30Mbit seed 13348950709530910360
+## mobile
+qdisc netem 8014: root refcnt 17 limit 1000 delay 150ms loss 2% rate 10Mbit seed 5888978980993584964
+## bursty
+qdisc netem 8015: root refcnt 17 limit 1000 delay 60ms loss 2% 25% rate 15Mbit seed 1187531452149939082

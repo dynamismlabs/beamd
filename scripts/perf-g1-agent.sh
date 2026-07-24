@@ -25,9 +25,12 @@ NAME=${NAME:-blob}
 #    the return (ACK) path and the host's public leg are unshaped, so the
 #    impairment is isolated to the tunnel's forward direction where A2's
 #    loss-recovery dynamics live.
+LOSS_CORR=${LOSS_CORR:-} # optional netem loss correlation % (bursty loss)
 tc qdisc del dev "$DEV" root 2>/dev/null || true
 if [ "$LOSS_PCT" = "0" ]; then
   tc qdisc add dev "$DEV" root netem delay "${DELAY_MS}ms" rate "${RATE_MBIT}mbit"
+elif [ -n "$LOSS_CORR" ] && [ "$LOSS_CORR" != "0" ]; then
+  tc qdisc add dev "$DEV" root netem delay "${DELAY_MS}ms" loss "${LOSS_PCT}%" "${LOSS_CORR}%" rate "${RATE_MBIT}mbit"
 else
   tc qdisc add dev "$DEV" root netem delay "${DELAY_MS}ms" loss "${LOSS_PCT}%" rate "${RATE_MBIT}mbit"
 fi
