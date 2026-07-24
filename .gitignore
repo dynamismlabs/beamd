@@ -13,3 +13,6 @@ tokens.json
 .idea/
 .vscode/
 /ignore
+# Python bytecode cache
+__pycache__/
+*.pyc

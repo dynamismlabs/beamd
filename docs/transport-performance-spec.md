@@ -1342,6 +1342,15 @@ decision task, not part of A1 completion.
 
 ### Measurement gate — prove A2 before Part B
 
+> **Status (2026-07-24): DEFERRED — B1–B4 not currently justified (G1.6).** The
+> G1 harness is built and correct (`scripts/perf-g1.sh` + `scripts/perf-g1-agent.sh`,
+> `test/perf/*`; real-edge, shape-before-dial, fail-closed analyzer). A clean
+> real-edge run was **not completed** (dedicated test-edge access friction), so
+> the checkboxes below stay unchecked. Part B is deferred on **judgment**, not a
+> measured no-go: A1 delivered the real-world improvement, and A2 is
+> adverse-network-only with no evidence this single user hits it. Full rationale
+> and reopen criteria: `test/perf/results/decision-2026-07-24-g1.md`.
+
 - [ ] **G1.1 — Establish the tuned-TCP baseline.** Verify A1 is live on both
   receivers and record the effective window, commit, host, OS, Go/yamux
   versions, CPU/memory limits, and impairment settings.
