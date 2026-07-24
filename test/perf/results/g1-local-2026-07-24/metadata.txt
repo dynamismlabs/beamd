@@ -1,0 +1,12 @@
+# G1 LOCAL controlled reproduction (NOT the production WAN link)
+date_utc: 2026-07-24T22:08:00Z
+beamd: n/a
+topology: real beamd edge container + shaped agent container on a docker bridge;
+  agent->edge leg shaped with netem BEFORE dial; host->edge public leg unshaped.
+profiles: clean lossy high-rtt-lossy
+## clean
+qdisc netem 800e: root refcnt 17 limit 1000 delay 75ms rate 100Mbit seed 847077190876398575
+## lossy
+qdisc netem 800f: root refcnt 17 limit 1000 delay 75ms loss 1% rate 100Mbit seed 15398134665634440641
+## high-rtt-lossy
+qdisc netem 8010: root refcnt 17 limit 1000 delay 250ms loss 1% rate 20Mbit seed 1703646706388409157

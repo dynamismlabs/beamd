@@ -1342,14 +1342,15 @@ decision task, not part of A1 completion.
 
 ### Measurement gate — prove A2 before Part B
 
-> **Status (2026-07-24): DEFERRED — B1–B4 not currently justified (G1.6).** The
-> G1 harness is built and correct (`scripts/perf-g1.sh` + `scripts/perf-g1-agent.sh`,
-> `test/perf/*`; real-edge, shape-before-dial, fail-closed analyzer). A clean
-> real-edge run was **not completed** (dedicated test-edge access friction), so
-> the checkboxes below stay unchecked. Part B is deferred on **judgment**, not a
-> measured no-go: A1 delivered the real-world improvement, and A2 is
-> adverse-network-only with no evidence this single user hits it. Full rationale
-> and reopen criteria: `test/perf/results/decision-2026-07-24-g1.md`.
+> **Status (2026-07-24): MEASURED NO-GO — B1–B4 not currently justified (G1.6).**
+> A2 was **measured and did not reproduce** after A1 on a controlled real-edge
+> reproduction (real beamd edge + shaped agent, netem before dial, fail-closed
+> analyzer): under loss a solo transfer gets ~97% of the 8-stream aggregate and
+> there is no 1/2/4 s timeout ladder, even at 500 ms/1%/20 Mbit. A1 was the real
+> fix. Raw data: `test/perf/results/g1-local-2026-07-24/`; full decision +
+> limitations (controlled reproduction, random loss, one sub-threshold hint):
+> `test/perf/results/decision-2026-07-24-g1.md`. The boxes below stay unchecked
+> because this used the local reproduction, not the remote-edge runner.
 
 - [ ] **G1.1 — Establish the tuned-TCP baseline.** Verify A1 is live on both
   receivers and record the effective window, commit, host, OS, Go/yamux

@@ -1,0 +1,33 @@
+
+===== clean =====
+  download        36B conc=1 n=100 p50=    82.6 p95=     86.6 p99=     88.9 max=     92.3ms  solo=  0.00 agg=  0.00MB/s
+  download        36B conc=8 n=100 p50=    80.5 p95=    172.8 p99=    248.3 max=    248.3ms  solo=  0.00 agg=  0.00MB/s
+  download    259072B conc=1 n= 50 p50=   102.0 p95=    108.2 p99=    113.7 max=    116.6ms  solo=  2.54 agg=  2.51MB/s
+  download    259072B conc=8 n= 48 p50=   174.9 p95=    316.9 p99=    323.6 max=    326.5ms  solo=  1.48 agg= 10.37MB/s
+  download   8388608B conc=1 n= 10 p50=   814.9 p95=    898.0 p99=    919.6 max=    925.0ms  solo= 10.29 agg= 10.14MB/s
+  download   8388608B conc=8 n=  8 p50=  5424.8 p95=   5720.1 p99=   5745.4 max=   5751.7ms  solo=  1.55 agg= 11.67MB/s
+
+===== high-rtt-lossy =====
+  download        36B conc=1 n= 60 p50=   257.8 p95=    474.3 p99=    585.8 max=    586.2ms  solo=  0.00 agg=  0.00MB/s
+  download        36B conc=8 n= 60 p50=   510.8 p95=   1225.2 p99=   1227.3 max=   1227.7ms  solo=  0.00 agg=  0.00MB/s
+  download    259072B conc=1 n= 20 p50=  2056.1 p95=   2574.8 p99=   2575.0 max=   2575.0ms  solo=  0.13 agg=  0.14MB/s
+  download    259072B conc=8 n= 16 p50=  9175.5 p95=  13402.2 p99=  13560.9 max=  13600.6ms  solo=  0.03 agg=  0.19MB/s
+  download    524288B conc=1 n=  8 p50=  5384.4 p95=   6104.6 p99=   6134.9 max=   6142.5ms  solo=  0.10 agg=  0.11MB/s
+  download    524288B conc=8 n=  8 p50= 43261.8 p95=  46801.5 p99=  46801.5 max=  46801.5ms  solo=  0.01 agg=  0.09MB/s
+
+===== lossy =====
+  download        36B conc=1 n=100 p50=    83.1 p95=    166.3 p99=    182.5 max=    186.2ms  solo=  0.00 agg=  0.00MB/s
+  download        36B conc=8 n=100 p50=   155.6 p95=    254.3 p99=    263.2 max=    264.1ms  solo=  0.00 agg=  0.00MB/s
+  download    259072B conc=1 n= 50 p50=   840.4 p95=   1604.4 p99=   2484.2 max=   3202.6ms  solo=  0.31 agg=  0.27MB/s
+  download    259072B conc=8 n= 48 p50=  5915.0 p95=   9084.0 p99=  10714.4 max=  11251.1ms  solo=  0.04 agg=  0.32MB/s
+  download   8388608B conc=1 n= 10 p50= 28667.8 p95=  31129.7 p99=  31420.6 max=  31493.4ms  solo=  0.29 agg=  0.29MB/s
+  download   8388608B conc=8 n=  8 p50=225537.2 p95= 226712.9 p99= 226713.0 max= 226713.0ms  solo=  0.04 agg=  0.30MB/s
+
+  [lossy] A2 signals: none
+
+  [high-rtt-lossy] A2 signals: none
+
+============================================================
+VERDICT: A2 NOT reproduced after A1 under the tested conditions (G1.6).
+  -> Part B not justified by G1. Make no QUIC changes; revisit if real
+     lossy-network pain appears.

@@ -14,6 +14,8 @@
 #      RATE_MBIT, [BACKEND_PORT=9000], [WINDOW=4194304], [DEV=eth0], [NAME=blob].
 set -euo pipefail
 : "${EDGE_ADDR:?}" "${TOKEN:?}" "${DELAY_MS:?}" "${LOSS_PCT:?}" "${RATE_MBIT:?}"
+BEAMD=${BEAMD:-/perf/bin/beamd}
+PERFSERVER=${PERFSERVER:-/perf/bin/perfserver}
 BACKEND_PORT=${BACKEND_PORT:-9000}
 WINDOW=${WINDOW:-4194304}
 DEV=${DEV:-eth0}
@@ -32,7 +34,7 @@ fi
 echo "shaped $DEV before dial: $(tc qdisc show dev "$DEV")"
 
 # 2) deterministic backend on loopback (unshaped; local to the agent).
-BEAMD_YAMUX_STREAM_WINDOW_BYTES="$WINDOW" /perf/bin/perfserver --addr "127.0.0.1:$BACKEND_PORT" &
+BEAMD_YAMUX_STREAM_WINDOW_BYTES="$WINDOW" "$PERFSERVER" --addr "127.0.0.1:$BACKEND_PORT" &
 sleep 0.5
 
 # 3) connect to the REAL edge over the (now-shaped) path and serve the tunnel.
@@ -44,4 +46,4 @@ agent_socket: /tmp/agent.sock
 YAML
 echo "dialing real edge $EDGE_ADDR (shaped), registering $NAME -> :$BACKEND_PORT ..."
 exec env HOME=/tmp BEAMD_YAMUX_STREAM_WINDOW_BYTES="$WINDOW" \
-  /perf/bin/beamd open "$BACKEND_PORT" --as "$NAME" --config /tmp/client.yaml
+  "$BEAMD" open "$BACKEND_PORT" --as "$NAME" --config /tmp/client.yaml

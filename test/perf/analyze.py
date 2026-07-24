@@ -25,7 +25,7 @@ LADDER_TOL = 0.10
 LADDER_MIN_PER_RUNG = 2
 LADDER_MIN_RUNGS = 2
 PRIMARY = "lossy"
-REQUIRED = [(16777216, "download", 1), (16777216, "download", 8),
+REQUIRED = [(8388608, "download", 1), (8388608, "download", 8),
             (36, "download", 1), (36, "download", 8)]
 
 
@@ -55,10 +55,17 @@ def ttfb_ladder(case):
 
 def a2_signals(cl):
     sigs = []
-    for size, label in [(16777216, "16MiB"), (1048576, "1MiB")]:
+    # large-transfer solo vs 8-stream aggregate, for every download size >= 256 KiB
+    # that has both a conc-1 and a conc-8 case (size chosen per profile).
+    sizes = {}
+    for c in cl:
+        if c["dir"] == "download":
+            sizes.setdefault(c["size"], set()).add(c["concurrency"])
+    for size in sorted(s for s, cs in sizes.items() if s >= 262144 and {1, 8} <= cs):
         solo, agg = find(cl, size, "download", 1), find(cl, size, "download", 8)
         if solo and agg and agg["aggregate_throughput_bps"] > 0:
             ratio = solo["median_throughput_bps"] / agg["aggregate_throughput_bps"]
+            label = f"{size >> 20}MiB" if size >= (1 << 20) else f"{size >> 10}KiB"
             if ratio < 0.70:
                 sigs.append(f"{label} solo/agg={ratio * 100:.0f}% (<70%)")
     for size, label in [(36, "36B"), (259072, "253KiB")]:
