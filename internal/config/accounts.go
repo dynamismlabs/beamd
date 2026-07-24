@@ -56,7 +56,9 @@ type Account struct {
 	DefaultScope       string     `yaml:"default_scope,omitempty"` // `beamd default`
 }
 
-// Client returns the connection credential for this account.
+// Client returns the connection credential for this account. The yamux stream
+// window is NOT an account property (§8.1): it is resolved from the process
+// environment at each entry point, never persisted here.
 func (a *Account) Client() *Client {
 	return &Client{
 		Server:             a.Server,

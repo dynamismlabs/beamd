@@ -51,6 +51,14 @@ type Server struct {
 	// MiB. Set to -1 to disable.
 	MaxRequestBodyBytes int64 `yaml:"max_request_body_bytes"`
 
+	// YamuxStreamWindowBytes is a RUNTIME-INJECTION field (never persisted): the
+	// edge's yamux per-stream receive window in bytes, resolved once from
+	// BEAMD_YAMUX_STREAM_WINDOW_BYTES by the serve entry point and set here before
+	// edge.New (transport-performance-spec §8.1 / §11.1). It governs the
+	// download/response-body direction (agent → edge). `yaml:"-"` keeps it out of
+	// config files; 0 means "unset" and mux applies the 4 MiB default.
+	YamuxStreamWindowBytes int64 `yaml:"-"`
+
 	// PreviewEmbed, when true, makes the edge strip iframe-blocking
 	// response headers (X-Frame-Options and the CSP frame-ancestors
 	// directive) from tunnel responses, so previews can be embedded

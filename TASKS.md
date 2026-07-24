@@ -1,6 +1,12 @@
 # Beamd — Implementation Tasks
 
-Working checklist mapping PRD §14 milestones to discrete tasks. Check items off as completed. Each item should be small enough to land in one commit. Source of truth for "what's done"; PRD is source of truth for "what we're building."
+Working checklist mapping PRD §14 milestones to discrete tasks. Check items off
+as completed. Each item should be small enough to land in one commit. This is
+the source of truth for milestone history and top-level work; a linked
+task-specific specification may declare its own canonical sub-checklist.
+`docs/transport-performance-spec.md` is the canonical sub-checklist for the
+transport-performance item. The PRD remains the source of truth for the
+product being built.
 
 > **Naming note (post-M6 refactor).** The milestones below were originally built as **two binaries** — `cmd/beam` (client) and `cmd/beamd` (edge) — using the verbs `expose`/`unexpose` and a background **daemon**. They were later **merged into the single `beamd` binary** (same binary for `serve` and `open`): the verbs were renamed `open`/`close`, the background worker became the **agent**, and client state moved `~/.beam/` → `~/.beamd/` (socket `agent.sock`, config `config`). The checklist text uses the **current** names; the original two-binary milestone *structure* (the `cmd/beam` headings, "both binaries") is kept as a historical record.
 
@@ -22,6 +28,11 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 
 ### Still deferred (non-blocking for OSS v1)
 
+- [ ] **Tunnel performance hardening (A1, measurement gate, and conditional
+  A2).** The single canonical specification and executable checklist is
+  [`docs/transport-performance-spec.md`](docs/transport-performance-spec.md).
+  Work its Section 16 top to bottom; do not duplicate or independently track
+  the subtasks here.
 - [ ] **Additional libdns providers compiled in** — Route53, DigitalOcean, Hetzner, GCloud DNS, Gandi. Today only `cloudflare` + `stub` are wired in `internal/dns/dns.go`'s `Open()`. Each is one import + one `case`. Operators on other DNS hosts can vendor it themselves until we land more.
 - [x] **Device-code login flow — CLI side** — `beamd login` without `--token` now does the device-code dance against whatever web app the operator advertises via `auth_discovery` in beamd.yaml. Discovery endpoint at `/.well-known/beam-auth`. `internal/devicecode` package implements the polling. The *server* side (the `/api/device/code` + `/api/device/token` endpoints + the browser-based approval page) lives in the hosted web app, not in this repo.
 - [x] **`auth.HTTPStore`** — hosted beamd's `auth.Store` impl. POSTs to a verify endpoint with shared-secret auth, caches 60s positive / 5s negative. `token_store: http(s)://...` in beamd.yaml, secret via `BEAMD_AUTH_VERIFY_SECRET` env var.

@@ -152,6 +152,15 @@ func serveCmd(args []string) {
 		os.Exit(1)
 	}
 
+	// Resolve the yamux stream window once from the environment and inject it for
+	// edge.New (transport-performance-spec §8.1). A present-invalid value is fatal.
+	yamuxWindow, err := config.ResolveYamuxWindow()
+	if err != nil {
+		slog.Error("yamux stream window", "err", err.Error())
+		os.Exit(1)
+	}
+	cfg.YamuxStreamWindowBytes = yamuxWindow
+
 	tokens, err := auth.Open(cfg.TokenStore)
 	if err != nil {
 		slog.Error("token store load failed", "spec", cfg.TokenStore, "err", err.Error())
@@ -170,6 +179,7 @@ func serveCmd(args []string) {
 		"listen_https", cfg.ListenHTTPS,
 		"dns_provider", cfg.DNSProvider,
 		"token_store", cfg.TokenStore,
+		"yamux_stream_window_bytes", yamuxWindow,
 	)
 
 	e := edge.New(cfg, Version, tokens, certMgr)

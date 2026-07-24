@@ -38,5 +38,9 @@ services:
 
     environment:
       - BEAMD_DNS_PROVIDER_CREDS=${BEAMD_DNS_PROVIDER_CREDS}
+      # Optional yamux per-stream receive window (bytes); default 4 MiB when unset.
+      # Key-only form: forwarded from /etc/beamd/.env when set, and left ABSENT
+      # (not empty) when unset — a present-but-empty value is a fatal startup error.
+      - BEAMD_YAMUX_STREAM_WINDOW_BYTES
 
     # The default entrypoint is `beamd serve --config /etc/beamd/beamd.yaml`.

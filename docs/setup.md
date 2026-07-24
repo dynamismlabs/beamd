@@ -255,6 +255,18 @@ step 3:
 BEAMD_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
 ```
 
+Optional: the yamux per-stream receive window defaults to 4 MiB. On very high
+bandwidth-delay-product links you can raise it (bytes, `262144`–`16777216`) by
+also setting `BEAMD_YAMUX_STREAM_WINDOW_BYTES`. It is process-wide (there is no
+YAML equivalent); set the same variable for the agent on the developer side. A
+present but empty or out-of-range value is a fatal startup error. A changed edge
+value takes effect on the next edge restart; a changed agent value takes effect
+after `beamd reload` (which restarts the background agent).
+
+```
+BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304
+```
+
 Lock it down (the file holds your CF token — keep it private):
 
 ```
@@ -580,6 +592,8 @@ After=network.target
 Type=simple
 User=root
 Environment=BEAMD_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
+# Optional: yamux per-stream receive window in bytes (default 4 MiB; 262144–16777216).
+# Environment=BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304
 ExecStart=/usr/local/bin/beamd serve --config /etc/beamd/beamd.yaml
 Restart=on-failure
 RestartSec=2s

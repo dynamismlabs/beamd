@@ -40,6 +40,10 @@ data_dir: ./data
 
 max_tunnels_per_token: 25
 
+# The yamux per-stream receive window is NOT a YAML setting — it is process-wide
+# and set only via the BEAMD_YAMUX_STREAM_WINDOW_BYTES environment variable
+# (default 4 MiB) on both the edge and the agent. See example/.env.example.
+
 # Strip iframe-blocking headers (X-Frame-Options, CSP frame-ancestors)
 # from tunnel responses so previews can be embedded cross-origin in a
 # consumer app. Off by default — an app's own framing policy is kept.

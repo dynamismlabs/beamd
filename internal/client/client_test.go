@@ -65,7 +65,7 @@ func (fe *fakeEdge) handle(c net.Conn) {
 	if err := c.(*tls.Conn).Handshake(); err != nil {
 		return
 	}
-	sess, err := mux.Server(c)
+	sess, err := mux.Server(c, 0) // 0 → mux.DefaultStreamWindow (test fake edge)
 	if err != nil {
 		return
 	}

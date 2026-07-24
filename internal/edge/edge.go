@@ -418,7 +418,7 @@ func (e *Edge) handle(c net.Conn) {
 }
 
 func (e *Edge) handleClient(c net.Conn) {
-	yamuxSess, err := mux.Server(c)
+	yamuxSess, err := mux.Server(c, uint32(e.cfg.YamuxStreamWindowBytes))
 	if err != nil {
 		slog.Error("yamux server setup failed", "err", err.Error())
 		_ = c.Close()

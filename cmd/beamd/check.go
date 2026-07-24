@@ -27,7 +27,7 @@ func checkCmd(args []string) {
 	ins := *insecure || cfg.InsecureSkipVerify
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: ins, Scope: rc.Scope})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: ins, Scope: rc.Scope, YamuxStreamWindowBytes: mustYamuxWindow()})
 	cancel()
 	if err != nil {
 		if *jsonOut {

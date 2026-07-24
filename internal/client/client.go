@@ -62,6 +62,12 @@ type Options struct {
 	// slug for an OSS token / API key). The resolved scope comes back as the
 	// hello_ok slug and must stay stable across reconnects.
 	Scope string
+
+	// YamuxStreamWindowBytes sets the agent's yamux per-stream receive window,
+	// passed to mux.Client. 0 → mux's 4 MiB default. The CLI populates it from
+	// config.ResolveYamuxWindow (the process-wide BEAMD_YAMUX_STREAM_WINDOW_BYTES,
+	// already defaulted and range-validated). See transport-performance-spec §8.1.
+	YamuxStreamWindowBytes int64
 }
 
 func (o *Options) applyDefaults() {
@@ -348,7 +354,7 @@ func (c *Client) connectOnce(ctx context.Context, first bool) error {
 		return fmt.Errorf("server did not negotiate %q (got %q)", ALPNBeam, got)
 	}
 
-	yamuxSess, err := mux.Client(conn)
+	yamuxSess, err := mux.Client(conn, uint32(c.opts.YamuxStreamWindowBytes))
 	if err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("yamux client: %w", err)

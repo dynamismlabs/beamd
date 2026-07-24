@@ -362,12 +362,25 @@ func quietClientLogs() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 }
 
+// mustYamuxWindow resolves BEAMD_YAMUX_STREAM_WINDOW_BYTES once for this CLI
+// process, exiting with a clear message on a present-invalid value (§8.1). Every
+// foreground client entry point (open, run, check) funnels through it so they use
+// the same resolver as the edge and the detached agent.
+func mustYamuxWindow() int64 {
+	w, err := config.ResolveYamuxWindow()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		os.Exit(1)
+	}
+	return w
+}
+
 // dialAndRegister opens a foreground connection to the edge and registers
 // name→port, returning the live client and its public URL. The caller
 // owns closing the client.
 func dialAndRegister(cfg *config.Client, port int, name, scope string, insecure bool) (*client.Client, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope, YamuxStreamWindowBytes: mustYamuxWindow()})
 	cancel()
 	if err != nil {
 		return nil, "", fmt.Errorf("connect to edge: %w", err)
@@ -458,7 +471,7 @@ func runCmd(args []string) {
 	// are known right after Connect, so the child can be handed its public
 	// URL up front (BEAMD_URL, allowed-hosts) even though we register later.
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), 30*time.Second)
-	c, err := client.Connect(dialCtx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: *insecure || cfg.InsecureSkipVerify, Scope: ctx.Scope})
+	c, err := client.Connect(dialCtx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: *insecure || cfg.InsecureSkipVerify, Scope: ctx.Scope, YamuxStreamWindowBytes: mustYamuxWindow()})
 	cancelDial()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "run: connect to edge:", err)
@@ -906,8 +919,18 @@ func agentCmd(args []string) {
 
 	insecure := cfg.InsecureSkipVerify || os.Getenv("BEAMD_INSECURE") == "1"
 	scope := os.Getenv("BEAMD_SCOPE")
+
+	// Resolve the yamux stream window once at agent startup and reuse it across
+	// reconnects (§8.1). A present-invalid value is fatal; log the effective one.
+	yamuxWindow, err := config.ResolveYamuxWindow()
+	if err != nil {
+		slog.Error("yamux stream window", "err", err.Error())
+		os.Exit(1)
+	}
+	slog.Info("agent starting", "socket", *socket, "yamux_stream_window_bytes", yamuxWindow)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope, YamuxStreamWindowBytes: yamuxWindow})
 	cancel()
 	if err != nil {
 		slog.Error("connect to edge failed", "err", err.Error())
