@@ -14,6 +14,12 @@ its requirements and acceptance criteria. Check an item only when its
 referenced requirements and tests pass. `TASKS.md` links here but does not
 duplicate this checklist.
 
+**Before executing Part B, read [`transport-a2-findings.md`](transport-a2-findings.md)** —
+the measured findings, the reasoning behind the A2 corrections (the original
+solo-transfer hypothesis was disproven; the real defect is head-of-line blocking
+under mixed load), the zrok/OpenZiti prior-art research, and the Part B handoff.
+Raw evidence is under `test/perf/results/`.
+
 ## 1. Executive decision
 
 This work ships in two decoupled parts with a measurement gate between them. It
