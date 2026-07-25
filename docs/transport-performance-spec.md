@@ -101,19 +101,31 @@ Two distinct defects were measured:
 - **A1:** yamux's default `MaxStreamWindowSize` is 256 KiB. A stream can move
   only approximately one window per effective round trip, so large solo
   transfers are window-limited.
-- **A2:** all streams share one long-lived TCP connection. A solo response is
-  emitted as a burst, and loss near the burst tail can fall into TCP
-  retransmission timeout recovery. Parallel traffic hides the problem by
-  keeping the connection ACK-clocked.
+- **A2:** all of an app's streams multiplex over one long-lived TCP connection,
+  so TCP's strict in-order delivery couples them. Under concurrency a
+  latency-sensitive request stalls behind other streams' bulk data — queued
+  behind it in the send buffer even without loss (bufferbloat), and blocked
+  behind a lost packet's retransmit under loss (head-of-line blocking). Measured
+  2026-07-24 (`test/perf/results/hol-2026-07-24/`): a 4 KiB request inflates
+  ~10x on a clean link and up to ~38x under bursty loss (reaching 1.7–7.7 s on
+  wifi/mobile) once concurrent bulk shares the tunnel.
 
-Increasing the yamux window fixes A1, but it does not fix A2. QUIC fixes the
-cross-stream architectural weakness because delivery is stream-aware and
-quic-go implements transport pacing without TCP head-of-line blocking between
-independent streams. QUIC still has connection-level congestion control and
-probe timeouts, so it is not assumed to eliminate every solo tail-loss event.
-The netem gates in this specification must prove the A2 improvement before
-QUIC becomes the default. The tuned yamux path is still useful as a fallback
-and as an immediate improvement while the QUIC work lands.
+The original A2 hypothesis — that *solo* transfers are slow under loss and
+parallel traffic *hides* it — was measured **false**: solo bulk throughput is
+fine (~97% of the 8-stream aggregate), with no 1/2/4 s timeout ladder. The real
+defect is the reverse — concurrent bulk is what inflates interactive latency —
+so the gates that follow were corrected to measure it.
+
+Increasing the yamux window fixes A1, but it does not fix A2 — the window is not
+the bottleneck; the single shared connection is. QUIC fixes A2 because each
+stream is delivered independently, so a small interactive request is not stuck
+behind a bulk transfer's queued or lost packets. This is the same conclusion
+OpenZiti reached with its westworld3/dilithium "Transwarp" UDP transport; beamd
+uses off-the-shelf quic-go rather than a custom protocol. QUIC still has
+connection-level congestion control, so it is not assumed to eliminate every
+effect; the interactive-latency-under-load gate (Section 15.3) must prove QUIC
+collapses the head-of-line penalty before it becomes the default. The tuned
+yamux path remains the fallback and the immediate A1 win while QUIC lands.
 
 This design does **not** add a rate limiter. Limits in this specification bound
 concurrency and memory, not bytes per second.
@@ -1283,10 +1295,14 @@ Performance gates:
 - Head-to-head clean-path gate: QUIC may not regress tuned-yamux median
   throughput or p95 completion time by more than 10% for any gated size or
   direction.
-- Head-to-head A2 gate: on at least one lossy profile that reproduced A2 in the
-  pre-build measurement, QUIC must either reduce solo small-response p95 by at
-  least 30% or improve solo 16 MiB median throughput by at least 25%, while no
-  other A2 primary metric regresses by more than 10%.
+- Head-to-head A2 gate (primary — the problem QUIC is built to fix): on at least
+  one lossy profile, QUIC must cut the interactive-latency-under-load p95 (the
+  `scripts/perf-hol.sh` mixed-load test — a small request measured while
+  concurrent bulk shares the tunnel) by at least 50% versus tuned-yamux, and must
+  not regress the clean-path interactive-under-load p95 by more than 10%.
+- Head-to-head A2 gate (secondary guardrails): QUIC must not regress solo
+  small-response p95 or solo large-transfer throughput by more than 10% — these
+  were already healthy on tuned-yamux, so they are guardrails, not the target.
 - The QUIC small-response distribution must not retain the tuned-TCP
   1/2/4-second timeout ladder.
 - All functional sizes, directions, and concurrency cases: zero corruption
@@ -1367,12 +1383,17 @@ decision task, not part of A1 completion.
 - [ ] **G1.4 — Record comparable statistics.** Capture p50, p95, p99, maximum,
   throughput, errors, and the raw timing sequence. Explicitly note any
   approximately 1/2/4-second timeout ladder.
-- [ ] **G1.5 — Make and record the decision.** Part B is justified only when a
-  repeatable A2 signature remains after A1—for example, solo small-response
-  p95 is both over one second and over twice the concurrency-eight p95, the
-  timeout ladder is visible, or solo large-transfer throughput is below 70%
-  of the corresponding eight-stream aggregate. Save raw results and a dated
-  go/no-go decision under `test/perf/results/`.
+- [ ] **G1.5 — Make and record the decision.** Part B is justified when a
+  repeatable transport defect remains after A1. The **primary** signal (the one
+  that actually fired, 2026-07-24) is interactive latency under mixed load: a
+  small request's p95 inflating severely (≥3x, into seconds) when concurrent
+  bulk shares the one tunnel connection (`scripts/perf-hol.sh`). The
+  solo-transfer signals — solo small-response p95 over one second and over twice
+  the concurrency-eight p95, a visible 1/2/4 s timeout ladder, or solo
+  large-transfer throughput below 70% of the eight-stream aggregate — are
+  supporting evidence but are NOT sufficient on their own: all three came back
+  negative here while the head-of-line penalty was severe. Save raw results and
+  a dated go/no-go under `test/perf/results/`.
 - [ ] **G1.6 — Stop when A2 is not proven.** If the gate does not justify Part
   B, mark B1–B4 “not currently justified” in the decision record and make no
   QUIC changes.
