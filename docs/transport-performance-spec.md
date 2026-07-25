@@ -45,9 +45,11 @@ only when QUIC is greenlit — it has no value while there is a single
 implementation.
 
 Between the two parts, **prove A2 on the real tunnel** (Section 16): with the
-4 MiB window already live, measure both the small-response timeout signature
-and large solo transfers on a lossy / high-RTT link. If they do not collapse,
-Part B may not be needed at all.
+4 MiB window already live, measure interactive-request latency under concurrent
+bulk load (the head-of-line test) across lossy / high-RTT profiles, with the
+solo small-response and large-transfer signatures as controls. If interactive
+latency does not degrade under load, Part B may not be needed. (Measured
+2026-07-24: it degraded 10–38× — GO.)
 
 The npm package is a launcher for the compiled Go `beamd` binary; no JavaScript
 transport implementation is needed in either part.
@@ -132,8 +134,8 @@ concurrency and memory, not bytes per second.
 
 ## 3. Goals
 
-- A single response must not be materially slower merely because it is the
-  only active response.
+- A latency-sensitive request must not be materially slower merely because other
+  (bulk) streams are concurrently active on the same tunnel connection.
 - Transfers above 256 KiB must not plateau at `256 KiB / RTT`.
 - HTTP, request bodies, streaming responses, SSE, WebSockets, and HMR must
   retain their current semantics.
@@ -1379,7 +1381,13 @@ decision task, not part of A1 completion.
   concurrency one and then at concurrency eight.
 - [ ] **G1.3 — Exercise large solo transfers.** Measure 16 MiB and 100 MiB
   uploads and downloads at concurrency one and eight, with checksum
-  verification.
+  verification. (Control — this proved negative; keep it as a guardrail.)
+- [ ] **G1.3b — Exercise the mixed-load head-of-line signature (PRIMARY).**
+  Saturate the tunnel with several concurrent bulk downloads (many visitors) and,
+  on the same tunnel, measure a small interactive request's latency ALONE vs
+  UNDER that load, across clean/wifi/mobile/bursty-loss profiles
+  (`scripts/perf-hol.sh`). Interactive tail latency inflating under load —
+  worst with loss — is the defect QUIC targets and the signal that decides G1.
 - [ ] **G1.4 — Record comparable statistics.** Capture p50, p95, p99, maximum,
   throughput, errors, and the raw timing sequence. Explicitly note any
   approximately 1/2/4-second timeout ladder.
