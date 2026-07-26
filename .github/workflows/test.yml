@@ -1,0 +1,88 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Unit and end-to-end tests
+        run: go test -count=1 ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Performance analyzer contracts
+        run: python3 -m unittest discover -s test/perf -p 'b4_analyze_test.py'
+
+  e2e-transport:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [tcp, quic]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Forced ${{ matrix.transport }} end-to-end suite
+        env:
+          BEAMD_E2E_TRANSPORT: ${{ matrix.transport }}
+          BEAMD_E2E_FULL: "1"
+        run: go test -count=1 ./test/e2e/...
+
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Internal package race tests
+        run: go test -race -count=1 ./internal/...
+
+  e2e-race:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [tcp, quic]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Forced ${{ matrix.transport }} end-to-end race suite
+        env:
+          BEAMD_E2E_TRANSPORT: ${{ matrix.transport }}
+        run: go test -race -count=1 ./test/e2e/...
+
+  vulnerability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go vulnerability scan
+        uses: golang/govulncheck-action@v1
+        with:
+          go-package: ./...

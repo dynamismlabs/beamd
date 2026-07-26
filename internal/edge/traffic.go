@@ -1,7 +1,9 @@
 package edge
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,6 +12,8 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"github.com/dynamismlabs/beamd/internal/tunnel"
 )
 
 // TrafficRecorder receives per-tunnel byte deltas as proxied connections
@@ -204,6 +208,91 @@ func (c *countingConn) Write(b []byte) (int, error) {
 
 func (c *countingConn) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(func() { c.onClose(c.in.Load(), c.out.Load()) })
+	c.finalize()
 	return err
 }
+
+func (c *countingConn) finalize() {
+	c.once.Do(func() { c.onClose(c.in.Load(), c.out.Load()) })
+}
+
+// leasedConn keeps an edge admission lease until the transport adapter says
+// both stream directions are terminal. In particular, net.Conn.Close is not
+// enough for yamux: it starts a local half-close and the receive side can stay
+// alive until remote EOF or the adapter's close timeout.
+type leasedConn struct {
+	*countingConn
+	stream tunnel.Stream
+	ctx    context.Context
+
+	normalClose chan struct{}
+	normalOnce  sync.Once
+}
+
+func newLeasedConn(
+	ctx context.Context,
+	stream tunnel.Stream,
+	onTraffic func(bytesIn, bytesOut int64),
+	onDone func(),
+) *leasedConn {
+	c := &leasedConn{
+		countingConn: &countingConn{Conn: stream, onClose: onTraffic},
+		stream:       stream,
+		ctx:          ctx,
+		normalClose:  make(chan struct{}),
+	}
+	go c.watch(onDone)
+	return c
+}
+
+func (c *leasedConn) watch(onDone func()) {
+	select {
+	case <-c.ctx.Done():
+		c.stream.Abort(tunnel.StreamCanceled)
+	case <-c.normalClose:
+		// The HTTP transport completed normally and has initiated graceful
+		// stream cleanup. Cancellation can still race that close, so keep
+		// watching until both stream directions are terminal.
+		select {
+		case <-c.ctx.Done():
+			c.stream.Abort(tunnel.StreamCanceled)
+		case <-c.stream.Done():
+		}
+	case <-c.stream.Done():
+	}
+
+	<-c.stream.Done()
+	c.countingConn.finalize()
+	onDone()
+}
+
+func (c *leasedConn) Read(p []byte) (int, error) {
+	n, err := c.countingConn.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		c.stream.Abort(tunnel.StreamCanceled)
+	}
+	return n, err
+}
+
+func (c *leasedConn) Write(p []byte) (int, error) {
+	n, err := c.countingConn.Write(p)
+	if err != nil {
+		c.stream.Abort(tunnel.StreamCanceled)
+	}
+	return n, err
+}
+
+func (c *leasedConn) Close() error {
+	if c.ctx.Err() != nil {
+		c.stream.Abort(tunnel.StreamCanceled)
+	} else {
+		c.normalOnce.Do(func() { close(c.normalClose) })
+	}
+	err := c.countingConn.Close()
+	if err != nil {
+		c.stream.Abort(tunnel.StreamCanceled)
+	}
+	return err
+}
+
+var _ net.Conn = (*leasedConn)(nil)

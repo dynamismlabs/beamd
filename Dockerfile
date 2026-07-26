@@ -3,7 +3,7 @@
 # Multi-stage build for beamd. The final image ships only the
 # static binary + CA roots — small surface, easy to inspect.
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.25.12-alpine AS build
 WORKDIR /src
 
 # Build deps first (cache-friendly).
@@ -26,7 +26,9 @@ COPY --from=build /out/beamd /usr/local/bin/beamd
 # survive container replacement.
 VOLUME ["/etc/beamd", "/var/lib/beamd"]
 
-EXPOSE 443
+# Public HTTPS and tuned TLS/yamux fallback use TCP. The preferred tunnel
+# transport uses QUIC on the same numeric port over UDP.
+EXPOSE 443/tcp 443/udp
 
 USER nonroot:nonroot
 

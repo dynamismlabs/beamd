@@ -7,8 +7,8 @@
 # BEFORE the agent dials). perfclient runs on the HOST against the edge's
 # published port, so the public leg is unshaped. This is NOT the production WAN
 # link — it is a clean, reproducible reproduction to answer "does A2 occur in
-# beamd's transport under loss?" If it fires here, confirm on a real edge before
-# building Part B.
+# beamd's transport under loss?" A remote-edge run remains optional additional
+# rigor; the gate decision must state which environment produced its evidence.
 #
 # Requires: docker (privileged), a host perfclient, linux beamd + perfserver.
 set -euo pipefail

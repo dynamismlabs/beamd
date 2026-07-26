@@ -15,9 +15,9 @@ dev. **One binary, `beamd`** (the brand), with subcommands — `serve` runs
 the edge, the rest are the client:
 
 - **`beamd serve`** — the *edge server*. One instance runs on a public VM.
-  It terminates public HTTPS on `:443`, ALPN-demuxes between public
-  visitors and client control connections (yamux-multiplexed over one TLS
-  conn per developer), reverse-proxies each request to the right client,
+  It terminates public HTTPS on `443/tcp`; tunnel sessions prefer QUIC on
+  `443/udp` and retain tuned TLS/yamux on `443/tcp` as fallback. It
+  reverse-proxies each request over transport-neutral streams,
   and issues per-developer **wildcard** certs `*.<slug>.<base_domain>`
   from Let's Encrypt via ACME DNS-01 (Cloudflare libdns).
 - **`beamd open <port>`** — the *client*. Runs on whatever machine hosts the

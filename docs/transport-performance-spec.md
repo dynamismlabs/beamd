@@ -1,10 +1,12 @@
 # Beamd Transport Performance — Specification and Task Checklist
 
-**Status:** A1 implemented (env-only window; pending production validation A1.8). Phased overall — QUIC/A2 opt-in, default-off until proven.
+**Status:** A1 shipped. G1 is GO and operator-approved: implement QUIC
+default-off, then require B4 qualification and a production-link pilot before
+changing either default.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-07-23
+**Last updated:** 2026-07-25
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -50,12 +52,14 @@ which `auto` agents reconnect over TCP. The abstraction layer is introduced
 only when QUIC is greenlit — it has no value while there is a single
 implementation.
 
-Between the two parts, **prove A2 on the real tunnel** (Section 16): with the
+Between the two parts, **prove A2 on real beamd processes** (Section 16): with the
 4 MiB window already live, measure interactive-request latency under concurrent
 bulk load (the head-of-line test) across lossy / high-RTT profiles, with the
 solo small-response and large-transfer signatures as controls. If interactive
 latency does not degrade under load, Part B may not be needed. (Measured
-2026-07-24: it degraded 10–38× — GO.)
+2026-07-24: it degraded 10–38× in the controlled reproduction — GO. Operator
+approved the default-off Part B implementation on 2026-07-25; remote-edge
+confirmation is optional and is not an implementation prerequisite.)
 
 The npm package is a launcher for the compiled Go `beamd` binary; no JavaScript
 transport implementation is needed in either part.
@@ -83,8 +87,8 @@ its gates) is:
 3. The edge admits at most 64 active proxy streams per session and 128
    globally. This bounds active receive-flow-control exposure; it is not a
    claim that all window credit is preallocated resident memory.
-4. The edge admits at most 32 pre-authentication sessions and eight
-   authenticated sessions.
+4. The edge admits at most 128 concurrent raw TCP TLS handshakes, 32 tunnel
+   pre-authentication sessions, and eight authenticated sessions.
 5. Until QUIC is proven, the shipped default is TCP/yamux only; QUIC is opt-in.
    The default flips to QUIC-preferred (`auto`) only after the deterministic
    Section 15.3 gates and the real-link production pilot both pass.
@@ -229,10 +233,11 @@ type Stream interface {
 }
 
 type CloseInfo struct {
-    Code   ErrorCode
-    Remote bool
-    Reason string
-    Cause  error
+    Code      ErrorCode
+    CodeValid bool // distinguishes CloseNormal (0) from "no application code"
+    Remote    bool
+    Reason    string
+    Cause     error
 }
 
 type Session interface {
@@ -284,6 +289,34 @@ code and closes the whole yamux session. The yamux stream adapter's `Abort`
 also ignores its code but follows the per-stream behavior in Section 6.3. Both
 must normalize session-shutdown errors to `ErrSessionClosed`.
 
+`CloseInfo` is first-terminal-event-wins and is stored before `Session.Done`
+closes. A later local cleanup call must not overwrite a remote or network
+failure already recorded. The adapters populate it as follows:
+
+| Terminal event | `CodeValid` / `Code` | `Remote` | Fixed close-reason label |
+| --- | --- | --- | --- |
+| Local `CloseWithError` | `true` / requested code | `false` | map requested code below |
+| Remote QUIC application close | `true` / peer code | `true` | map peer code below |
+| QUIC idle timeout | `false` | as reported when knowable | `idle` |
+| QUIC stateless reset, no viable path, socket/network failure | `false` | as reported when knowable | `network` |
+| QUIC transport/protocol violation or version failure after a session exists | `false` | as reported when knowable | `protocol` |
+| Remote clean yamux EOF | `false` | `true` | `normal` |
+| Local yamux `CloseWithError` | `true` / requested code retained locally | `false` | map requested code below |
+| Unclassified yamux/session failure | `false` | only when knowable | `network` or `other` |
+
+Application-code mapping is fixed: `CloseNormal` and `CloseSuperseded` map to
+`normal`; `CloseShutdown` maps to `shutdown`; `CloseProtocol` and `CloseAuth`
+map to `protocol`; `CloseCapacity` and unknown codes map to `other`. Capacity
+has its own rejection counter. `Reason` is the local description or peer
+application-close description, sanitized to valid UTF-8 and capped at 256
+bytes before storage or logging. It is never a metric label. `Cause` retains
+the original wrapped error for `errors.Is` / `errors.As` and debug diagnostics.
+
+Stream I/O errors are deliberately not normalized beyond standard `io.EOF`,
+context errors, deadlines/`net.Error`, and `ErrSessionClosed`. Proxy callers
+classify those cases and treat any other non-EOF stream error as an abort;
+they must not depend on concrete yamux or quic-go error types.
+
 ### 6.3 Stream `net.Conn` contract
 
 Transport streams are exposed through `tunnel.Stream`, which remains usable
@@ -298,17 +331,42 @@ complete `net.Conn`: its `Close` closes only the write side.
 - `Close()`, performing the normal `net.Conn` close expected by
   `http.Transport`: send a graceful FIN on the write side and cancel only the
   read side
-- `Done()`, closed after both directions finish or immediately after abort
+- `Done()`, closed after application-level completion of both directions,
+  immediately after abort, or before the parent session's `Done` becomes
+  observable
 
-The wrapper must serialize `Write`, `CloseWrite`, and the send-side portion of
-`Close` with a mutex. `http.Transport` can call `Close` after receiving an
-early response while its request-body writer is still blocked. In that case,
-`Close` first sets an immediate write deadline without holding the mutex,
-waits for the writer to return, takes the mutex, sends the graceful FIN, and
-then cancels the read side. If `Abort` wins the send-side terminal operation,
-it calls `CancelWrite` immediately; it always calls `CancelRead`, so either
-blocked direction wakes up. A send-side `sync.Once` prevents `CloseWrite`,
-`Close`, and `Abort` from issuing conflicting terminal operations.
+The QUIC wrapper has an explicit send state `open -> fin -> reset` and receive
+state `open -> terminal`. `fin -> reset` escalation is allowed; `reset` never
+returns to a graceful state. `Done` is application-level completion, not
+acknowledgement of the FIN or reset (quic-go exposes no such combined signal):
+it closes when send is `fin|reset` and receive is terminal, immediately on
+`Abort`, or on parent-session death. Read EOF, a read reset, or a session error
+marks receive terminal; an ordinary deadline timeout does not. `CloseWrite`
+alone does not mark receive terminal.
+
+Use `writeMu` to serialize `Write` with the graceful-FIN portion of
+`CloseWrite` / `Close`, plus a short `terminalMu` to arbitrate graceful close
+against abort:
+
+1. `Write` holds `writeMu`, verifies send state is `open`, and then writes.
+2. `CloseWrite` takes `writeMu` and then `terminalMu`. If send is `open`, it
+   changes the state to `fin` and calls the underlying QUIC `Close`; if send is
+   already `fin`, it is idempotent; if send is `reset`, it must not call
+   underlying `Close`.
+3. `Abort` never waits for `writeMu`. It takes only `terminalMu`, changes
+   `open|fin -> reset`, and calls `CancelWrite` immediately. This wakes a
+   flow-control-blocked `Write` and safely escalates a previously graceful FIN.
+   It always calls `CancelRead`, so the receive direction becomes terminal.
+4. `Close` first sets an immediate write deadline without either mutex so an
+   early-response request-body writer wakes. It then performs the graceful
+   send close above if the stream was not aborted and cancels only the read
+   direction.
+
+Holding `terminalMu` across the underlying graceful `Close` prevents
+`CancelWrite` from racing it. If graceful close is still waiting for
+`writeMu`, `Abort` can acquire `terminalMu` and cancel the blocked write first.
+Do not use one shared send-side `sync.Once`: it would prevent the required
+`fin -> reset` escalation and can deadlock `Abort` behind a blocked writer.
 
 Normal proxy completion should half-close each direction before final cleanup.
 Cancellation and error paths should call `Abort`. This distinction prevents
@@ -326,9 +384,23 @@ The yamux stream wrapper must provide the same interface. yamux has no public
 per-stream reset, so its `Abort` sends the local FIN and relies on the
 configured five-second `StreamCloseTimeout` for forced cleanup. Its `Done`
 closes when local close and remote EOF are both observed, or when that timeout
-expires.
+expires. Parent-session death overrides the timeout and closes `Done`
+immediately.
 
-All close, `Done`, and capacity-release callbacks must use `sync.Once`.
+Each session adapter owns a mutex-protected registry of every child stream
+wrapper. `OpenStream` and `AcceptStream` register the wrapper before returning
+it. Registration racing session shutdown must either return a registered live
+stream or abort it and return `ErrSessionClosed`; it must never return an
+orphan. On underlying session death, the adapter stores `CloseInfo`, marks the
+session closed, snapshots and clears the registry under its mutex, releases
+the mutex, terminalizes every child, and only then closes `Session.Done`.
+Therefore, once `Session.Done` is observable, every child `Stream.Done` is
+already closed and all leases can release. Ordinary child completion
+unregisters exactly once. Never call child callbacks while holding the
+registry mutex.
+
+All `Done`, unregister, and capacity-release callbacks use their own
+`sync.Once`; terminal send-state arbitration does not.
 
 One lifecycle goroutine per session owns the terminal log/metric emission
 after `Session.Done` closes. It reads `CloseInfo` and classifies the result into
@@ -338,7 +410,8 @@ second session-close record.
 ## 7. QUIC transport
 
 Add a direct dependency on `github.com/quic-go/quic-go` pinned to `v0.60.0`.
-That release requires Go 1.25, which matches this repository's `go.mod`.
+That release requires Go 1.25. This repository pins Go 1.25.12 as the minimum
+patched toolchain and also supports newer maintained Go releases.
 
 This is raw QUIC carrying beamd's existing streams. Do not add `http3`.
 
@@ -351,10 +424,10 @@ This is raw QUIC carrying beamd's existing streams. Do not add `http3`.
   retain its `GetCertificate` callback
 - Client SNI: derive the original hostname from `serverAddr` with
   `net.SplitHostPort` and set `tls.Config.ServerName` explicitly before
-  `quic.DialAddr`; never derive SNI from a resolved UDP address
+  resolving or dialing; never derive SNI from a resolved UDP address
 - Certificate verification: same trust behavior as the existing TLS client
 - `InsecureSkipVerify`: retain for local development only
-- `Allow0RTT`: `false`
+- 0-RTT: disabled (`Allow0RTT: false` on the server; the field is server-only)
 - Datagrams: disabled
 
 Do not add an application protocol version merely because the transport
@@ -378,7 +451,6 @@ InitialConnectionReceiveWindow: 16 << 20
 MaxConnectionReceiveWindow:     64 << 20
 MaxIncomingUniStreams:          -1
 EnableDatagrams:                false
-Allow0RTT:                      false
 DisablePathMTUDiscovery:        false
 ```
 
@@ -386,7 +458,7 @@ Role-specific values:
 
 | Endpoint | `MaxIncomingStreams` | Reason |
 | --- | ---: | --- |
-| Edge | `1` | The agent opens exactly one bidirectional control stream |
+| Edge | `1` | Concurrent credit for the agent's one control stream; defense in depth, not a lifetime stream count |
 | Agent | `64` | The edge opens at most 64 concurrent data streams |
 
 Use `OpenStreamSync` in the QUIC adapter. The adapter derives a five-second
@@ -397,15 +469,31 @@ caller's error unchanged. This distinction lets the reverse proxy recognize a
 disconnected public requester instead of rewriting cancellation as a 502.
 
 The 4 MiB initial per-stream window avoids recreating A1 during QUIC's
-auto-tuning ramp. The 64 MiB connection maximum prevents 64 streams from each
-claiming a 16 MiB connection-level commitment.
+auto-tuning ramp. The 64 MiB value is aggregate connection-level receive
+credit, not a per-stream commitment; it bounds the sum even though individual
+streams may auto-tune as high as 16 MiB.
 
-The agent should dial with `quic.DialAddr` and retain one in-memory
-`quic.NewLRUTokenStore(8, 4)` for the lifetime of the `Client`, so reconnects
-can reuse address-validation tokens. Do not persist client tokens and do not
-use `DialAddrEarly`. `DialAddr` owns its private UDP socket and closes it when
-the returned QUIC connection closes; do not pretend the caller has a separate
-raw socket handle.
+The three- or five-second transport-candidate context starts **before DNS** and
+is reused through DNS resolution, QUIC handshake, control-stream open, and
+`hello_ok`; no stage restarts the timer. Split the original host and port, keep
+the original host in `tls.Config.ServerName`, and resolve it with a
+context-aware `net.Resolver` under that candidate context. For an IP literal,
+skip DNS. Then call `quic.DialAddr` with a numeric `ip:port`, so its internal
+`net.ResolveUDPAddr` performs no DNS. Try resolved addresses in resolver order
+within the one shared budget, closing and joining each failed QUIC connection
+before trying another; only one candidate may send `hello` at a time. Retry
+another resolved address only for address-specific network/socket failure.
+Certificate verification, ALPN/protocol, authentication, and other terminal
+errors stop the address loop immediately. A resolver failure/no-address result
+is `network`; expiration of the candidate context is `timeout`.
+
+Retain one in-memory `quic.NewLRUTokenStore(8, 4)` for the lifetime of the
+`Client`, so reconnects can reuse address-validation tokens keyed by the
+original TLS server name. Do not persist client tokens and do not use
+`DialAddrEarly`. Each `DialAddr` attempt owns its private UDP socket and closes
+it with the returned QUIC connection (or before returning a dial failure);
+tests must prove failed address attempts and canceled candidates leak neither
+sockets nor background authentication.
 
 ### 7.3 Listener and key material
 
@@ -423,6 +511,14 @@ listener and fail startup. Running TCP-only is allowed only through the
 explicit `disable_quic` switch. A fatal error from either accept loop must
 initiate common shutdown rather than leave a half-running edge.
 
+`disable_quic: true` is a hard isolation boundary, not merely "do not enter
+the accept loop." Resolve environment overrides before QUIC-specific
+validation. In disabled mode, do not parse/bind `listen_quic`, load or generate
+QUIC keys, construct a UDP socket or `quic.Transport`, or start any QUIC
+goroutine. TCP readiness must succeed even if the UDP port is occupied or QUIC
+key files are missing or malformed. This property is required for rollback
+and has dedicated startup tests.
+
 Move the current `ready` log out of `cmd/beamd/main.go`. `Edge.Serve` emits it
 only after TCP and enabled UDP listeners are bound, key material is loaded,
 and both accept loops are ready. Include both listen addresses and enabled
@@ -437,7 +533,8 @@ quic-stateless-reset.key
 quic-token-generator.key
 ```
 
-Each is 32 cryptographically random bytes, written atomically. Configure
+When QUIC is enabled, each is 32 cryptographically random bytes, written
+atomically. Configure
 `StatelessResetKey` and `TokenGeneratorKey` from them. A missing key is
 generated; a malformed key is a startup error, not silently replaced.
 
@@ -445,7 +542,15 @@ Accepted QUIC connections, including connections still waiting for a control
 hello, must be tracked explicitly. Closing a `quic.Listener` does not close
 accepted connections.
 
-There are 32 tunnel pre-authentication slots:
+There is a fixed 128-slot raw TCP TLS-handshake gate in front of the per-tunnel
+pool. Acquire it without waiting immediately after TCP `Accept`, before
+starting the handler goroutine, and release it after the bounded TLS handshake
+on every ALPN outcome. If it is full, close the raw connection and increment
+the `tls_handshake` capacity-rejection counter. This gate includes ordinary
+public HTTPS and tunnel clients because ALPN is unknown before the handshake;
+the existing handshake deadline remains required.
+
+There are then 32 tunnel pre-authentication slots:
 
 - For TCP, retain the existing bounded raw TLS handshake first. Clear the raw
   TLS deadline after handshake. Only a connection that negotiated `beam/1`
@@ -477,10 +582,20 @@ The protocol is unchanged:
 6. For each public request, the edge opens a new bidirectional stream, writes
    `<tunnel-name>\n`, and proxies the existing HTTP bytes.
 
-For yamux, run an unexpected-stream guard after accepting the control stream;
-if the agent opens another stream, close the session as a protocol violation.
-QUIC prevents a second agent-opened stream at the transport layer with
-`MaxIncomingStreams: 1`.
+The control stream must remain bidirectionally open for the full session
+lifetime. Any control EOF, reset, read/write error, or heartbeat failure is
+session-terminal: record the cause and begin closing the session before
+gracefully closing the local control send half. This ordering prevents the
+application from intentionally returning QUIC stream credit while the session
+is still usable.
+
+Run the unexpected-agent-stream guard on the edge for **both** adapters after
+accepting the control stream. Any second agent-opened stream is aborted and the
+session closes with `CloseProtocol`. QUIC's `MaxIncomingStreams: 1` limits only
+concurrently open peer streams; it is defense in depth, not a lifetime limit,
+so the guard must cover the control-close/new-stream race. Tests must attempt a
+second stream immediately after control EOF and prove it is never authenticated
+or installed.
 
 ## 8. Tuned TCP/yamux fallback
 
@@ -703,7 +818,8 @@ Add to `Edge`:
 - QUIC UDP connection, transport, and listener
 - QUIC accept-loop wait group
 - a set containing pre-authenticated and authenticated transport sessions
-- pre-authentication and authenticated-session semaphores
+- the fixed raw-TLS-handshake gate plus pre-authentication and
+  authenticated-session semaphores
 - one global active-stream semaphore
 - a set of every accepted raw TCP connection and a TCP-handler wait group
 - an active-proxy wait group and a set of hijacked public connections
@@ -786,14 +902,15 @@ not preallocated resident memory:
   connection flow-control credit.
 - QUIC does not reserve the maximum window at connection creation, and yamux
   buffers grow only as data arrives.
-- The 32 pre-auth sessions, control streams, TLS/TCP/UDP buffers, HTTP buffers,
-  goroutine stacks, traffic/request-log queues, certificate state, and library
-  bookkeeping are additional memory.
+- The bounded 128 raw TLS handshakes, 32 pre-auth sessions, control streams,
+  TLS/TCP/UDP buffers, HTTP buffers, goroutine stacks, traffic/request-log
+  queues, certificate state, and library bookkeeping are additional memory.
 
 The 512 MiB yamux and 512 MiB QUIC figures are separate ceilings and may
 coexist; neither is a total-process-memory promise. Holding leases through
-`Stream.Done`, bounding pre-auth and authenticated sessions, and running with
-the production `GOMEMLIMIT` are all required parts of the resource bound.
+`Stream.Done`, bounding raw handshakes, pre-auth and authenticated sessions,
+and running with the production `GOMEMLIMIT` are all required parts of the
+resource bound.
 
 On the agent, validate the resolved
 `BEAMD_YAMUX_STREAM_WINDOW_BYTES * 64 <= 1073741824` (1 GiB). This allows the
@@ -886,8 +1003,17 @@ MaxPreAuthSessions     int    `yaml:"max_pre_auth_sessions"`
 MaxSessionsTotal       int    `yaml:"max_sessions_total"`
 ```
 
+Server configuration precedence is normative:
+
+```text
+compiled defaults < YAML < present environment override
+```
+
 Initialize defaults before YAML unmarshalling so an omitted boolean retains
-the shipped default while an explicit `false` is honored.
+the shipped default while an explicit YAML `false` is honored. Apply
+environment overrides after YAML and before validation; in particular,
+`BEAMD_DISABLE_QUIC=true` must override `disable_quic: false` so the global
+rollback works. A present-empty or invalid environment override is fatal.
 
 | YAML field | Default |
 | --- | --- |
@@ -898,9 +1024,10 @@ the shipped default while an explicit `false` is honored.
 | `max_pre_auth_sessions` | `32` |
 | `max_sessions_total` | `8` |
 
-Validation:
+Validation after all overrides:
 
-- QUIC address must parse as a UDP listen address.
+- When QUIC is enabled, its address must parse as a UDP listen address. Disabled
+  mode skips this QUIC-only validation as required by Section 7.3.
 - per-session streams must be between `1` and `64`, matching the agent handler
   cap and QUIC incoming-stream credit.
 - global streams must be greater than or equal to per-session streams and no
@@ -930,7 +1057,21 @@ BEAMD_MAX_SESSIONS_TOTAL
 ```
 
 Boolean and integer parse failures must fail startup; do not silently keep a
-default.
+default. Environment changes take effect after an edge restart.
+
+The yamux window and stream-total settings are coupled by the 512 MiB exposure
+limit. Produce an error that names both effective values and the permitted
+maximum. Common compatible ceilings are:
+
+| Yamux window | Maximum `max_streams_total` | Maximum `max_streams_per_session` with the other constraints |
+| ---: | ---: | ---: |
+| 4 MiB (default) | 128 | 64 |
+| 8 MiB | 64 | 64 |
+| 16 MiB | 32 | 32 |
+
+An operator increasing the window to 16 MiB must lower both stream settings;
+the setting remains tunable, but startup must not silently exceed the memory
+budget.
 
 Example production YAML:
 
@@ -1041,13 +1182,27 @@ beam_transport_streams_active{transport="quic|tcp"}
 beam_transport_handshake_errors_total{transport="quic|tcp",reason="timeout|tls|protocol|other"}
 beam_transport_session_closes_total{transport="quic|tcp",reason="normal|shutdown|idle|protocol|network|other"}
 beam_transport_stream_open_errors_total{transport="quic|tcp",reason="timeout|closed|other"}
-beam_transport_capacity_rejections_total{scope="preauth_session|authenticated_session|session_stream|global_stream"}
+beam_transport_capacity_rejections_total{scope="tls_handshake|preauth_session|authenticated_session|session_stream|global_stream"}
 beam_transport_stream_capacity{scope="session|global"}
 beam_yamux_stream_window_bytes
 ```
 
 Labels must come only from the fixed sets above. Do not label by remote
 address, slug, tunnel, raw error, or QUIC connection ID.
+
+Always expose both fixed listener series. TCP is `1` after its listener is
+ready. QUIC is `1` only while its enabled listener is ready and is `0` when
+disabled or down; do not omit the series. `beam_transport_stream_capacity` is
+the configured ceiling (`max_streams_per_session` or `max_streams_total`), not
+remaining slots; subtract the corresponding active gauge when an operator
+needs remaining capacity.
+
+Use `quic.Transport.ConnContext` to observe server-side QUIC attempts that fail
+before `Listener.Accept` can return them. Mark an attempt accepted before
+dispatch; if its context closes first, increment exactly one fixed-category
+handshake error. An accepted connection is accounted through the normal
+pre-auth/session lifecycle and must not also increment a handshake error when
+it later closes.
 
 `beam_transport_sessions_total` increments only after `hello_ok`, when a
 session transitions into the authenticated state. Pre-auth attempts are
@@ -1152,35 +1307,51 @@ Part A must implement:
 Part B must implement:
 
 - server transport/capacity environment overrides and memory-product
-  validation;
+  validation, including conflicting YAML/environment values and present-empty
+  overrides;
 - `max_streams_total=128` is accepted and `129` is rejected;
 - QUIC and yamux adapters satisfy the same session contract;
 - QUIC `Close`, `CloseWrite`, `Abort`, deadlines, and addresses;
+- `CloseWrite -> Abort` escalation, `Abort` before/racing `Close`, `Abort`
+  racing a flow-control-blocked `Write`, repeated concurrent terminal calls
+  under `-race`, and proof that a deadline timeout alone does not close `Done`;
 - normal QUIC `http.Transport` close emits FIN rather than reset, while
   cancellation emits a bidirectional reset;
 - an early backend response with a deliberately blocked request-body writer
   proves QUIC `Close` unblocks and never races an in-flight `Write`;
 - QUIC stream-open timeout normalization;
+- a blocking DNS resolver is bounded by the one full candidate context,
+  numeric dialing retains the original SNI, multiple resolved addresses share
+  one budget, and failed address attempts leak no UDP sockets;
 - caller cancellation propagates unchanged instead of becoming
   `ErrOpenTimeout`;
 - yamux accept cancellation uses `AcceptStreamWithContext` without closing the
   session;
 - candidate failure closes and joins the failed session before fallback;
 - terminal auth/certificate/protocol errors never fall back;
-- `CloseInfo` is stable and the session close metric/log emits exactly once;
+- `CloseInfo` covers local/remote application close, idle timeout, stateless
+  reset, transport/socket error, and yamux local/remote close; simultaneous
+  terminal events are first-wins and the session close metric/log emits once;
 - session/global lease acquisition and exactly-once release;
+- killing a session with idle, active, and prefix-failed child streams closes
+  every child `Done` before `Session.Done` is observable and releases every
+  lease/gauge; race this against both open and accept registration;
 - canceled yamux streams retain their leases through remote EOF or the
   five-second close timeout;
 - capacity errors map to 503 with `Retry-After: 1`;
 - other stream-open errors map to 502;
-- the 33rd pre-auth and ninth authenticated sessions are rejected without
-  leaking slots;
+- the 129th concurrent raw TLS handshake, 33rd pre-auth session, and ninth
+  authenticated session are rejected without leaking slots;
 - readiness is emitted only after all enabled listeners bind;
+- `disable_quic=true` reaches TCP readiness while the UDP port is occupied and
+  while QUIC key files are missing or malformed, without touching those files;
 - an accept result queued during shutdown is closed rather than dispatched;
 - stale route identity is rejected after lease acquisition;
 - prefix length/read/write deadlines and backend-dial timeout are enforced;
 - selected transport appears in daemon health and CLI JSON;
 - protocol version mismatch is rejected on both sides;
+- control EOF/error is session-terminal, and a second agent-opened stream is
+  rejected over both adapters even when raced immediately after control close;
 - fallback reason classification uses only the fixed metric labels;
 - QUIC key files are created atomically, mode 0600, reused, and rejected when
   malformed;
@@ -1245,9 +1416,11 @@ darwin/linux and amd64/arm64 target and execute the npm packaging smoke test.
 
 This section is the deterministic synthetic qualification harness. It runs
 edge and agent inside controlled Linux namespaces; it does not claim to be the
-production link. G1 first proves the original A2 symptom against the real
-edge, and B4.5 separately validates the qualified implementation on the real
-production link before any default flip.
+production link. The accepted G1 run used real beamd edge and agent processes
+inside the controlled topology and proved the corrected mixed-load A2 symptom;
+it disproved the original solo-transfer hypothesis. B4.5 separately validates
+the qualified implementation on the real production link before any default
+flip.
 
 The network impairment must apply only to the agent-to-edge leg. Do not shape
 the public test client's connection to the edge, or the results conflate two
@@ -1271,15 +1444,38 @@ iterations for 36-byte, 253 KiB, 257 KiB, and 1 MiB cases; 20 for 16 MiB; and
 five for 100 MiB.
 
 For every gated case, establish a same-direction, same-payload,
-concurrency-one direct baseline over the same shaped veth: a raw QUIC stream
-for the QUIC case and a raw TCP connection for the yamux/TCP case. The direct
-fixture excludes beamd framing and reverse proxying but retains the same
-crypto, qdisc, endpoints, CPU limits, and direction. Do not compare QUIC
-against a TCP or iperf baseline when measuring protocol overhead.
+concurrency-one direct baseline over the same shaped veth: one raw QUIC stream
+for the QUIC case and one TLS/TCP connection for the yamux/TCP case. Each
+fixture uses one warmed long-lived connection, the same certificate/trust,
+TLS version, QUIC flow-control configuration, qdisc, endpoints, CPU limits,
+and direction as beamd. Establish and warm the connection before measurement;
+handshake/DNS time is recorded separately and excluded from transfer samples.
+The direct fixture excludes only beamd framing, multiplexing, and reverse
+proxying. Do not compare QUIC against a TCP or iperf baseline when measuring
+protocol overhead.
 
 Separately, compare beamd-over-QUIC directly with beamd-over-tuned-yamux on the
-same host, impairment profile, direction, payload, concurrency, and run order.
-This head-to-head comparison decides whether QUIC becomes the default.
+same host, impairment profile, direction, payload, and concurrency. Use at
+least three recorded deterministic netem seeds per gated profile and
+counterbalance transport order (`QUIC,TCP` then `TCP,QUIC`, or equivalent)
+rather than running every sample of one transport first. Summaries aggregate
+the same seed/order blocks. This head-to-head comparison decides whether QUIC
+becomes the default.
+
+Freeze the primary mixed-load workload rather than inheriting mutable script
+defaults:
+
+- one warmed tunnel session for each transport/profile/direction;
+- six continuous concurrent 8 MiB bulk streams on that same tunnel;
+- a five-second bulk ramp before interactive measurement;
+- sequential 4 KiB and 65 KiB interactive requests, eight warm-ups and at
+  least 50 measured samples per condition;
+- `condition=baseline|underload` recorded separately from
+  `transport=tcp|quic`;
+- baseline and under-load cases for download and upload separately, with the
+  interactive and bulk traffic moving in the gated direction;
+- zero request errors, corruption, timeouts, or missing cases, enforced by a
+  fail-closed analyzer.
 
 Performance gates:
 
@@ -1303,22 +1499,28 @@ Performance gates:
 - Head-to-head clean-path gate: QUIC may not regress tuned-yamux median
   throughput or p95 completion time by more than 10% for any gated size or
   direction.
-- Head-to-head A2 gate (primary — the problem QUIC is built to fix): on at least
-  one lossy profile, QUIC must cut the interactive-latency-under-load p95 (the
-  `scripts/perf-hol.sh` mixed-load test — a small request measured while
-  concurrent bulk shares the tunnel) by at least 50% versus tuned-yamux, and must
-  not regress the clean-path interactive-under-load p95 by more than 10%.
+- Head-to-head A2 gate (primary — the problem QUIC is built to fix): for every
+  lossy profile/direction where tuned yamux reproduces the defect (interactive
+  4 KiB under-load p95 is at least 3x baseline and at least one second), QUIC
+  must cut that under-load p95 by at least 50%. At least one lossy profile must
+  qualify in each direction or the result is inconclusive, not a pass. QUIC
+  must not regress any other lossy profile's under-load p95, or the clean-path
+  interactive-under-load p95, by more than 10%.
 - Head-to-head A2 gate (secondary guardrails): QUIC must not regress solo
   small-response p95 or solo large-transfer throughput by more than 10% — these
   were already healthy on tuned-yamux, so they are guardrails, not the target.
-- The QUIC small-response distribution must not retain the tuned-TCP
-  1/2/4-second timeout ladder.
+- The QUIC small-response distribution must not introduce a recurring
+  1/2/4-second or other timer-backoff ladder. Tuned TCP did not reproduce the
+  originally alleged ladder, so this is a guardrail rather than an expected
+  before/after win.
 - All functional sizes, directions, and concurrency cases: zero corruption
   and zero hangs.
 
 Store raw JSON and a summary beside metadata containing the beamd commit,
 Go/quic-go/yamux versions, kernel and OS, CPU/RAM/container limits, interface
-offload state, exact `tc qdisc` output, and effective beamd configuration.
+offload state, exact `tc qdisc` output, effective beamd configuration, direct
+fixture settings, frozen workload values, netem seeds, transport order, and
+whether handshake time was included (it must be `false` for transfer gates).
 
 The netem suite is a manual or scheduled privileged job, not a required
 unprivileged pull-request job. Passing it is necessary but not sufficient for
@@ -1356,18 +1558,22 @@ measurement gate before starting any Part B implementation.
 - [x] **A1.7 — Verify the repository.** Run `go test ./...`, the relevant race
   tests, `go vet ./...`, existing end-to-end tests, and the npm packaging smoke
   test.
-- [ ] **A1.8 — Release independently.** Deploy the edge first, confirm its
-  effective-window log, release/reload the agent, confirm its log, validate a
-  16 MiB upload and download, and observe process memory. Record the release
-  commit and results under `test/perf/results/`.
+- [x] **A1.8 — Release independently.** Commit `f901bb5` was deployed edge-first
+  and is live on staging, OSS, and production edges plus the agent. The operator
+  accepted the release as complete on 2026-07-25 after the observed
+  responsiveness improvement. A dedicated artifact containing both 16 MiB
+  directions and memory observation was not captured; that historical evidence
+  gap is recorded and is not a Part B prerequisite because B4 repeats the
+  stricter bidirectional and memory validation before any default flip.
 
 Part A is complete after A1.1–A1.8. The measurement gate below is a separate
 decision task, not part of A1 completion.
 
 ### Measurement gate — prove A2 before Part B
 
-> **Status (2026-07-24): GO — Part B justified, pending operator greenlight.**
-> Two measured axes (real beamd edge + shaped agent; fail-closed analyzers):
+> **Status (2026-07-25): GO — Part B implementation operator-approved,
+> default-off.** Two measured axes (real beamd edge + shaped agent; complete
+> committed cases with zero errors/corruption):
 > **(1) bulk throughput** shows no A2 penalty (solo ~97% of 8-stream aggregate,
 > no timeout ladder) — `g1-local-2026-07-24/`; **(2) interactive latency under
 > mixed load** is SEVERELY degraded — a 4 KB request inflates 10× (clean) to
@@ -1375,29 +1581,39 @@ decision task, not part of A1 completion.
 > connection (`hol-2026-07-24/`). That is the shared-connection head-of-line
 > problem QUIC fixes (§2). Full decision + caveats (QUIC fix expected but B4
 > must confirm before the default flip; load-dependent; controlled reproduction):
-> `test/perf/results/decision-2026-07-24-g1.md`. G1 checkboxes stay unchecked
-> pending a remote-edge confirmation; the GO is based on the local reproduction.
+> `test/perf/results/decision-2026-07-24-g1.md`. The controlled reproduction is
+> accepted as the implementation gate. Remote-edge confirmation remains
+> optional rigor; B4.5 is the required production-link gate for changing
+> defaults.
 
-- [ ] **G1.1 — Establish the tuned-TCP baseline.** Verify A1 is live on both
-  receivers and record the effective window, commit, host, OS, Go/yamux
-  versions, CPU/memory limits, and impairment settings.
-- [ ] **G1.2 — Exercise the small-response signature.** On the real tunnel,
-  run at least 100 measured 36-byte responses and 50 measured 253 KiB
-  responses under clean and lossy/high-RTT conditions, first sequentially at
-  concurrency one and then at concurrency eight.
-- [ ] **G1.3 — Exercise large solo transfers.** Measure 16 MiB and 100 MiB
-  uploads and downloads at concurrency one and eight, with checksum
-  verification. (Control — this proved negative; keep it as a guardrail.)
-- [ ] **G1.3b — Exercise the mixed-load head-of-line signature (PRIMARY).**
+- [x] **G1.1 — Establish the tuned-TCP baseline.** Ran real A1 beamd edge and
+  agent processes with impairment applied before dial and recorded the qdiscs
+  and topology under `g1-local-2026-07-24/`. The binary did not expose its
+  commit (`beamd: n/a`), so the decision record supplies `f901bb5`; B4 must
+  satisfy the complete metadata contract in Section 15.3.
+- [x] **G1.2 — Exercise the solo small-response control.** Measured 36-byte and
+  253 KiB sequential/concurrent downloads across clean, lossy, and high-RTT
+  loss. Clean/lossy used 100/50 samples; the expensive high-RTT profile used
+  60/20. The alleged solo timeout-collapse signal was negative.
+- [x] **G1.3 — Exercise the large-transfer control.** Measured concurrency-one
+  versus eight with checksums using 8 MiB on clean/lossy and 512 KiB on the
+  severely throughput-limited high-RTT-loss profile. Solo throughput remained
+  ~97% of aggregate under loss. This reduced download control disproved the
+  original hypothesis; the comprehensive 16/100 MiB bidirectional matrix is a
+  B4 guardrail, not a reason to delay implementation.
+- [x] **G1.3b — Exercise the mixed-load head-of-line signature (PRIMARY).**
   Saturate the tunnel with several concurrent bulk downloads (many visitors) and,
   on the same tunnel, measure a small interactive request's latency ALONE vs
   UNDER that load, across clean/wifi/mobile/bursty-loss profiles
   (`scripts/perf-hol.sh`). Interactive tail latency inflating under load —
-  worst with loss — is the defect QUIC targets and the signal that decides G1.
-- [ ] **G1.4 — Record comparable statistics.** Capture p50, p95, p99, maximum,
-  throughput, errors, and the raw timing sequence. Explicitly note any
-  approximately 1/2/4-second timeout ladder.
-- [ ] **G1.5 — Make and record the decision.** Part B is justified when a
+  worst with loss — is the defect QUIC targets and the signal that decided G1.
+  The completed run recorded all 16 planned profile/condition/size cases with
+  50 samples and zero errors.
+- [x] **G1.4 — Record comparable statistics.** Saved raw JSON, p50/p95/p99,
+  maximum, throughput, errors, qdisc state, and analyses under
+  `test/perf/results/{g1-local,hol}-2026-07-24/`. Explicitly recorded that the
+  approximately 1/2/4-second timeout ladder did not reproduce.
+- [x] **G1.5 — Make and record the decision.** Part B is justified when a
   repeatable transport defect remains after A1. The **primary** signal (the one
   that actually fired, 2026-07-24) is interactive latency under mixed load: a
   small request's p95 inflating severely (≥3x, into seconds) when concurrent
@@ -1407,55 +1623,59 @@ decision task, not part of A1 completion.
   large-transfer throughput below 70% of the eight-stream aggregate — are
   supporting evidence but are NOT sufficient on their own: all three came back
   negative here while the head-of-line penalty was severe. Save raw results and
-  a dated go/no-go under `test/perf/results/`.
-- [ ] **G1.6 — Stop when A2 is not proven.** If the gate does not justify Part
-  B, mark B1–B4 “not currently justified” in the decision record and make no
-  QUIC changes.
+  a dated go/no-go under `test/perf/results/`. The dated GO was recorded on
+  2026-07-24 and operator-approved on 2026-07-25.
+- [x] **G1.6 — Apply the stop condition.** Not triggered: G1.3b proved a severe
+  repeatable defect, so the recorded decision authorizes B1–B4 with QUIC
+  default-off and preserves B4 as the default-flip gate.
 
 ### Part B, Change 1 — abstraction and generic-session guardrails
 
-- [ ] **B1.1 — Add `internal/tunnel`.** Implement the interfaces, normalized
+- [x] **B1.1 — Add `internal/tunnel`.** Implement the interfaces, normalized
   errors, close information, and yamux adapter from Section 6.
-- [ ] **B1.2 — Move callers behind the abstraction.** Remove concrete yamux
+- [x] **B1.2 — Move callers behind the abstraction.** Remove concrete yamux
   types from client and edge code while keeping production forced to TCP.
-- [ ] **B1.3 — Add the Part B yamux hardening.** Implement Section 8.2,
+- [x] **B1.3 — Add the Part B yamux hardening.** Implement Section 8.2,
   including bounded open/accept behavior and lifecycle-safe stream cleanup.
-- [ ] **B1.4 — Add resource admission.** Implement session/global leases,
-  pre-auth/authenticated session limits, stale-route checks, exact release
+- [x] **B1.4 — Add resource admission.** Implement session/global leases,
+  the fixed raw-TLS-handshake gate, pre-auth/authenticated session limits,
+  stale-route checks, session-child lifecycle ordering, exact release
   semantics, and memory-product validation from Section 10.
-- [ ] **B1.5 — Prove no behavioral change.** Pass the existing functional,
-  cancellation, shutdown, capacity, race, and TCP performance tests before
-  adding QUIC.
+- [x] **B1.5 — Prove no behavioral change.** Pass the existing functional,
+  cancellation, shutdown, capacity, race, and TCP performance tests with the
+  abstraction in place; retain G1 as the pre-QUIC TCP performance baseline.
 
 ### Part B, Change 2 — QUIC engine, default off
 
-- [ ] **B2.1 — Add and pin quic-go.** Add `github.com/quic-go/quic-go`
+- [x] **B2.1 — Add and pin quic-go.** Add `github.com/quic-go/quic-go`
   `v0.60.0` and record the Go-version requirement.
-- [ ] **B2.2 — Implement QUIC transport.** Complete the listener, dialer,
-  stream adapter, TLS/ALPN, flow control, key persistence, and lifecycle
-  requirements in Sections 6 and 7.
-- [ ] **B2.3 — Add dual-transport tests.** Run the shared session contract and
+- [x] **B2.2 — Implement QUIC transport.** Complete the listener, dialer,
+  context-bounded DNS/numeric dialing, abort-escalatable stream adapter,
+  control-stream invariant, TLS/ALPN, flow control, key persistence, and
+  lifecycle requirements in Sections 6 and 7.
+- [x] **B2.3 — Add dual-transport tests.** Run the shared session contract and
   full HTTP/streaming/WebSocket/reconnect/cancellation suite over forced QUIC
   and forced TCP.
-- [ ] **B2.4 — Keep QUIC unreachable by default.** Ship the edge with
+- [x] **B2.4 — Keep QUIC unreachable by default.** Ship the edge with
   `disable_quic: true` and the agent with `transport: tcp`; use forced QUIC
   only in tests and explicit `beamd check` qualification.
 
 ### Part B, Change 3 — selection, flags, diagnostics, and rollback
 
-- [ ] **B3.1 — Implement transport modes.** Add `tcp`, `auto`, and `quic`
+- [x] **B3.1 — Implement transport modes.** Add `tcp`, `auto`, and `quic`
   selection with the exact fallback classification, cleanup, reconnect, and
   re-probe behavior in Section 9.
-- [ ] **B3.2 — Implement the two rollback controls.**
+- [x] **B3.2 — Implement the two rollback controls.**
   `BEAMD_DISABLE_QUIC=true` plus an edge restart is the global kill switch;
   `BEAMD_TRANSPORT=tcp` plus `beamd reload` is the local-agent override.
-- [ ] **B3.3 — Make `auto` the only production pilot mode.** It must prefer
+  Prove the edge kill switch bypasses all UDP/key initialization.
+- [x] **B3.3 — Make `auto` the only production pilot mode.** It must prefer
   QUIC and fall back to tuned TCP. Forced `quic` remains diagnostic and must
   never silently fall back.
-- [ ] **B3.4 — Add diagnostics.** Implement `check`, `status`, health fields,
+- [x] **B3.4 — Add diagnostics.** Implement `check`, `status`, health fields,
   fixed-label metrics, structured logs, selected-transport reporting, and
   protocol-version enforcement.
-- [ ] **B3.5 — Rehearse rollback.** With an established `auto` agent, enable
+- [x] **B3.5 — Rehearse rollback.** With an established `auto` agent, enable
   the edge kill switch and restart the edge; verify the agent reconnects over
   TCP without changing its configuration. Separately verify the local
   `BEAMD_TRANSPORT=tcp` override.
@@ -1465,16 +1685,18 @@ decision task, not part of A1 completion.
 - [ ] **B4.1 — Prepare production networking.** Publish UDP 443, update
   Docker/firewall configuration, persist required UDP sysctls, and document
   memory and macOS socket-buffer guidance.
-- [ ] **B4.2 — Build the qualification harness.** Implement Section 15.3 and
-  store raw JSON plus environment metadata under `test/perf/results/`.
-- [ ] **B4.3 — Pass functional qualification.** Complete the Section 15.2
+- [x] **B4.2 — Build the qualification harness.** Implement Section 15.3 and
+  its fail-closed validation, frozen mixed-load workload, direct baselines,
+  counterbalanced transport order, and complete metadata under
+  `test/perf/results/`.
+- [x] **B4.3 — Pass functional qualification.** Complete the Section 15.2
   matrix over both transports with zero corruption, hangs, or semantic
   regressions.
 - [ ] **B4.4 — Pass synthetic protocol and head-to-head performance gates.**
   In the deterministic Section 15.3 harness, QUIC must pass its direct baseline
   gates, stay within the clean-path regression budget, materially beat tuned
-  yamux on a profile that reproduces A2, and eliminate the tuned-TCP timeout
-  ladder.
+  yamux on every qualifying A2 profile/direction, and introduce no recurring
+  timer-backoff ladder.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   default agent mode unchanged, explicitly opt the production agent into
   `auto`, validate both directions/WebSockets/reconnect over the real
@@ -1483,10 +1705,17 @@ decision task, not part of A1 completion.
   to `auto` and edge default to `disable_quic: false`, while permanently
   retaining both rollback controls and the tuned TCP path.
 
-Do not begin B1 without a recorded G1 go decision. Do not execute B4.6 until
-B1–B4.5, the functional and performance gates, and the rollback rehearsal all
-pass. After B4.6, complete the final production validation and Definition of
-Done.
+> **Implementation status:** B1–B3 and the B4 qualification code/functional
+> matrix are complete. The shipped defaults intentionally remain TCP with the
+> QUIC listener disabled. B4.1 and B4.4–B4.6 are operational rollout gates:
+> apply production-host UDP/firewall/sysctl changes, run and retain the
+> privileged netem qualification, complete the real-link `auto` pilot, and
+> only then flip defaults.
+
+The recorded and operator-approved G1 GO satisfies the prerequisite to begin
+B1. Do not execute B4.6 until B1–B4.5, the functional and performance gates,
+and the rollback rehearsal all pass. After B4.6, complete the final production
+validation and Definition of Done.
 
 ## 17. Production host requirements
 
@@ -1535,7 +1764,8 @@ Alert or investigate when:
 
 - process RSS remains above 1.5 GiB;
 - any capacity rejection occurs during normal single-user work;
-- the agent unexpectedly selects TCP;
+- after `auto` is enabled for the pilot or becomes the default, the agent
+  unexpectedly selects TCP;
 - QUIC stream-open errors persist for more than five minutes;
 - reconnects repeat without a stable session.
 
@@ -1568,21 +1798,25 @@ Because there is one user, use a coordinated flag-day deployment:
 3. Apply the UDP sysctls.
 4. Stop the local agent.
 5. Install or stage the matching local `beamd` binary/npm release.
-6. Deploy the new edge.
+6. Deploy the new edge with its initial `BEAMD_DISABLE_QUIC=true` default.
 7. Run the staged matching binary's `beamd check --transport tcp` against the
    new edge.
-8. Run `beamd check --transport quic`.
-9. Start/reload the agent in `auto` mode.
-10. Confirm `beamd status` reports `transport: quic`.
-11. Validate a 16 MiB download, a 16 MiB upload, a WebSocket, and reconnect.
-12. Watch transport metrics and memory for at least ten minutes.
+8. Set `BEAMD_DISABLE_QUIC=false` (or `disable_quic: false`) and restart the
+   edge. Confirm readiness lists both transports and
+   `beam_transport_listener_up{transport="quic"} 1` when metrics are enabled.
+9. Run `beamd check --transport quic`.
+10. Start/reload the agent in `auto` mode.
+11. Confirm `beamd status` reports `transport: quic`.
+12. Validate a 16 MiB download, a 16 MiB upload, a WebSocket, and reconnect.
+13. Watch transport metrics and memory for at least ten minutes.
 
 If QUIC validation fails but TCP works, set `BEAMD_DISABLE_QUIC=true` on the
-edge and restart the edge. An agent in `auto` must reconnect over TCP without
-an agent configuration change. If the edge cannot be changed immediately, or
-to isolate an agent-side problem, set `BEAMD_TRANSPORT=tcp` for the agent and
-run `beamd reload`. Either control independently restores the old data path;
-using both is optional.
+edge and restart the edge. Confirm the readiness record lists TCP only and the
+fixed QUIC listener gauge is `0`; the restart must not read QUIC keys or touch
+UDP. An agent in `auto` must reconnect over TCP without an agent configuration
+change. If the edge cannot be changed immediately, or to isolate an agent-side
+problem, set `BEAMD_TRANSPORT=tcp` for the agent and run `beamd reload`. Either
+control independently restores the old data path; using both is optional.
 
 If correctness fails on both transports, roll back the edge image/binary and
 the local binary to the previous tag. Roll back both sides together; do not add
@@ -1592,39 +1826,42 @@ mixed-version compatibility code solely for rollback.
 
 **Part A is done when:**
 
-- [ ] every A1 checklist item is complete;
-- [ ] an absent `BEAMD_YAMUX_STREAM_WINDOW_BYTES` produces an effective
+- [x] every A1 checklist item is complete;
+- [x] an absent `BEAMD_YAMUX_STREAM_WINDOW_BYTES` produces an effective
   4 MiB window on edge and agent;
-- [ ] every accepted and rejected environment value behaves as specified;
-- [ ] the edge controls downloads and the agent controls uploads, verified
+- [x] every accepted and rejected environment value behaves as specified;
+- [x] the edge controls downloads and the agent controls uploads, verified
   with asymmetric values and checksums;
-- [ ] no unrelated yamux setting or Part B architecture changed;
-- [ ] startup logs expose the effective value and repository/e2e/package tests
+- [x] no unrelated yamux setting or Part B architecture changed;
+- [x] startup logs expose the effective value and repository/e2e/package tests
   pass;
-- [ ] the edge-first and agent-reload production validation succeeds.
+- [x] the edge-first rollout and agent reload succeeded; the operator accepted
+  the missing dedicated 16 MiB/memory artifact as historical evidence debt,
+  with the stricter validation retained in B4.
 
 The G1 measurement is deliberately separate. A1 may be complete and released
 even if G1 concludes that Part B is unnecessary.
 
 **Part B is complete only when:**
 
-- [ ] a recorded G1 result justifies Part B;
+- [x] a recorded, operator-approved G1 result justifies Part B;
 - [ ] every B1–B4 checklist item is complete;
-- [ ] neither `internal/client` nor `internal/edge` imports yamux or quic-go
+- [x] neither `internal/client` nor `internal/edge` imports yamux or quic-go
   directly;
-- [ ] the npm shim remains a launcher and contains no transport code;
+- [x] the npm shim remains a launcher and contains no transport code;
 - [ ] UDP 443 QUIC is the default selected production path;
-- [ ] both the edge-wide and agent-local rollback controls are rehearsed;
-- [ ] TCP/yamux fallback has a verified 4 MiB default window;
-- [ ] all HTTP, streaming, WebSocket, reconnect, cancellation, and shutdown tests
+- [x] both the edge-wide and agent-local rollback controls are rehearsed;
+- [x] TCP/yamux fallback has a verified 4 MiB default window;
+- [x] all HTTP, streaming, WebSocket, reconnect, cancellation, and shutdown tests
   pass over both transports;
-- [ ] stream and memory limits are enforced and observable;
-- [ ] `beamd check` can force either transport;
-- [ ] `beamd status` reports the active transport;
+- [x] raw-handshake, session, stream, and memory limits are enforced and
+  observable;
+- [x] `beamd check` can force either transport;
+- [x] `beamd status` reports the active transport;
 - [ ] Docker and host configuration expose/tune UDP;
 - [ ] unit, race, vet, e2e, and netem qualification pass;
-- [ ] QUIC stays within the clean-path regression budget and materially beats
-  tuned yamux on a profile that reproduces A2;
+- [ ] QUIC stays within every regression budget and materially beats tuned
+  yamux on every qualifying lossy profile/direction that reproduces A2;
 - [ ] production validation shows no 256 KiB/RTT throughput plateau and no
   concurrency-dependent tail collapse on the QUIC path.
 

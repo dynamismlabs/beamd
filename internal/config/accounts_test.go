@@ -16,7 +16,13 @@ func withHome(t *testing.T) string {
 
 func TestAccountRoundTrip(t *testing.T) {
 	withHome(t)
-	a := &Account{Server: "edge.example.com:443", Token: "tok", Kind: "session", DefaultScope: "acme"}
+	a := &Account{
+		Server:       "edge.example.com:443",
+		Token:        "tok",
+		Transport:    TransportAuto,
+		Kind:         "session",
+		DefaultScope: "acme",
+	}
 	if err := SaveAccount(a); err != nil {
 		t.Fatalf("SaveAccount: %v", err)
 	}
@@ -27,12 +33,13 @@ func TestAccountRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAccount: %v", err)
 	}
-	if got.Server != a.Server || got.Token != a.Token || got.Kind != "session" || got.DefaultScope != "acme" {
+	if got.Server != a.Server || got.Token != a.Token || got.Transport != TransportAuto ||
+		got.Kind != "session" || got.DefaultScope != "acme" {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 	// Client() projects just the connection credential.
 	c := got.Client()
-	if c.Server != a.Server || c.Token != a.Token {
+	if c.Server != a.Server || c.Token != a.Token || c.Transport != TransportAuto {
 		t.Errorf("Client() = %+v", c)
 	}
 	accts, err := ListAccounts()

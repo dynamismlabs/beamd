@@ -61,6 +61,39 @@ It cleans up after itself (kills the test app, unexposes the tunnel).
 
 ---
 
+## 1b. Validate both tunnel transports
+
+For a Part B build, repeat the functional smoke over each forced transport
+before tagging:
+
+```text
+beamd check --transport tcp
+BEAMD_TRANSPORT=tcp beamd open 3000 --as transport-smoke
+
+beamd check --transport quic
+BEAMD_TRANSPORT=quic beamd open 3000 --as transport-smoke
+```
+
+For each path, validate a small request, 16 MiB upload and download with
+checksums, streaming/SSE, a bidirectional WebSocket, cancellation, agent
+reconnect, and edge restart. `auto` must select QUIC when UDP works and fall
+back to TCP when UDP is deliberately dropped. Forced `quic` must fail clearly
+when UDP is dropped; forced `tcp` must never open UDP.
+
+The privileged synthetic gate is separate:
+
+```text
+scripts/perf-netem.sh build
+sudo -E scripts/perf-netem.sh run
+```
+
+Do not tag a release that flips the defaults unless its complete
+`test/perf/results/b4-*` evidence passes and the production-link `auto` pilot
+and both rollback controls were rehearsed. A smoke-mode harness run is never
+qualification evidence.
+
+---
+
 ## 2. Tag v0.1.0
 
 Once the smoke test passes against your real deployment:
@@ -101,7 +134,8 @@ Standard "Keep a Changelog" format. Start with:
 First usable release.
 
 ### Added
-- TLS+yamux multiplexed tunnel; one client connection carries many tunnels.
+- QUIC tunnel transport with tuned TLS/yamux fallback; one session carries
+  many independent request streams.
 - NDJSON control protocol on a dedicated stream (hello, register,
   unregister, heartbeat, error).
 - Per-developer wildcard certs via Let's Encrypt (DNS-01 over the libdns

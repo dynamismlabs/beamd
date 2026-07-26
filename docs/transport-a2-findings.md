@@ -1,7 +1,9 @@
 # Transport A2 — findings, research, and Part B handoff
 
 **Date:** 2026-07-24 → 25
-**Status:** **GO** — build Part B (QUIC) behind a default-off flag. A1 shipped.
+**Status:** **APPROVED / GO** — the operator approved implementing Part B
+(QUIC) behind a default-off flag. A1 shipped. The later default flip remains
+gated on B4 qualification and the production-link pilot.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
 
@@ -23,9 +25,10 @@
   (queued in the send buffer even with no loss; blocked behind a lost packet's
   retransmit with loss). Measured: a 4 KiB request inflates **10× (clean) to 38×
   (bursty loss)** under bulk load, reaching **1.7–7.7 s** on wifi/mobile.
-- **That justifies QUIC** (independent per-stream delivery). Build Part B behind
-  a default-off flag; the B4 qualification must prove QUIC collapses the
-  under-load interactive tail before the default is flipped.
+- **That justifies QUIC** (independent per-stream delivery). The operator
+  approved building Part B behind a default-off flag; the B4 qualification must
+  prove QUIC collapses the under-load interactive tail before the default is
+  flipped.
 - **Prior art confirms the direction:** OpenZiti (which powers zrok) hit the same
   wall and built its own UDP transport (westworld3 / dilithium / "Transwarp").
   beamd uses off-the-shelf `quic-go` instead of rolling its own.
@@ -97,36 +100,36 @@ the A2 truth. The solo-throughput checks are guardrails only.
 
 ---
 
-## 4. Research / prior art — how zrok (OpenZiti) handles this
+## 4. Research / prior art — related OpenZiti work behind zrok
 
 zrok is built on **OpenZiti**, a mesh-fabric overlay (routers + links +
 circuits), not a single agent↔edge tunnel. Ziti does its own end-to-end flow
-control at the "xgress" layer, and a link's common/default transport is
-**TLS-over-TCP** — so circuits sharing a link face the *same* TCP head-of-line
-problem. Ziti even ships both `xgress_transport` (TCP) and `xgress_transport_udp`.
+control at the "xgress" layer and supports TLS-over-TCP paths, where circuits
+sharing a link face the *same* TCP head-of-line problem. Ziti also ships
+`xgress_transport` (TCP) and `xgress_transport_udp`.
 
-**Their fix validates ours:** OpenZiti built **dilithium**, a Go framework
+**The relevant prior art points in the same direction:** OpenZiti built
+**dilithium**, a Go framework
 implementing the **westworld3** protocol — "high-performance WAN protocols over
 UDP datagrams… reliable streaming on top of message-oriented infrastructures" —
-integrated into Ziti as **"Transwarp."** In plain terms, they wrote their *own
-QUIC* to escape TCP-over-a-shared-link. Their own flow-control tuning explicitly
-benchmarks against "a straight dilithium tunnel" as the target to beat.
+integrated into Ziti as **"Transwarp."** It is a custom reliable UDP transport
+with QUIC-like properties relevant to this problem; it is not QUIC. Their own
+flow-control tuning explicitly benchmarks against "a straight dilithium tunnel"
+as the target to beat.
 
 Implications for beamd:
-1. **Direction validated** — the leading comparable project independently
-   concluded the fix is multiplexed reliability over UDP (= QUIC).
+1. **Direction supported** — a leading comparable project independently built
+   reliable streaming over UDP to avoid limitations of shared TCP paths.
 2. **Use `quic-go`, don't roll our own.** Ziti spent years on westworld/dilithium;
    off-the-shelf QUIC is the pragmatic version.
-3. **beamd is *more* exposed, not less.** Ziti's mesh can spread circuits across
-   multiple links; beamd funnels one app's traffic through *one* tunnel
-   connection — it concentrates the HoL problem Ziti partly diffuses.
-4. **Rollout model matches** — Ziti keeps TLS/TCP as default and offers the UDP
-   transport as an opt-in upgrade, mirroring "QUIC behind a default-off flag,
-   prove it, then flip."
+3. **beamd concentrates the risk.** beamd funnels one app's traffic through one
+   tunnel connection, so all of that app's streams share the same TCP ordering
+   domain.
 
-Confidence: high on the above; not verified is the *exact current* default
-transport in zrok specifically, or precisely how Ziti schedules circuits on a
-shared link to mitigate HoL at the fabric layer (would need a source dive).
+These sources do **not** establish zrok's exact current default transport or
+rollout policy, so no claim about zrok matching beamd's default-off rollout is
+made here. Precisely how Ziti schedules circuits across shared links would also
+require a deeper source dive.
 
 Sources:
 - OpenZiti Transwarp design doc (westworld3/dilithium):
@@ -140,23 +143,31 @@ Sources:
 
 ## 5. Methodology & what to trust
 
-The measurement rig is trustworthy because it was corrected after a code review
-caught two real bugs (see the git history and `decision-2026-07-24-g1.md`):
+The recorded measurements are usable, with an analyzer-hardening caveat (see the
+git history and `decision-2026-07-24-g1.md`):
 
 - **Shape before dial.** An earlier synthetic harness applied `netem` *after* the
   TCP/yamux connection established, which pre-trained TCP on a clean path and
   manufactured retransmissions. The current harness shapes **before** the agent
   dials.
-- **Fail-closed analyzer.** `test/perf/analyze.py` returns INCONCLUSIVE + nonzero
-  exit on missing cases, too few samples, or any errors/corruption, and a
-  **clean-control guard** invalidates any result where A2 fires with no loss
-  (i.e. it would have caught the shape-after-connect artifact).
+- **Committed evidence is complete and clean.** The recorded Axis 1 and Axis 2
+  datasets contain their planned profiles/cases and sample counts, with zero
+  transport errors and zero checksum corruption. The committed conclusions can
+  be reproduced from their raw JSON and analysis output.
+- **Fail-closed analyzers.** `test/perf/analyze.py` enforces the Axis 1 gate.
+  `test/perf/hol_analyze.py` was hardened on 2026-07-25 to reject missing or
+  duplicate cases, insufficient samples, malformed records, errors, corruption,
+  and invalid statistics with a nonzero inconclusive result. It retains
+  compatibility with the committed legacy Axis 2 JSON while requiring the
+  separate `transport` and `condition` fields for new runs.
 - **Real beamd processes**, real edge + real agent, separate containers.
 
 Caveats (carry these into B4):
 - **Controlled reproduction, not the production WAN.** Mechanism is faithful; a
-  real WAN would be similar or worse. An optional remote-edge confirmation
-  (`scripts/perf-g1.sh` against a real remote edge) is not yet run.
+  real WAN would be similar or worse. A remote-edge G1 confirmation
+  (`scripts/perf-g1.sh` against a real remote edge) is optional additional rigor,
+  not a prerequisite for the approved default-off implementation. The B4
+  production-link pilot remains required before the default flip.
 - **Load-dependent.** 6 concurrent bulk streams = "busy, not extreme"; the effect
   is smaller under lighter load but present whenever bulk shares the tunnel.
 - **A1 interaction.** Part of the *no-loss* 10× is send-side queuing that A1's
@@ -175,11 +186,14 @@ Caveats (carry these into B4):
   `test/perf/perfserver`, `perfclient`, `analyze.py`, `hol_analyze.py`).
 - Gate run + evidence (`test/perf/results/{g1-local,hol}-2026-07-24/`).
 - Decision record + corrected spec.
+- Operator approval to implement Part B with QUIC default-off; B4 still gates
+  changing the default.
 
 **Pending / optional:**
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
-- Remote-edge G1 confirmation (optional rigor).
+- Remote-edge G1 confirmation (optional additional rigor; not an implementation
+  prerequisite).
 - Buffer/prioritization experiment for the no-loss case (optional).
 - Housekeeping: a crashed `perf-edge` container + `/root/perf-edge/` remain on
   the OSS box (104.248.61.150); remove when its SSH allows.
@@ -187,6 +201,9 @@ Caveats (carry these into B4):
 ---
 
 ## 7. Part B execution handoff
+
+Implementation is approved. QUIC must remain default-off until the B4
+qualification and production-link pilot pass.
 
 Follow `docs/transport-performance-spec.md` §16 **Part B, Changes 1–4**, in order:
 
@@ -198,11 +215,14 @@ Follow `docs/transport-performance-spec.md` §16 **Part B, Changes 1–4**, in o
 3. **Change 3 — selection/flags/diagnostics.** `transport: tcp|quic|auto`
    (default `tcp`), fallback, health/metrics/logs.
 4. **Change 4 — deploy + B4 qualification + default flip.**
-   - **The gate that matters:** re-run `scripts/perf-hol.sh` over QUIC vs
-     tuned-yamux. QUIC must cut the **interactive-latency-under-load p95 by
-     ≥ 50%** on a lossy profile, without regressing the clean path or solo
+   - **The gate that matters:** extend the frozen `scripts/perf-hol.sh`
+     workload into the full bidirectional B4 comparator from §15.3, preserving
+     separate TCP and QUIC evidence. QUIC must cut the
+     **interactive-latency-under-load p95 by ≥ 50%** on every qualifying lossy
+     profile/direction, without regressing the clean path or solo
      guardrails. Only then flip the default to `auto`/QUIC.
    - Do **not** flip the default on solo-throughput metrics — those were already
      healthy and are guardrails, not the target.
 
-Reuse the committed harness for B4; it already measures the right thing.
+Reuse its frozen mixed-load scenario and perf fixtures for B4, but implement
+the complete comparator and fail-closed gates required by §15.3.

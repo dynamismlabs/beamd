@@ -33,6 +33,12 @@ func TestRoundTripHello(t *testing.T) {
 	}
 }
 
+func TestBadVersionCode(t *testing.T) {
+	if CodeBadVersion != "bad_version" {
+		t.Fatalf("CodeBadVersion = %q, want bad_version", CodeBadVersion)
+	}
+}
+
 func TestMultipleMessages(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, &Register{Type: TypeRegister, Name: "api", Port: 3001}); err != nil {

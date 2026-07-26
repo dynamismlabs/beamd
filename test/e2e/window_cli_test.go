@@ -82,7 +82,9 @@ func TestCLI_YamuxWindow_EdgeStartupLogAndPropagation(t *testing.T) {
 	beamd, _ := buildBinaries(t)
 	addr := freeListenAddr(t)
 	scfg := writeServerConfig(t, addr)
-	env := append(envWithHome(t.TempDir()), YamuxWindowEnv("8388608")) // 8 MiB, a non-default in-range value
+	// Three MiB is non-default and stays within Part B's default aggregate
+	// window budget (3 MiB * 128 global streams).
+	env := append(envWithHome(t.TempDir()), YamuxWindowEnv("3145728"))
 
 	var out safeBuffer
 	cmd := exec.Command(beamd, "serve", "--config", scfg)
@@ -98,7 +100,7 @@ func TestCLI_YamuxWindow_EdgeStartupLogAndPropagation(t *testing.T) {
 	// log (proves both propagation into `serve` and the required startup log).
 	waitUntil(t, "edge ready log carries the resolved window", 8*time.Second, func() bool {
 		s := out.String()
-		return strings.Contains(s, `"msg":"ready"`) && strings.Contains(s, `"yamux_stream_window_bytes":8388608`)
+		return strings.Contains(s, `"msg":"ready"`) && strings.Contains(s, `"yamux_stream_window_bytes":3145728`)
 	})
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 }

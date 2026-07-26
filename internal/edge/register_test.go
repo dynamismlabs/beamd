@@ -1,28 +1,61 @@
 package edge
 
 import (
-	"io"
+	"context"
+	"errors"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/dynamismlabs/beamd/internal/config"
-	"github.com/hashicorp/yamux"
+	"github.com/dynamismlabs/beamd/internal/tunnel"
 )
 
-// yamuxPair returns a yamux client session over an in-memory pipe, plus a
-// cleanup. Keepalive is disabled so an unread peer doesn't churn during the test.
-func yamuxPair(t *testing.T) (*yamux.Session, func()) {
-	t.Helper()
-	c1, c2 := net.Pipe()
-	cfg := yamux.DefaultConfig()
-	cfg.EnableKeepAlive = false
-	cfg.LogOutput = io.Discard
-	s, err := yamux.Client(c1, cfg)
-	if err != nil {
-		t.Fatalf("yamux.Client: %v", err)
-	}
-	return s, func() { _ = s.Close(); _ = c1.Close(); _ = c2.Close() }
+type registerTransport struct {
+	mu        sync.Mutex
+	closed    bool
+	done      chan struct{}
+	closeOnce sync.Once
 }
+
+func newRegisterTransport() *registerTransport {
+	return &registerTransport{done: make(chan struct{})}
+}
+
+func (s *registerTransport) Kind() tunnel.Kind { return tunnel.KindYamux }
+
+func (s *registerTransport) OpenStream(context.Context) (tunnel.Stream, error) {
+	return nil, errors.New("not implemented by register test transport")
+}
+
+func (s *registerTransport) AcceptStream(context.Context) (tunnel.Stream, error) {
+	return nil, errors.New("not implemented by register test transport")
+}
+
+func (s *registerTransport) Done() <-chan struct{} { return s.done }
+
+func (s *registerTransport) IsClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *registerTransport) CloseInfo() tunnel.CloseInfo {
+	return tunnel.CloseInfo{CodeValid: true, Code: tunnel.CloseNormal, Reason: "test"}
+}
+
+func (s *registerTransport) CloseWithError(tunnel.ErrorCode, string) error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.closeOnce.Do(func() { close(s.done) })
+	return nil
+}
+
+func (s *registerTransport) LocalAddr() net.Addr  { return nil }
+func (s *registerTransport) RemoteAddr() net.Addr { return nil }
+
+var _ tunnel.Session = (*registerTransport)(nil)
 
 // A reconnecting tunnel whose new hostname set is a STRICT SUBSET of the dead
 // session it reclaims (e.g. a rename alias dropped between two scope-hostnames
@@ -41,18 +74,19 @@ func TestRegisterReclaimsSubsetHostsWithoutGaugeDrift(t *testing.T) {
 			// of the cap check, the dead session's still-counted name tripped this.
 			MaxTunnelsPerToken: 1,
 		},
-		routes:   make(map[string]*Route),
-		sessions: make(map[*Session]struct{}),
-		metrics:  newMetrics(),
+		routes:    make(map[string]*Route),
+		sessions:  make(map[*Session]struct{}),
+		metrics:   newMetrics(),
+		authSlots: make(chan struct{}, 2),
 		// hostnames nil → register derives the single default host for the slug.
 	}
 
-	deadYx, deadClose := yamuxPair(t)
-	defer deadClose()
-	_ = deadYx.Close() // dead session: IsClosed() == true → reclaimable
-
-	liveYx, liveClose := yamuxPair(t)
-	defer liveClose()
+	deadTransport := newRegisterTransport()
+	_ = deadTransport.CloseWithError(tunnel.CloseNormal, "dead")
+	liveTransport := newRegisterTransport()
+	t.Cleanup(func() {
+		_ = liveTransport.CloseWithError(tunnel.CloseNormal, "cleanup")
+	})
 
 	const (
 		defaultHost = "api-acme.base.test"      // == naming.Hostname("api","acme",...)
@@ -60,17 +94,23 @@ func TestRegisterReclaimsSubsetHostsWithoutGaugeDrift(t *testing.T) {
 	)
 
 	dead := &Session{
-		yamux: deadYx,
-		slug:  "acme",
-		names: map[string]struct{}{"api": {}},
-		hosts: map[string][]string{"api": {defaultHost, aliasHost}},
+		transport: deadTransport,
+		kind:      tunnel.KindYamux,
+		slug:      "acme",
+		names:     map[string]struct{}{"api": {}},
+		hosts:     map[string][]string{"api": {defaultHost, aliasHost}},
 	}
 	live := &Session{
-		yamux: liveYx,
-		slug:  "acme",
-		names: map[string]struct{}{},
-		hosts: map[string][]string{},
+		transport: liveTransport,
+		kind:      tunnel.KindYamux,
+		slug:      "acme",
+		names:     map[string]struct{}{},
+		hosts:     map[string][]string{},
 	}
+	// dropSession releases the authenticated-session lease held by the dead
+	// session. Seed exactly that lease so this focused registration regression
+	// test exercises the real cleanup path without constructing an edge server.
+	e.authSlots <- struct{}{}
 	e.sessions[dead] = struct{}{}
 	e.sessions[live] = struct{}{}
 	e.routes[defaultHost] = &Route{session: dead, name: "api"}

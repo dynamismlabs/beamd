@@ -22,6 +22,10 @@ The single `beamd` binary is both the edge (`beamd serve`) and the client
 (`@beamd/cli-{darwin,linux}-{arm64,x64}`) installed as `optionalDependencies`,
 so `npm i @beamd/cli` pulls only the host's binary.
 
+The Docker image declares and the example compose publishes both `443/tcp` and
+`443/udp`. Every platform package must contain the binary built from the same
+tag as the edge image; transport behavior does not belong in the npm shim.
+
 ---
 
 ## Versioning
@@ -57,6 +61,17 @@ echo <a GitHub PAT with 'write:packages'> | docker login ghcr.io -u <you> --pass
 ---
 
 ## Release — local path (recommended)
+
+For any release that enables QUIC or changes transport defaults, also require:
+
+- the complete dual-transport functional matrix;
+- a passing, immutable B4 netem result from `scripts/perf-netem.sh run`;
+- the production-link `auto` pilot;
+- rehearsal of `BEAMD_TRANSPORT=tcp` and `BEAMD_DISABLE_QUIC=true`;
+- review of RSS, capacity, handshake, session-close, and stream-open metrics.
+
+The release workflow runs the npm/package smoke before GoReleaser publishes
+anything. Do not bypass that ordering for a local release.
 
 From a clean working tree on `main`, with tests green (`make test`):
 
@@ -112,6 +127,8 @@ npx @beamd/cli@0.0.1 version            # → 0.0.1
 npm view @beamd/cli version             # → 0.0.1
 go install github.com/dynamismlabs/beamd/cmd/beamd@v0.0.1 && beamd version
 docker pull ghcr.io/dynamismlabs/beamd:0.0.1
+docker inspect ghcr.io/dynamismlabs/beamd:0.0.1 \
+  --format '{{json .Config.ExposedPorts}}'   # must include 443/tcp + 443/udp
 ```
 
 The GHCR image is **private by default** — make the package public in the

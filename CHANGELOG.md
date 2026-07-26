@@ -5,6 +5,14 @@ All notable changes to beamd are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Transport (Part B, default-off): QUIC tunnel path with tuned TCP fallback.**
+  The edge can listen on `443/udp`, the agent supports `auto|quic|tcp`,
+  diagnostics report the selected transport/fallback reason, and either
+  `BEAMD_DISABLE_QUIC=true` or `BEAMD_TRANSPORT=tcp` restores the old path.
+  QUIC remains opt-in until the B4 synthetic gates and production pilot pass.
+
 ### Changed
 
 - **Transport (A1): tuned yamux stream window.** The yamux per-stream receive

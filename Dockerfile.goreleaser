@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1.7
+#
+# GoReleaser's dockers context contains its prebuilt artifact, not the source
+# tree. Keep this separate from Dockerfile, which remains the normal
+# source-building path for `docker build`.
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY beamd /usr/local/bin/beamd
+
+VOLUME ["/etc/beamd", "/var/lib/beamd"]
+
+EXPOSE 443/tcp 443/udp
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/usr/local/bin/beamd"]
+CMD ["serve", "--config", "/etc/beamd/beamd.yaml"]

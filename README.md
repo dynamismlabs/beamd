@@ -23,13 +23,11 @@ Launched and generally available. See [`prd.md`](prd.md) for the spec and
 
 ```
 [ Internet ]
-     │
-     ▼  :443 (TLS)
-[ beamd ]  ─── ACME DNS-01 ──▶  [ DNS provider (e.g. Cloudflare) ]
-     ▲
-     │  one TLS conn per developer
-     │  (ALPN "beam/1", yamux-multiplexed)
+     │ public HTTPS :443/tcp
      ▼
+[ beamd ]  ─── ACME DNS-01 ──▶  [ DNS provider (e.g. Cloudflare) ]
+     ▲  preferred tunnel: QUIC :443/udp
+     │  fallback tunnel: TLS + tuned yamux :443/tcp
 [ beamd client (+ background agent) ]
      │
      │  loopback
@@ -98,7 +96,7 @@ docker pull ghcr.io/dynamismlabs/beamd:latest
 # Prebuilt binaries: https://github.com/dynamismlabs/beamd/releases
 ```
 
-Or build from source (needs Go 1.25+):
+Or build from source (needs Go 1.25.12+ or a newer supported Go release):
 
 ```
 git clone https://github.com/dynamismlabs/beamd && cd beamd
@@ -114,6 +112,8 @@ Copy [`example/beamd.yaml`](example/beamd.yaml) to
 base_domain: beam.example.com
 edge_ipv4: 203.0.113.10         # this server's public IPv4
 listen_https: ":443"
+listen_quic: ":443"
+disable_quic: true             # keep true until qualification + pilot pass
 acme_email: ops@example.com
 dns_provider: cloudflare
 dns_provider_creds: ""          # better: leave blank, set via env var
@@ -150,6 +150,12 @@ sudo beamd serve --config /etc/beamd/beamd.yaml
 
 `:443` needs root or `CAP_NET_BIND_SERVICE`. For a non-root install use
 `setcap cap_net_bind_service=+ep /usr/local/bin/beamd`.
+
+Publish and permit both `443/tcp` and `443/udp` before enabling QUIC. On Linux,
+persist `net.core.rmem_max=7340032` and `net.core.wmem_max=7340032` on the host
+(not only in a container). The documented 2 GiB edge uses
+`GOMEMLIMIT=1400MiB`. QUIC initially ships disabled; use
+`BEAMD_DISABLE_QUIC=false` only for explicit qualification/pilot work.
 
 ### 5. Onboard a developer
 
@@ -190,6 +196,21 @@ Ctrl-C. Add **`-d` / `--detach`** to hand it to a background agent and
 return immediately — then `beamd list`, `beamd close <name>`, and `beamd
 status` manage the detached tunnels. Either way the tunnel survives
 network blips: the client reconnects and replays your registrations.
+
+The agent transport is `tcp` until QUIC qualification and the production pilot
+pass. `BEAMD_TRANSPORT=auto` tries QUIC and falls back to tuned TCP;
+`BEAMD_TRANSPORT=quic` and `tcp` force one path for diagnosis. After changing
+the value, run `beamd reload`. Preflight each path with:
+
+```text
+beamd check --transport tcp
+beamd check --transport quic
+beamd status
+```
+
+If QUIC misbehaves, set the agent to `BEAMD_TRANSPORT=tcp` and reload. The
+independent edge-wide rollback is `BEAMD_DISABLE_QUIC=true` plus an edge
+restart.
 
 Add `--json` to `open` / `list` / `close` / `status` for machine-readable
 output (one object/array, nothing else) — see
@@ -325,6 +346,12 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `edge_ipv4` | yes for `provision-dev` | Public IPv4 this beamd is reachable at |
 | `edge_ipv6` | no | Optional IPv6 target |
 | `listen_https` | yes | Public ingress + ALPN-demuxed client control. `:443` in prod, `:8443` in dev |
+| `listen_quic` | defaults to the HTTPS host/port | QUIC tunnel UDP listener; ignored completely while QUIC is disabled |
+| `disable_quic` | defaults to true during rollout | Edge-wide QUIC kill switch. Disabled mode does not bind UDP or read QUIC keys |
+| `max_streams_per_session` | defaults to 64 | Concurrent data-stream ceiling per authenticated session |
+| `max_streams_total` | defaults to 128 | Edge-wide concurrent data-stream ceiling |
+| `max_pre_auth_sessions` | defaults to 32 | Tunnel sessions allowed to authenticate concurrently |
+| `max_sessions_total` | defaults to 8 | Authenticated tunnel-session ceiling |
 | `acme_email` | yes | Contact address registered with Let's Encrypt |
 | `acme_ca` | no | ACME directory URL. Blank = LE prod. `off` = self-signed (dev only) |
 | `dns_provider` | yes | One of: `cloudflare`, `stub` (more on the way) |
@@ -335,6 +362,12 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `max_tunnels_per_token` | defaults to 25 | Cap on concurrent tunnels per developer |
 | `max_request_body_bytes` | defaults to 32 MiB (`33554432`) | Per-request public body cap; oversized requests get HTTP 413. Set `-1` to disable |
 | `preview_embed` | defaults to false | Strip `X-Frame-Options` + CSP `frame-ancestors` from tunnel responses so previews embed cross-origin in an iframe |
+
+The yamux receive window and stream ceilings share a 512 MiB exposure budget.
+The compatible maximums are 4 MiB × 128 streams (defaults), 8 MiB × 64, or
+16 MiB × 32; a mismatched configuration fails startup rather than silently
+exceeding the budget. These are concurrency/memory limits, not a bandwidth
+throttle.
 
 ## DNS providers
 
@@ -357,6 +390,17 @@ make test          # runs all unit + e2e tests
 make run-server    # runs beamd against example/beamd.yaml
 make smoke-test    # spins up beam-testapp + drives it through your tunnel
 ```
+
+The privileged B4 protocol qualification is deliberately separate from normal
+CI. On the Linux qualification host:
+
+```text
+scripts/perf-netem.sh build
+sudo -E scripts/perf-netem.sh run
+```
+
+It records immutable TCP, QUIC, and same-protocol direct evidence under
+`test/perf/results/` and fails closed through `test/perf/b4_analyze.py`.
 
 Cutting a release (npm + binaries + Docker + `go install`): see
 [`docs/releasing.md`](docs/releasing.md).

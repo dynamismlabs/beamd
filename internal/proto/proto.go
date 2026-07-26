@@ -1,6 +1,6 @@
-// Package proto defines the beam control protocol — NDJSON messages
-// exchanged over a single dedicated yamux stream (PRD §8). The package
-// is dependency-free on the rest of the codebase by design.
+// Package proto defines the beam control protocol: NDJSON messages exchanged
+// over one dedicated tunnel control stream. The package is dependency-free on
+// the rest of the codebase by design.
 package proto
 
 import (
@@ -29,6 +29,7 @@ const (
 const (
 	CodeBadToken    = "bad_token"
 	CodeBadHello    = "bad_hello"
+	CodeBadVersion  = "bad_version"
 	CodeBadMessage  = "bad_message"
 	CodeUnknownMsg  = "unknown_message"
 	CodeInvalidName = "invalid_name"
@@ -80,7 +81,7 @@ type Error struct {
 	Code string `json:"code"`
 	// Name echoes the register this error is about, so the client can drop a
 	// late error meant for an already-abandoned register instead of
-	// misrouting it onto the next one. Empty for connection-scoped errors
+	// misrouting it onto the next one. Empty for session-scoped errors
 	// (bad_hello, shutdown, …) and from older edges — the client treats an
 	// empty Name as "deliver to whatever register is waiting" (prior behavior).
 	Name    string `json:"name,omitempty"`

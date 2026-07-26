@@ -223,10 +223,11 @@ func TestTunnel_TwoBackendsConcurrentOverOneSession(t *testing.T) {
 	checkResponse(t, hc1, "https://"+host1+"/x", "app1: GET /x\n")
 	checkResponse(t, hc2, "https://"+host2+"/x", "app2: GET /x\n")
 
-	// 100 concurrent requests across both backends; assert no goroutine leak.
+	// Exercise the production per-session ceiling: 64 concurrent requests
+	// across two routes on one tunnel, then assert no goroutine leak.
 	gBefore := runtime.NumGoroutine()
 
-	const perBackend = 50
+	const perBackend = 32
 	var wg sync.WaitGroup
 	errs := make(chan error, perBackend*2)
 
@@ -419,6 +420,7 @@ func TestRegister_PerSlugTunnelCapReturnsOverLimit(t *testing.T) {
 		TokenStore:         "memory:",
 		MaxTunnelsPerToken: 2,
 	}
+	applyE2ETransport(t, cfg)
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
 		t.Fatal(err)
@@ -453,7 +455,10 @@ func TestHello_RejectsBadToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := client.Connect(ctx, edgeAddr, "wrong-token", client.Options{InsecureSkipVerify: true})
+	_, err := client.Connect(ctx, edgeAddr, "wrong-token", client.Options{
+		InsecureSkipVerify: true,
+		Transport:          e2eTransport(t),
+	})
 	if err == nil {
 		t.Fatal("connect with wrong token should fail")
 	}
@@ -474,6 +479,7 @@ func TestHeartbeat_TimeoutDropsSession(t *testing.T) {
 		HeartbeatInterval:  10 * time.Second,
 		RegisterTimeout:    2 * time.Second,
 		InsecureSkipVerify: true,
+		Transport:          e2eTransport(t),
 		ReconnectInitial:   10 * time.Second,
 		ReconnectMax:       10 * time.Second,
 	})
@@ -1126,6 +1132,7 @@ func TestProxy_OversizedRequestBodyRejected(t *testing.T) {
 		MaxTunnelsPerToken:  25,
 		MaxRequestBodyBytes: limit,
 	}
+	applyE2ETransport(t, cfg)
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
 		t.Fatal(err)
@@ -1160,13 +1167,11 @@ func TestProxy_OversizedRequestBodyRejected(t *testing.T) {
 	big := bytes.Repeat([]byte("x"), limit*4)
 	resp2, err := hc.Post("https://"+host+"/echo", "application/octet-stream", bytes.NewReader(big))
 	if err != nil {
-		// Some TLS clients fail mid-write when the server closes after the
-		// 413 — that's also evidence the edge rejected the body.
-		return
+		t.Fatalf("POST oversized body: %v", err)
 	}
 	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusRequestEntityTooLarge && resp2.StatusCode != http.StatusBadGateway {
-		t.Errorf("oversized body got status %d, want 413 or 502", resp2.StatusCode)
+	if resp2.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body got status %d, want 413", resp2.StatusCode)
 	}
 }
 
@@ -1277,6 +1282,7 @@ func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {
 		TokenStore:         "memory:",
 		MaxTunnelsPerToken: 25,
 	}
+	applyE2ETransport(t, cfg)
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
 		t.Fatal(err)
@@ -1289,6 +1295,7 @@ func TestShutdown_SignalsClientsAndDrainsSessions(t *testing.T) {
 		HeartbeatInterval:  200 * time.Millisecond,
 		RegisterTimeout:    2 * time.Second,
 		InsecureSkipVerify: true,
+		Transport:          e2eTransport(t),
 		// Long backoff so we'd never reconnect inside the test window —
 		// the `error{code:"shutdown"}` should still flip the client
 		// unhealthy immediately.
@@ -1350,6 +1357,7 @@ func TestAuthDiscovery_OSSAndHostedShapes(t *testing.T) {
 				VerificationURI: "https://app.example.com/device",
 			},
 		}
+		applyE2ETransport(t, cfg)
 		mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 		if err != nil {
 			t.Fatal(err)

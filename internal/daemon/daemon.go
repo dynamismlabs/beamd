@@ -270,10 +270,17 @@ func (d *Daemon) handleShutdown(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	diagnostics := d.client.Diagnostics()
 	writeJSON(w, http.StatusOK, HealthzResponse{
-		Status:  "ok",
-		Slug:    d.client.Slug(),
-		Healthy: d.client.IsHealthy(),
+		Status:              "ok",
+		Slug:                d.client.Slug(),
+		Healthy:             d.client.IsHealthy(),
+		Transport:           string(d.client.Transport()),
+		ConfiguredTransport: diagnostics.ConfiguredTransport,
+		FallbackCount:       diagnostics.FallbackCount,
+		LastFallbackReason:  diagnostics.LastFallbackReason,
+		ReconnectCount:      diagnostics.ReconnectCount,
+		LastCloseReason:     diagnostics.LastCloseReason,
 	})
 }
 

@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -74,6 +75,7 @@ func main() {
 		transport   = flag.String("transport", "tcp", "transport label")
 		timeout     = flag.Duration("timeout", 300*time.Second, "per-request timeout")
 		raw         = flag.Bool("raw", false, "include raw per-iteration elapsed_ms")
+		progress    = flag.String("progress-file", "", "optional atomic JSON worker/error progress file")
 	)
 	flag.Parse()
 	if *urlBase == "" {
@@ -99,6 +101,64 @@ func main() {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: *insecure}, //nolint:gosec // self-signed test edge
 	}
 	client := &http.Client{Transport: tr, Timeout: *timeout}
+	var progressActive, progressStarted, progressCompleted atomic.Int64
+	var progressErrors, progressCorrupt atomic.Int64
+	writeProgress := func() error {
+		if *progress == "" {
+			return nil
+		}
+		body, err := json.Marshal(map[string]any{
+			"active":            progressActive.Load(),
+			"started":           progressStarted.Load(),
+			"completed":         progressCompleted.Load(),
+			"errors":            progressErrors.Load(),
+			"corrupt":           progressCorrupt.Load(),
+			"updated_unix_nano": time.Now().UnixNano(),
+		})
+		if err != nil {
+			return err
+		}
+		body = append(body, '\n')
+		tmp := fmt.Sprintf("%s.tmp.%d", *progress, os.Getpid())
+		if err := os.WriteFile(tmp, body, 0o600); err != nil {
+			return err
+		}
+		return os.Rename(tmp, *progress)
+	}
+	progressStop := make(chan struct{})
+	progressDone := make(chan struct{})
+	progressErr := make(chan error, 1)
+	if *progress != "" {
+		if err := writeProgress(); err != nil {
+			fmt.Fprintln(os.Stderr, "write progress:", err)
+			os.Exit(2)
+		}
+		go func() {
+			defer close(progressDone)
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if err := writeProgress(); err != nil {
+						select {
+						case progressErr <- err:
+						default:
+						}
+						return
+					}
+				case <-progressStop:
+					if err := writeProgress(); err != nil {
+						select {
+						case progressErr <- err:
+						default:
+						}
+					}
+					return
+				}
+			}
+		}()
+	}
 
 	expSum := ""
 	if *dir == "upload" {
@@ -193,8 +253,22 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				progressActive.Add(1)
+				defer progressActive.Add(-1)
 				for idx := range tasks {
-					out[idx] = doOne()
+					progressStarted.Add(1)
+					result := doOne()
+					out[idx] = result
+					switch result.errMsg {
+					case "":
+					case "corrupt payload", "checksum mismatch":
+						progressCorrupt.Add(1)
+					default:
+						progressErrors.Add(1)
+					}
+					// Publish the terminal counter last so a progress snapshot
+					// can never observe a failed request as completed-before-error.
+					progressCompleted.Add(1)
 				}
 			}()
 		}
@@ -212,6 +286,16 @@ func main() {
 	wallStart := time.Now()
 	results := runBatch(*n)
 	wall := time.Since(wallStart)
+	if *progress != "" {
+		close(progressStop)
+		<-progressDone
+		select {
+		case err := <-progressErr:
+			fmt.Fprintln(os.Stderr, "write progress:", err)
+			os.Exit(2)
+		default:
+		}
+	}
 
 	var elapsed, ttfbs []float64
 	var okBytes int64

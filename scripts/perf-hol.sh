@@ -3,15 +3,16 @@
 # perf-hol.sh — production-scenario / head-of-line-blocking test.
 #
 # Recreates the real risk in beamd's architecture: many concurrent visitors to
-# ONE app all multiplex over ONE edge<->agent tunnel TCP connection. Under loss
-# on that leg, TCP in-order delivery means one lost packet stalls EVERY stream
-# behind it — so a latency-sensitive request can get stuck behind someone else's
-# bulk transfer (head-of-line blocking, the A2 half QUIC most directly fixes).
+# ONE app all multiplex over ONE edge<->agent tunnel connection. On TCP, loss
+# on that leg makes in-order delivery stall every stream behind a lost packet,
+# so a latency-sensitive request can get stuck behind someone else's bulk
+# transfer (the cross-stream head-of-line problem QUIC most directly fixes).
 #
 # For each connection profile it measures an interactive request's latency
 # ALONE (baseline) and UNDER a bulk load of concurrent "visitors", on the same
-# tunnel. The clean control separates HoL blocking (slow only WITH loss) from
-# plain bandwidth starvation (slow even without loss — QUIC would not fix that).
+# tunnel. The clean control measures the queueing/bufferbloat floor. QUIC may
+# reduce cross-stream scheduling delay, but still shares connection-level
+# congestion control; B4 therefore treats clean performance as a guardrail.
 #
 # Real edge + shaped agent, both real beamd processes; interactive + load
 # clients run on the unshaped host. NOT the production WAN link.
@@ -28,6 +29,13 @@ PROFILES=${PROFILES:-clean wifi mobile bursty}
 LOAD_CONC=${LOAD_CONC:-6}          # concurrent bulk "visitors"
 LOAD_SIZE=${LOAD_SIZE:-8388608}    # 8 MiB bulk transfers
 INTER_N=${INTER_N:-50}             # measured interactive requests per case
+TUNNEL_TRANSPORT=${TUNNEL_TRANSPORT:-tcp} # actual forced tunnel: tcp|quic
+
+case "$TUNNEL_TRANSPORT" in
+  tcp) DISABLE_QUIC=true ;;
+  quic) DISABLE_QUIC=false ;;
+  *) echo "TUNNEL_TRANSPORT must be tcp or quic" >&2; exit 2 ;;
+esac
 
 NET=perfnet-hol; EDGE=perf-hol-edge; AGENT=perf-hol-agent; PUB=18444
 SLUG=perf; BASE=perf.local; HOST="blob-$SLUG.$BASE"; TOKEN=PERFTOKEN
@@ -58,6 +66,8 @@ cat > "$WORK/edge.yaml" <<YAML
 base_domain: $BASE
 url_shape: hyphen
 listen_https: ":443"
+listen_quic: ":443"
+disable_quic: $DISABLE_QUIC
 acme_email: perf@example.com
 acme_ca: "off"
 dns_provider: stub
@@ -80,14 +90,31 @@ for _ in $(seq 1 40); do curl -sk --max-time 2 "https://127.0.0.1:$PUB/healthz" 
   echo "beamd: $("$BINDIR/$BEAMD_BIN" version 2>/dev/null || echo n/a)"
   echo "load: $LOAD_CONC concurrent $((LOAD_SIZE >> 20)) MiB downloads (many visitors) sharing the tunnel"
   echo "interactive: 4 KiB (API) and 65 KiB (page) downloads, measured alone vs under load"
+  echo "tunnel_transport: $TUNNEL_TRANSPORT"
   echo "profiles: $PROFILES"
 } > "$OUTDIR/metadata.txt"
 
-# inter <size> <cond-label> : measure the interactive request, tag baseline/underload.
+# Add the experiment condition without overloading perfclient's transport field.
+tag_condition() {
+  python3 -c '
+import json
+import sys
+
+record = json.load(sys.stdin)
+record["condition"] = sys.argv[1]
+json.dump(record, sys.stdout, separators=(",", ":"))
+sys.stdout.write("\n")
+' "$1"
+}
+
+# inter <size> <condition>: measure the interactive request and tag its condition.
 inter() {
+  local size=$1
+  local condition=$2
   "$PERFCLIENT" --url "https://$HOST:$PUB" --resolve "$HOST:127.0.0.1" --insecure \
-    --size "$1" --dir download --n "$INTER_N" --warmup 8 --concurrency 1 --raw \
-    --profile "$PROFILE" --transport "$2" --timeout 120s >> "$OUTDIR/raw-$PROFILE.jsonl"
+    --size "$size" --dir download --n "$INTER_N" --warmup 8 --concurrency 1 --raw \
+    --profile "$PROFILE" --transport "$TUNNEL_TRANSPORT" --timeout 120s |
+    tag_condition "$condition" >> "$OUTDIR/raw-$PROFILE.jsonl"
 }
 
 for PROFILE in $PROFILES; do
@@ -98,6 +125,7 @@ for PROFILE in $PROFILES; do
   docker run -d --privileged --name "$AGENT" --network "$NET" \
     -v "$BINDIR:/perf/bin:ro" -v "$AGENT_ENTRY:/perf-g1-agent.sh:ro" \
     -e EDGE_ADDR="$EDGE:443" -e TOKEN="$TOKEN" \
+    -e BEAMD_TRANSPORT="$TUNNEL_TRANSPORT" \
     -e BEAMD="/perf/bin/$BEAMD_BIN" -e PERFSERVER="/perf/bin/$PERFSERVER_BIN" \
     -e DELAY_MS="$d" -e LOSS_PCT="$l" -e RATE_MBIT="$r" -e LOSS_CORR="$corr" -e NAME=blob \
     --entrypoint bash "$IMAGE" /perf-g1-agent.sh >/dev/null

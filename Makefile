@@ -55,7 +55,9 @@ npm-build:
 publish-npm:
 	@test "$(VERSION)" != "dev" || { echo "set VERSION, e.g. make publish-npm VERSION=0.0.1"; exit 1; }
 	@npm whoami >/dev/null 2>&1 || { echo "not logged in to npm — run 'npm login' first"; exit 1; }
-	node scripts/build-npm.mjs $(VERSION) --publish
+	node scripts/build-npm.mjs $(VERSION)
+	node scripts/package-smoke.mjs $(VERSION)
+	node scripts/build-npm.mjs $(VERSION) --publish-existing
 
 # Publish cross-platform binaries + the GHCR image via goreleaser.
 # Prereqs: goreleaser installed, GITHUB_TOKEN exported, `docker login ghcr.io`

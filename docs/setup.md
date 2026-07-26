@@ -267,6 +267,34 @@ after `beamd reload` (which restarts the background agent).
 BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304
 ```
 
+Part B adds QUIC on UDP 443, but it remains disabled during the initial
+deployment. Keep this in `/etc/beamd/.env` until synthetic qualification and
+the explicit production pilot pass:
+
+```text
+BEAMD_DISABLE_QUIC=true
+GOMEMLIMIT=1400MiB
+```
+
+Prepare the host before the pilot. Open both protocols in the cloud firewall
+and host firewall (the exact cloud command varies):
+
+```text
+sudo ufw allow 443/tcp
+sudo ufw allow 443/udp
+```
+
+Persist the Linux UDP receive/send ceilings in `/etc/sysctl.d/90-beamd-quic.conf`:
+
+```text
+net.core.rmem_max=7340032
+net.core.wmem_max=7340032
+```
+
+Then apply them with `sudo sysctl --system`. These are host settings; setting
+them only inside the container is ineffective. The compose file publishes both
+`443:443/tcp` and `443:443/udp`.
+
 Lock it down (the file holds your CF token — keep it private):
 
 ```
@@ -301,6 +329,18 @@ curl -k https://YOUR_DOMAIN/healthz
 ```
 
 Returns `{"status":"ok","version":"…"}`.
+
+With QUIC still disabled, readiness must report only the TCP tunnel listener.
+Before the pilot, run a TCP preflight from the matching developer binary:
+
+```text
+beamd check --transport tcp
+```
+
+For the pilot, set `BEAMD_DISABLE_QUIC=false`, restart the edge, confirm its
+readiness/metrics show both listeners, then run `beamd check --transport quic`.
+Set the developer environment to `BEAMD_TRANSPORT=auto`, run `beamd reload`,
+and confirm `beamd status` reports `transport: quic`.
 
 ---
 
@@ -396,7 +436,7 @@ npm i -g @beamd/cli      # installs `beamd`; or `npx @beamd/cli <cmd>` ad-hoc
 
 Or grab a prebuilt binary from the
 [releases page](https://github.com/dynamismlabs/beamd/releases), or build
-from source (needs Go 1.25+):
+from source (needs Go 1.25.12+ or a newer supported Go release):
 
 ```
 git clone https://github.com/dynamismlabs/beamd && cd beamd
@@ -548,6 +588,18 @@ Check `~/.beamd/agent.log` on your laptop. The background agent is what
 holds the client→edge connection; if it can't reach the edge, `open`
 blocks.
 
+**`auto` selects TCP or QUIC is unstable**
+First run `beamd check --transport quic` and verify UDP 443 in both the cloud
+and host firewall. An undersized UDP socket buffer is reported in the agent
+log. On macOS, test the OS default first; only when that diagnostic appears or
+qualification fails for buffers, an operator may test
+`sudo sysctl -w kern.ipc.maxsockbuf=8441037`.
+
+To roll back only the laptop, set `BEAMD_TRANSPORT=tcp` and run
+`beamd reload`. To roll back the edge globally, set
+`BEAMD_DISABLE_QUIC=true` and restart it. Disabled mode must come up TCP-only
+without binding UDP or reading QUIC key files.
+
 **`Error: no route for host …`**
 You're hitting an app/slug combination that hasn't been registered.
 Run `beamd list` to see what's currently exposed.
@@ -570,8 +622,11 @@ sessions are dropped immediately; they can't reconnect.
 Until v0.1.0 is tagged + image published, build on the server:
 
 ```
-# Install Go (Ubuntu 24.04 ships 1.22+).
-sudo apt update && sudo apt install -y golang-go git
+# Install Git, then install Go 1.25.12+ from https://go.dev/doc/install.
+# quic-go v0.60.0 requires Go 1.25; this repository pins the patched 1.25.12
+# minimum and also builds with newer supported Go releases.
+sudo apt update && sudo apt install -y git
+go version
 
 # Clone and build.
 git clone https://github.com/dynamismlabs/beamd /opt/beam
@@ -592,6 +647,8 @@ After=network.target
 Type=simple
 User=root
 Environment=BEAMD_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
+# QUIC is default-off until qualification and the explicit production pilot.
+Environment=BEAMD_DISABLE_QUIC=true
 # Optional: yamux per-stream receive window in bytes (default 4 MiB; 262144–16777216).
 # Environment=BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304
 ExecStart=/usr/local/bin/beamd serve --config /etc/beamd/beamd.yaml

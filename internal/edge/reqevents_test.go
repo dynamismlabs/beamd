@@ -26,6 +26,20 @@ func (c *capSink) events() []reqlog.RequestEvent {
 	return append([]reqlog.RequestEvent(nil), c.ev...)
 }
 
+type blockingFinalSink struct {
+	finalStarted chan struct{}
+	releaseFinal chan struct{}
+	once         sync.Once
+}
+
+func (s *blockingFinalSink) Record(e reqlog.RequestEvent) {
+	if e.Outcome != reqlog.OutcomeOK {
+		return
+	}
+	s.once.Do(func() { close(s.finalStarted) })
+	<-s.releaseFinal
+}
+
 // The WS/SSE heartbeat (request-events-spec §4.4) emits one event per window
 // while a long connection is open + a final event on close — all sharing one
 // connection_id, each with its OWN per-emit request_id (so retries dedupe) and a
@@ -88,4 +102,39 @@ func TestWSHeartbeatEmitsPerWindow(t *testing.T) {
 	if totalIn != 5 {
 		t.Errorf("bytes_in across windows = %d, want 5 (delta bytes sum to the total)", totalIn)
 	}
+}
+
+func TestWSHeartbeatCloseCallbackWaitsForFinalEvent(t *testing.T) {
+	sink := &blockingFinalSink{
+		finalStarted: make(chan struct{}),
+		releaseFinal: make(chan struct{}),
+	}
+	callbackDone := make(chan struct{})
+	e := &Edge{reqSink: sink, reqHeartbeat: time.Hour}
+	meta := reqMeta{host: "ws-acme.beamd.run", slug: "acme", method: "GET", started: time.Now()}
+
+	client, server := net.Pipe()
+	wrapped := e.startWSHeartbeat(meta, server, func() { close(callbackDone) })
+
+	if err := wrapped.Close(); err != nil {
+		t.Fatalf("close wrapped connection: %v", err)
+	}
+	select {
+	case <-sink.finalStarted:
+	case <-time.After(time.Second):
+		t.Fatal("final request event did not start")
+	}
+	select {
+	case <-callbackDone:
+		t.Fatal("close callback ran before the final request event completed")
+	default:
+	}
+
+	close(sink.releaseFinal)
+	select {
+	case <-callbackDone:
+	case <-time.After(time.Second):
+		t.Fatal("close callback did not run after the final request event completed")
+	}
+	_ = client.Close()
 }

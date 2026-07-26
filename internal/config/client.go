@@ -15,6 +15,10 @@ import (
 type Client struct {
 	Server string `yaml:"server"`
 	Token  string `yaml:"token"`
+	// Transport selects the tunnel transport: tcp, auto, or quic. Empty is
+	// resolved to the shipped tcp default at runtime. BEAMD_TRANSPORT may
+	// override it without changing the persisted profile.
+	Transport string `yaml:"transport,omitempty"`
 	// InsecureSkipVerify disables TLS verification of the edge's control
 	// connection. Default (false) verifies the edge cert, so the bearer
 	// token only ever rides a trusted connection. Set true ONLY for a

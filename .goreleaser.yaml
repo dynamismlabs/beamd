@@ -44,9 +44,12 @@ archives:
       - README.md
       - LICENSE
       - example/beamd.yaml
+      - example/docker-compose.yml
+      - example/.env.example
       - scripts/smoke-test.sh
       - docs/setup.md
       - docs/post-manual-testing.md
+      - docs/transport-performance-spec.md
 
 checksum:
   name_template: checksums.txt
@@ -71,7 +74,9 @@ dockers:
     image_templates:
       - "ghcr.io/dynamismlabs/beamd:{{ .Version }}"
       - "ghcr.io/dynamismlabs/beamd:latest"
-    dockerfile: Dockerfile
+    # GoReleaser provides a context containing the prebuilt `beamd` artifact.
+    # The ordinary Dockerfile remains the source-building path.
+    dockerfile: Dockerfile.goreleaser
     use: buildx
     build_flag_templates:
       - --platform=linux/amd64

@@ -84,6 +84,7 @@ type wsCountingConn struct {
 	out       atomic.Int64
 	closeOnce sync.Once
 	done      chan struct{}
+	onClose   func()
 }
 
 func (c *wsCountingConn) Read(b []byte) (int, error) {
@@ -99,8 +100,11 @@ func (c *wsCountingConn) Write(b []byte) (int, error) {
 }
 
 func (c *wsCountingConn) Close() error {
-	c.closeOnce.Do(func() { close(c.done) })
-	return c.Conn.Close()
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() {
+		close(c.done)
+	})
+	return err
 }
 
 // startWSHeartbeat wraps a hijacked conn and runs a heartbeat goroutine emitting
@@ -108,8 +112,12 @@ func (c *wsCountingConn) Close() error {
 // one connection_id. Each event carries its window's DELTA bytes and a distinct
 // window-start `started_at` (the load-bearing invariant: per-window started_at so
 // bytes bucket into the right period; per-emit request_id so retries dedupe).
-func (e *Edge) startWSHeartbeat(m reqMeta, raw net.Conn) net.Conn {
-	cc := &wsCountingConn{Conn: raw, done: make(chan struct{})}
+func (e *Edge) startWSHeartbeat(m reqMeta, raw net.Conn, callbacks ...func()) net.Conn {
+	var onClose func()
+	if len(callbacks) > 0 {
+		onClose = callbacks[0]
+	}
+	cc := &wsCountingConn{Conn: raw, done: make(chan struct{}), onClose: onClose}
 	connID := reqlog.NewID()
 	interval := e.reqHeartbeat
 	if interval <= 0 {
@@ -149,6 +157,12 @@ func (e *Edge) startWSHeartbeat(m reqMeta, raw net.Conn) net.Conn {
 				emit(reqlog.OutcomeInProgress)
 			case <-cc.done:
 				emit(reqlog.OutcomeOK) // final window [last-window-end, close]
+				// The close callback releases the edge's proxy worker. Keep it
+				// behind the final event so Shutdown cannot finish and close
+				// the request sink while this record is still in flight.
+				if cc.onClose != nil {
+					cc.onClose()
+				}
 				return
 			}
 		}

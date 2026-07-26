@@ -304,27 +304,25 @@ toolchain regresses it), and linters (gosec G402) flag it.
 
 ---
 
-## SEC-8 — DEFERRED — No cap on concurrent unauthenticated connections
+## SEC-8 — SUPERSEDED BY PART B — Bound unauthenticated connections
 
 **Location:** `internal/edge/edge.go` — `Serve()` accept loop / `handle()`.
 
-**Defect.** `preAuthTimeout` bounds how *long* any one unauthenticated handshake
-or hello can take, but nothing caps the *number* of concurrent unauthenticated
-TLS handshakes or half-open yamux sessions. A raw connection flood against :443
-can still exhaust goroutines/FDs. (SEC-4 only closes per-SNI amplification into
-the control plane, not listener-level flooding.)
+**Historical defect.** `preAuthTimeout` bounded how *long* one handshake or
+hello could take but not their count.
 
-**Why deferred.** For beamd's deployment model (single operator, one public IP),
-the expected control is at the network layer — a cloud LB connection cap,
-`fail2ban`, or firewall rate-limiting — not in-process. Building an in-process
-accept-rate / max-concurrent-handshake limiter is reasonable later, but it's
-availability hardening against a DoS that network infra already handles, so it's
-tracked rather than blocking.
+**Part B requirement.** Admission now has independent, non-blocking ceilings:
+128 raw TCP/TLS handshakes, 32 tunnel sessions authenticating, eight
+authenticated sessions, 64 data streams per session, and 128 data streams
+edge-wide. A rejected admission closes promptly and increments a fixed-label
+capacity counter. QUIC and TCP sessions share the authenticated/global limits.
+Every lease remains held until the transport stream's `Done` signal and is
+released exactly once, including cancellation and prefix-write failure.
 
-**If picked up.** A semaphore bounding concurrent `handle()` goroutines in the
-pre-auth phase (released once a session authenticates or the conn closes), plus
-an accept-rate limiter. `log()` what's shed so silent drops don't look like
-"handled everything."
+The QUIC listener also requires persisted, atomic 32-byte stateless-reset and
+token-generator keys with mode `0600`; malformed existing keys fail startup.
+`disable_quic: true` is a security and rollback isolation boundary: it must not
+bind UDP, load/generate those keys, or start QUIC goroutines.
 
 ---
 
@@ -377,9 +375,9 @@ These were traced during the review and are correct — don't spend time here:
 - **Secret file perms.** All CLI-written secret files are `0600` / dirs `0700`;
   certmagic key material is `0600`/`0700`. (The one gap was SEC-6.)
 
-**Scope caveat.** "Verified sound" covers *correctness* and the audited
-availability vectors — NOT listener-level DoS. A raw connection flood against
-:443 is out of scope here and tracked as [SEC-8](#sec-8--deferred--no-cap-on-concurrent-unauthenticated-connections).
+**Scope caveat.** These in-process ceilings make allocation bounded; they do
+not replace cloud/firewall DDoS controls. Volumetric TCP or UDP floods remain
+an infrastructure concern.
 
 ---
 

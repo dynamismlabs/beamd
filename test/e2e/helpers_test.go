@@ -26,6 +26,58 @@ const testBaseDomain = "test.example.com"
 // testMetricsToken enables the operator /metrics endpoint on test edges.
 const testMetricsToken = "test-metrics-token"
 
+// e2eTransportEnv lets CI run the entire behavioral suite once with a forced
+// TCP tunnel and once with a forced QUIC tunnel. Keeping this separate from
+// BEAMD_TRANSPORT avoids changing process-wide configuration tests; spawned
+// CLI clients receive the selected mode through writeCLIConfig.
+const e2eTransportEnv = "BEAMD_E2E_TRANSPORT"
+
+func e2eTransport(t *testing.T) string {
+	t.Helper()
+	transport := os.Getenv(e2eTransportEnv)
+	if transport == "" {
+		return "tcp"
+	}
+	if transport != "tcp" && transport != "quic" {
+		t.Fatalf("%s=%q: want tcp or quic", e2eTransportEnv, transport)
+	}
+	return transport
+}
+
+// applyE2ETransport makes directly constructed edge configs explicit. In
+// particular, non-zero Part B capacities are required to opt a direct config
+// into QUIC, and QUIC key material must stay inside the test's temp directory.
+func applyE2ETransport(t *testing.T, cfg *config.Server) {
+	t.Helper()
+	if cfg.MaxStreamsPerSession == 0 {
+		cfg.MaxStreamsPerSession = config.DefaultMaxStreamsPerSession
+	}
+	if cfg.MaxStreamsTotal == 0 {
+		cfg.MaxStreamsTotal = config.DefaultMaxStreamsTotal
+	}
+	if cfg.MaxPreAuthSessions == 0 {
+		cfg.MaxPreAuthSessions = config.DefaultMaxPreAuthSessions
+	}
+	if cfg.MaxSessionsTotal == 0 {
+		cfg.MaxSessionsTotal = config.DefaultMaxSessionsTotal
+	}
+
+	cfg.DisableQUIC = e2eTransport(t) != "quic"
+	if cfg.DisableQUIC {
+		return
+	}
+	cfg.ListenQUIC = cfg.ListenHTTPS
+	if cfg.DataDir == "" {
+		cfg.DataDir = t.TempDir()
+	}
+}
+
+func forceE2EClientTransport(t *testing.T, opts client.Options) client.Options {
+	t.Helper()
+	opts.Transport = e2eTransport(t)
+	return opts
+}
+
 // getMetrics scrapes /metrics on the base domain with the operator bearer
 // token. Fails the test on transport error.
 func getMetrics(t *testing.T, hc *http.Client) *http.Response {
@@ -59,6 +111,7 @@ func startEdge(t *testing.T, tokens map[string]string) (*edge.Edge, string) {
 		MaxTunnelsPerToken: 25,
 		MetricsToken:       testMetricsToken,
 	}
+	applyE2ETransport(t, cfg)
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
 		t.Fatalf("cert manager: %v", err)
@@ -89,6 +142,7 @@ func startEdgeWithCertMgr(t *testing.T, tokens map[string]string) (*edge.Edge, *
 		MaxTunnelsPerToken: 25,
 		MetricsToken:       testMetricsToken,
 	}
+	applyE2ETransport(t, cfg)
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
 		t.Fatalf("cert manager: %v", err)
@@ -122,6 +176,7 @@ func startEdgeCfg(t *testing.T, tokens map[string]string, mutate func(*config.Se
 	if mutate != nil {
 		mutate(cfg)
 	}
+	applyE2ETransport(t, cfg)
 	mgr, err := certs.NewSelfSignedManager(cfg.BaseDomain)
 	if err != nil {
 		t.Fatalf("cert manager: %v", err)
@@ -166,11 +221,11 @@ func connectClient(t *testing.T, edgeAddr, token string) *client.Client {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	c, err := client.Connect(ctx, edgeAddr, token, client.Options{
+	c, err := client.Connect(ctx, edgeAddr, token, forceE2EClientTransport(t, client.Options{
 		HeartbeatInterval:  200 * time.Millisecond,
 		RegisterTimeout:    2 * time.Second,
 		InsecureSkipVerify: true, // test edges are self-signed
-	})
+	}))
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
 	}
@@ -184,6 +239,7 @@ func connectClient(t *testing.T, edgeAddr, token string) *client.Client {
 func connectClientWithOpts(t *testing.T, edgeAddr, token string, opts client.Options) *client.Client {
 	t.Helper()
 	opts.InsecureSkipVerify = true // test edges are self-signed
+	opts = forceE2EClientTransport(t, opts)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	c, err := client.Connect(ctx, edgeAddr, token, opts)
@@ -273,13 +329,31 @@ func startDummyApp(t *testing.T, name string) int {
 
 func freeListenAddr(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("free port: %v", err)
+	for attempt := 0; attempt < 100; attempt++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("free TCP port: %v", err)
+		}
+		addr := ln.Addr().String()
+		if e2eTransport(t) != "quic" {
+			_ = ln.Close()
+			return addr
+		}
+
+		// A TCP port can be free while the same numeric UDP port is still
+		// occupied by a recently closed QUIC listener. Hold the TCP
+		// reservation while checking UDP so forced-QUIC tests never hand the
+		// edge an address that can bind only half of its listeners.
+		packetConn, packetErr := net.ListenPacket("udp", addr)
+		if packetErr == nil {
+			_ = packetConn.Close()
+			_ = ln.Close()
+			return addr
+		}
+		_ = ln.Close()
 	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	return addr
+	t.Fatal("could not find a port available to both TCP and UDP")
+	return ""
 }
 
 func waitForTCP(t *testing.T, addr string, timeout time.Duration) {

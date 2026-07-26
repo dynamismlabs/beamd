@@ -46,9 +46,15 @@ type ListItem struct {
 
 // HealthzResponse is what GET /healthz returns.
 type HealthzResponse struct {
-	Status  string `json:"status"`
-	Slug    string `json:"slug"`
-	Healthy bool   `json:"healthy"`
+	Status              string `json:"status"`
+	Slug                string `json:"slug"`
+	Healthy             bool   `json:"healthy"`
+	Transport           string `json:"transport,omitempty"`
+	ConfiguredTransport string `json:"configuredTransport"`
+	FallbackCount       uint64 `json:"fallbackCount"`
+	LastFallbackReason  string `json:"lastFallbackReason,omitempty"`
+	ReconnectCount      uint64 `json:"reconnectCount"`
+	LastCloseReason     string `json:"lastCloseReason,omitempty"`
 }
 
 // ErrorResponse is returned for HTTP errors with structured detail.

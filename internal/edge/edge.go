@@ -1,8 +1,8 @@
 // Package edge implements the public ingress for beamd.
 //
-// M3: TLS listener with ALPN demux. Client control connections speak
-// the NDJSON protocol from PRD §8 on a dedicated yamux stream (the
-// first stream the client opens). Routes are populated dynamically
+// M3: TCP/TLS and QUIC listeners carry the same transport-neutral session
+// protocol. Client control connections speak NDJSON on the first stream the
+// client opens. Routes are populated dynamically
 // via `register`; each public request opens a fresh data stream and
 // is proxied through it.
 package edge
@@ -23,40 +23,77 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/hashicorp/yamux"
 
 	"github.com/dynamismlabs/beamd/internal/auth"
 	"github.com/dynamismlabs/beamd/internal/certs"
 	"github.com/dynamismlabs/beamd/internal/config"
-	"github.com/dynamismlabs/beamd/internal/mux"
 	"github.com/dynamismlabs/beamd/internal/naming"
 	"github.com/dynamismlabs/beamd/internal/proto"
 	"github.com/dynamismlabs/beamd/internal/reqlog"
+	"github.com/dynamismlabs/beamd/internal/tunnel"
 )
 
-const ALPNBeam = "beam/1"
+const (
+	ALPNBeam               = "beam/1"
+	preauthHandshakeBudget = 5 * time.Second
+)
+
+var errStaleRoute = errors.New("tunnel route changed during stream admission")
+
+type visitorRequestContextKey struct{}
+
+type quicListenFunc func(
+	string,
+	*tls.Config,
+	string,
+	func(error),
+) (tunnel.Listener, io.Closer, error)
 
 // acmeTLS1 is the ACME TLS-ALPN-01 challenge protocol — advertised so certmagic
 // can issue On-Demand custom-domain certs over this listener (url-model §8.2).
 const acmeTLS1 = "acme-tls/1"
 
 type Edge struct {
-	cfg     *config.Server
-	version string
-	tokens  auth.Store
-	certs   certs.Manager
+	cfg        *config.Server
+	version    string
+	tokens     auth.Store
+	certs      certs.Manager
+	configErr  error
+	listenQUIC quicListenFunc
 
 	heartbeatTimeout time.Duration
 
 	mu       sync.RWMutex
 	ln       net.Listener
+	quicLn   tunnel.Listener
+	quicIO   io.Closer
 	sessions map[*Session]struct{}
 	routes   map[string]*Route // hostname → route
 	proxies  map[string]*httputil.ReverseProxy
 	pubSrvs  map[*http.Server]struct{} // per-public-conn HTTP servers, tracked so Shutdown can drain them
 	metrics  *metrics
+
+	// lifecycleMu serializes listener/session admission and WaitGroup.Add with
+	// the transition into shutdown. No Add may occur after shuttingDown becomes
+	// true.
+	lifecycleMu  sync.Mutex
+	shuttingDown bool
+	rawConns     map[net.Conn]struct{}
+	preauth      map[tunnel.Session]struct{}
+	hijacked     map[net.Conn]struct{}
+	acceptWG     sync.WaitGroup
+	handlerWG    sync.WaitGroup
+	sessionWG    sync.WaitGroup
+	proxyWG      sync.WaitGroup
+	backgroundWG sync.WaitGroup
+	streamWG     sync.WaitGroup
+
+	tlsHandshakeSlots chan struct{}
+	preAuthSlots      chan struct{}
+	authSlots         chan struct{}
+	globalStreamSlots chan struct{}
 
 	// traffic is the self-hosted bandwidth recorder (in-memory + persisted),
 	// powering /metrics and the usage webhook. trafficSinks holds any extra
@@ -86,14 +123,30 @@ type Edge struct {
 
 	shutdownOnce sync.Once
 	shutdown     chan struct{}
+	shutdownDone chan struct{}
+	shutdownErr  error
 }
 
 type Session struct {
-	yamux   *yamux.Session
-	slug    string
-	control *yamux.Stream
+	transport tunnel.Session
+	kind      tunnel.Kind
+	slug      string
+	control   tunnel.Stream
+	id        string
+	remote    string
+	handshake time.Duration
 
-	writeMu sync.Mutex // serializes control-stream writes
+	streamSlots   chan struct{}
+	activeStreams atomic.Int64
+	authRelease   sync.Once
+
+	streamLifecycleMu sync.Mutex
+	streamsClosing    bool
+	streamWG          sync.WaitGroup
+	helperWG          sync.WaitGroup
+
+	writeGate chan struct{} // one token serializes control-stream writes
+	writeOnce sync.Once
 
 	mu    sync.Mutex
 	names map[string]struct{}
@@ -109,7 +162,95 @@ type Route struct {
 	name    string
 }
 
+type streamLease struct {
+	edge    *Edge
+	session *Session
+	once    sync.Once
+}
+
+func (e *Edge) acquireStreamLease(sess *Session) (*streamLease, error) {
+	select {
+	case e.globalStreamSlots <- struct{}{}:
+	default:
+		e.metrics.recordCapacityRejection("global_stream")
+		return nil, tunnel.ErrCapacity
+	}
+	select {
+	case sess.streamSlots <- struct{}{}:
+	default:
+		<-e.globalStreamSlots
+		e.metrics.recordCapacityRejection("session_stream")
+		return nil, tunnel.ErrCapacity
+	}
+
+	sess.activeStreams.Add(1)
+	e.metrics.addStream(sess.kind, 1)
+	return &streamLease{edge: e, session: sess}, nil
+}
+
+func (l *streamLease) release() {
+	l.once.Do(func() {
+		<-l.session.streamSlots
+		<-l.edge.globalStreamSlots
+		l.session.activeStreams.Add(-1)
+		l.edge.metrics.addStream(l.session.kind, -1)
+	})
+}
+
+// reserveStreamWatcher registers the goroutine that owns traffic finalization
+// and lease release. Both the edge-wide shutdown and the individual session
+// join these watchers. Production callers already own a proxyWG slot before
+// reaching DialContext; graceful shutdown waits that group before it can wait
+// streamWG, so an admitted request may still register here after the shutdown
+// flag flips without racing a zero-counter Wait.
+func (e *Edge) reserveStreamWatcher(sess *Session) bool {
+	sess.streamLifecycleMu.Lock()
+	defer sess.streamLifecycleMu.Unlock()
+	if sess.streamsClosing {
+		return false
+	}
+	e.streamWG.Add(1)
+	sess.streamWG.Add(1)
+	return true
+}
+
+func (e *Edge) releaseStreamWatcher(sess *Session) {
+	sess.streamWG.Done()
+	e.streamWG.Done()
+}
+
+func (sess *Session) stopStreamAdmission() {
+	sess.streamLifecycleMu.Lock()
+	sess.streamsClosing = true
+	sess.streamLifecycleMu.Unlock()
+}
+
+func (sess *Session) waitStreamWatchers() {
+	sess.streamWG.Wait()
+}
+
+// startHelper gives the session handler ownership of auxiliary lifecycle
+// goroutines. All helpers are registered before the control loop can return,
+// so dropSession can safely join the group without racing a late Add.
+func (sess *Session) startHelper(run func()) {
+	sess.helperWG.Add(1)
+	go func() {
+		defer sess.helperWG.Done()
+		run()
+	}()
+}
+
+func (sess *Session) waitHelpers() {
+	sess.helperWG.Wait()
+}
+
 func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Manager) *Edge {
+	// Directly constructed test/server configs bypass LoadServer. FinalizeRuntime
+	// is idempotent and supplies the same shipped defaults in that path.
+	runtimeErr := cfg.FinalizeRuntime()
+	if runtimeErr != nil {
+		slog.Error("invalid edge runtime configuration", "err", runtimeErr.Error())
+	}
 	hbSec := cfg.RequestLog.HeartbeatSeconds
 	if hbSec <= 0 {
 		hbSec = 60
@@ -122,28 +263,39 @@ func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Ma
 		capIP = false
 	}
 	e := &Edge{
-		cfg:              cfg,
-		version:          version,
-		tokens:           tokens,
-		certs:            certMgr,
-		heartbeatTimeout: 60 * time.Second,
-		sessions:         make(map[*Session]struct{}),
-		routes:           make(map[string]*Route),
-		proxies:          make(map[string]*httputil.ReverseProxy),
-		pubSrvs:          make(map[*http.Server]struct{}),
-		metrics:          newMetrics(),
-		traffic:          newTrafficStore(trafficPath(cfg)),
-		reqSink:          reqlog.NopSink{},
-		reqHeartbeat:     time.Duration(hbSec) * time.Second,
-		capPath:          capPath,
-		capClientIP:      capIP,
-		capUserAgent:     capUA,
-		capReferer:       capRef,
-		ipTruncate:       cfg.RequestLog.IPMode != "off",
-		hostnames:        newHostnamesClient(cfg.TokenStore),
-		firstSession:     make(chan struct{}),
-		shutdown:         make(chan struct{}),
+		cfg:               cfg,
+		version:           version,
+		tokens:            tokens,
+		certs:             certMgr,
+		configErr:         runtimeErr,
+		listenQUIC:        tunnel.ListenQUIC,
+		heartbeatTimeout:  60 * time.Second,
+		sessions:          make(map[*Session]struct{}),
+		routes:            make(map[string]*Route),
+		proxies:           make(map[string]*httputil.ReverseProxy),
+		pubSrvs:           make(map[*http.Server]struct{}),
+		rawConns:          make(map[net.Conn]struct{}),
+		preauth:           make(map[tunnel.Session]struct{}),
+		hijacked:          make(map[net.Conn]struct{}),
+		tlsHandshakeSlots: make(chan struct{}, 128),
+		preAuthSlots:      make(chan struct{}, safeChannelCapacity(cfg.MaxPreAuthSessions)),
+		authSlots:         make(chan struct{}, safeChannelCapacity(cfg.MaxSessionsTotal)),
+		globalStreamSlots: make(chan struct{}, safeChannelCapacity(cfg.MaxStreamsTotal)),
+		metrics:           newMetrics(),
+		traffic:           newTrafficStore(trafficPath(cfg)),
+		reqSink:           reqlog.NopSink{},
+		reqHeartbeat:      time.Duration(hbSec) * time.Second,
+		capPath:           capPath,
+		capClientIP:       capIP,
+		capUserAgent:      capUA,
+		capReferer:        capRef,
+		ipTruncate:        cfg.RequestLog.IPMode != "off",
+		hostnames:         newHostnamesClient(cfg.TokenStore),
+		firstSession:      make(chan struct{}),
+		shutdown:          make(chan struct{}),
+		shutdownDone:      make(chan struct{}),
 	}
+	e.metrics.configure(cfg.MaxStreamsPerSession, cfg.MaxStreamsTotal, cfg.YamuxStreamWindowBytes)
 	// Gate on-demand DNS-01 wildcard issuance on hosts the edge actually serves,
 	// so an unauthenticated peer sending arbitrary <app>.<slug>.<base> SNIs
 	// can't drive real ACME orders for attacker-chosen wildcards (which would
@@ -154,6 +306,13 @@ func New(cfg *config.Server, version string, tokens auth.Store, certMgr certs.Ma
 		hm.SetHostAllowed(e.hostKnownForCert)
 	}
 	return e
+}
+
+func safeChannelCapacity(value int) int {
+	if value < 1 {
+		return 1
+	}
+	return value
 }
 
 // hostKnownForCert reports whether the edge should obtain a real cert for this
@@ -233,6 +392,12 @@ func (e *Edge) flushTrafficPeriodically() {
 }
 
 func (e *Edge) Serve() error {
+	if e.configErr != nil {
+		return fmt.Errorf("edge runtime configuration: %w", e.configErr)
+	}
+	if err := e.cfg.FinalizeRuntime(); err != nil {
+		return fmt.Errorf("edge runtime configuration: %w", err)
+	}
 	tlsCfg := &tls.Config{
 		GetCertificate: e.certs.GetCertificate,
 		// Pin the floor explicitly rather than rely on the toolchain default:
@@ -246,29 +411,258 @@ func (e *Edge) Serve() error {
 		NextProtos: []string{ALPNBeam, acmeTLS1, "h2", "http/1.1"},
 	}
 
-	ln, err := tls.Listen("tcp", e.cfg.ListenHTTPS, tlsCfg)
+	ln, err := net.Listen("tcp", e.cfg.ListenHTTPS)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", e.cfg.ListenHTTPS, err)
 	}
-	e.mu.Lock()
+	var (
+		quicLn tunnel.Listener
+		quicIO io.Closer
+	)
+	if !e.cfg.DisableQUIC {
+		quicTLS := tlsCfg.Clone()
+		quicTLS.MinVersion = tls.VersionTLS13
+		quicTLS.NextProtos = []string{tunnel.ALPNQUIC}
+		listenQUIC := e.listenQUIC
+		if listenQUIC == nil {
+			listenQUIC = tunnel.ListenQUIC
+		}
+		quicLn, quicIO, err = listenQUIC(e.cfg.ListenQUIC, quicTLS, e.cfg.DataDir, e.observeQUICAttempt)
+		if err != nil {
+			_ = ln.Close()
+			return fmt.Errorf("listen QUIC %s: %w", e.cfg.ListenQUIC, err)
+		}
+	}
+
+	e.lifecycleMu.Lock()
+	if e.shuttingDown {
+		e.lifecycleMu.Unlock()
+		_ = ln.Close()
+		if quicLn != nil {
+			_ = quicLn.Close()
+		}
+		if quicIO != nil {
+			_ = quicIO.Close()
+		}
+		return nil
+	}
 	e.ln = ln
-	e.mu.Unlock()
-	slog.Info("edge listening", "addr", e.cfg.ListenHTTPS)
+	e.quicLn = quicLn
+	e.quicIO = quicIO
+	acceptCount := 1
+	if quicLn != nil {
+		acceptCount++
+	}
+	e.acceptWG.Add(acceptCount)
+	e.backgroundWG.Add(1)
+	e.lifecycleMu.Unlock()
+	e.metrics.setListener(tunnel.KindYamux, true)
+	e.metrics.setListener(tunnel.KindQUIC, quicLn != nil)
+
 	if e.cfg.MetricsToken == "" {
 		slog.Warn("edge: /metrics is disabled (no metrics_token set) — set metrics_token or BEAMD_METRICS_TOKEN to enable operator scraping")
 	}
 
-	go e.flushTrafficPeriodically()
+	go func() {
+		defer e.backgroundWG.Done()
+		e.flushTrafficPeriodically()
+	}()
 
+	results := make(chan error, 2)
+	go e.acceptTCP(ln, tlsCfg, results)
+	if quicLn != nil {
+		go e.acceptQUIC(quicLn, results)
+	}
+
+	transports := []string{"tcp"}
+	if quicLn != nil {
+		transports = append(transports, "quic")
+	}
+	slog.Info("ready",
+		"version", e.version,
+		"base_domain", e.cfg.BaseDomain,
+		"listen_https", e.cfg.ListenHTTPS,
+		"listen_quic", e.cfg.ListenQUIC,
+		"transports", transports,
+		"yamux_stream_window_bytes", e.cfg.YamuxStreamWindowBytes,
+	)
+
+	var firstErr error
+	for range acceptCount {
+		acceptErr := <-results
+		if acceptErr != nil && firstErr == nil {
+			firstErr = acceptErr
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = e.Shutdown(ctx)
+			cancel()
+		}
+	}
+	return firstErr
+}
+
+func (e *Edge) acceptTCP(ln net.Listener, tlsCfg *tls.Config, results chan<- error) {
+	defer e.acceptWG.Done()
 	for {
-		c, err := ln.Accept()
+		raw, err := ln.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				return nil
+				results <- nil
+			} else {
+				results <- fmt.Errorf("TCP accept: %w", err)
 			}
-			return fmt.Errorf("accept: %w", err)
+			return
 		}
-		go e.handle(c)
+		select {
+		case e.tlsHandshakeSlots <- struct{}{}:
+		default:
+			e.metrics.recordCapacityRejection("tls_handshake")
+			_ = raw.Close()
+			continue
+		}
+
+		e.lifecycleMu.Lock()
+		if e.shuttingDown {
+			e.lifecycleMu.Unlock()
+			<-e.tlsHandshakeSlots
+			_ = raw.Close()
+			continue
+		}
+		e.rawConns[raw] = struct{}{}
+		e.handlerWG.Add(1)
+		e.lifecycleMu.Unlock()
+		go e.handleTCP(raw, tlsCfg)
+	}
+}
+
+func (e *Edge) acceptQUIC(ln tunnel.Listener, results chan<- error) {
+	defer e.acceptWG.Done()
+	for {
+		transport, err := ln.Accept(context.Background())
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) || e.isShuttingDown() {
+				results <- nil
+			} else {
+				results <- fmt.Errorf("QUIC accept: %w", err)
+			}
+			return
+		}
+		if !e.acquirePreauth(transport) {
+			_ = transport.CloseWithError(tunnel.CloseCapacity, "pre-authentication capacity reached")
+			continue
+		}
+		e.lifecycleMu.Lock()
+		if e.shuttingDown {
+			e.lifecycleMu.Unlock()
+			e.releasePreauth(transport)
+			_ = transport.CloseWithError(tunnel.CloseShutdown, "edge shutting down")
+			continue
+		}
+		e.sessionWG.Add(1)
+		e.lifecycleMu.Unlock()
+		go func() {
+			defer e.sessionWG.Done()
+			e.handleTunnelSession(transport)
+		}()
+	}
+}
+
+func (e *Edge) isShuttingDown() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.shuttingDown
+}
+
+func (e *Edge) observeQUICAttempt(err error) {
+	if err != nil {
+		e.metrics.recordHandshakeError(tunnel.KindQUIC, classifyHandshakeError(err))
+	}
+}
+
+func classifyHandshakeError(err error) string {
+	if err == nil {
+		return "other"
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) {
+		return "timeout"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "tls"),
+		strings.Contains(message, "certificate"),
+		strings.Contains(message, "x509"):
+		return "tls"
+	case strings.Contains(message, "protocol"),
+		strings.Contains(message, "version"),
+		strings.Contains(message, "alpn"),
+		strings.Contains(message, "application protocol"):
+		return "protocol"
+	default:
+		return "other"
+	}
+}
+
+func classifySessionClose(info tunnel.CloseInfo) string {
+	return tunnel.CloseReason(info)
+}
+
+func (e *Edge) handleTCP(raw net.Conn, tlsCfg *tls.Config) {
+	defer func() {
+		e.lifecycleMu.Lock()
+		delete(e.rawConns, raw)
+		e.lifecycleMu.Unlock()
+		e.handlerWG.Done()
+	}()
+
+	handshakeSlotHeld := true
+	releaseHandshake := func() {
+		if handshakeSlotHeld {
+			handshakeSlotHeld = false
+			<-e.tlsHandshakeSlots
+		}
+	}
+	defer releaseHandshake()
+
+	tlsConn := tls.Server(raw, tlsCfg)
+	_ = raw.SetDeadline(time.Now().Add(preAuthTimeout))
+	started := time.Now()
+	if err := tlsConn.HandshakeContext(context.Background()); err != nil {
+		releaseHandshake()
+		e.metrics.recordHandshakeError(tunnel.KindYamux, classifyHandshakeError(err))
+		slog.Debug("tls handshake failed", "err", err.Error())
+		_ = raw.Close()
+		return
+	}
+	releaseHandshake()
+
+	if e.isShuttingDown() {
+		_ = raw.Close()
+		return
+	}
+	switch tlsConn.ConnectionState().NegotiatedProtocol {
+	case ALPNBeam:
+		_ = raw.SetDeadline(time.Time{})
+		transport, err := tunnel.NewYamuxServer(tlsConn, uint32(e.cfg.YamuxStreamWindowBytes))
+		if err != nil {
+			slog.Error("yamux server setup failed", "err", err.Error())
+			_ = raw.Close()
+			return
+		}
+		if !e.acquirePreauth(transport) {
+			_ = transport.CloseWithError(tunnel.CloseCapacity, "pre-authentication capacity reached")
+			return
+		}
+		slog.Debug("tunnel transport handshake complete",
+			"transport", tunnel.KindYamux,
+			"handshake_ms", time.Since(started).Milliseconds(),
+		)
+		e.handleTunnelSession(transport)
+	case acmeTLS1:
+		_ = raw.Close()
+	default:
+		_ = raw.SetDeadline(time.Time{})
+		e.handlePublic(tlsConn)
 	}
 }
 
@@ -277,63 +671,185 @@ func (e *Edge) Serve() error {
 // drains in-flight public requests up to ctx's deadline before
 // force-closing remaining sessions. Idempotent.
 func (e *Edge) Shutdown(ctx context.Context) error {
-	e.shutdownOnce.Do(func() { close(e.shutdown) })
+	e.shutdownOnce.Do(func() {
+		defer close(e.shutdownDone)
 
-	// Persist final bandwidth totals before we go.
-	if err := e.traffic.Flush(); err != nil {
-		slog.Warn("traffic store final flush failed", "err", err.Error())
-	}
+		e.lifecycleMu.Lock()
+		e.shuttingDown = true
+		close(e.shutdown)
+		ln := e.ln
+		quicLn := e.quicLn
+		quicIO := e.quicIO
+		e.ln = nil
+		e.quicLn = nil
+		e.quicIO = nil
+		rawConns := make([]net.Conn, 0, len(e.rawConns))
+		for conn := range e.rawConns {
+			rawConns = append(rawConns, conn)
+		}
+		preauth := make([]tunnel.Session, 0, len(e.preauth))
+		for transport := range e.preauth {
+			preauth = append(preauth, transport)
+		}
+		hijacked := make([]net.Conn, 0, len(e.hijacked))
+		for conn := range e.hijacked {
+			hijacked = append(hijacked, conn)
+		}
+		e.mu.RLock()
+		srvs := make([]*http.Server, 0, len(e.pubSrvs))
+		for srv := range e.pubSrvs {
+			srvs = append(srvs, srv)
+		}
+		sessions := make([]*Session, 0, len(e.sessions))
+		for sess := range e.sessions {
+			sessions = append(sessions, sess)
+		}
+		e.mu.RUnlock()
+		e.lifecycleMu.Unlock()
 
-	e.mu.Lock()
-	ln := e.ln
-	e.ln = nil
-	srvs := make([]*http.Server, 0, len(e.pubSrvs))
-	for s := range e.pubSrvs {
-		srvs = append(srvs, s)
-	}
-	sessions := make([]*Session, 0, len(e.sessions))
-	for s := range e.sessions {
-		sessions = append(sessions, s)
-	}
-	e.mu.Unlock()
+		if ln != nil {
+			_ = ln.Close()
+		}
+		if quicLn != nil {
+			_ = quicLn.Close()
+		}
+		e.metrics.setListener(tunnel.KindYamux, false)
+		e.metrics.setListener(tunnel.KindQUIC, false)
 
-	if ln != nil {
-		_ = ln.Close()
-	}
+		var forceOnce sync.Once
+		forceClose := func() {
+			forceOnce.Do(func() {
+				for _, srv := range srvs {
+					_ = srv.Close()
+				}
+				for _, conn := range hijacked {
+					_ = conn.Close()
+				}
+				for _, conn := range rawConns {
+					_ = conn.Close()
+				}
+			})
+		}
+		stopDeadlineWatch := make(chan struct{})
+		deadlineWatchDone := make(chan struct{})
+		go func() {
+			defer close(deadlineWatchDone)
+			select {
+			case <-ctx.Done():
+				forceClose()
+			case <-stopDeadlineWatch:
+			}
+		}()
+		defer func() {
+			close(stopDeadlineWatch)
+			<-deadlineWatchDone
+		}()
 
-	for _, s := range sessions {
-		s.send(&proto.Error{
-			Type:    proto.TypeError,
-			Code:    proto.CodeShutdown,
-			Message: "edge shutting down",
-		})
-	}
+		var notifyWG sync.WaitGroup
+		for _, sess := range sessions {
+			notifyWG.Add(1)
+			go func(s *Session) {
+				defer notifyWG.Done()
+				writeCtx, cancel := context.WithTimeout(ctx, time.Second)
+				defer cancel()
+				_ = s.sendShutdownContext(writeCtx, &proto.Error{
+					Type: proto.TypeError, Code: proto.CodeShutdown, Message: "edge shutting down",
+				})
+			}(sess)
+		}
+		notifyWG.Wait()
 
-	// Drain in-flight public requests via each public conn's
-	// http.Server.Shutdown — runs concurrently.
-	done := make(chan struct{})
-	go func() {
-		var wg sync.WaitGroup
+		var drainWG sync.WaitGroup
 		for _, srv := range srvs {
-			wg.Add(1)
-			go func(s *http.Server) {
-				defer wg.Done()
-				_ = s.Shutdown(ctx)
+			drainWG.Add(1)
+			go func(srv *http.Server) {
+				defer drainWG.Done()
+				_ = srv.Shutdown(ctx)
 			}(srv)
 		}
-		wg.Wait()
+		drained := make(chan struct{})
+		go func() {
+			drainWG.Wait()
+			e.proxyWG.Wait()
+			close(drained)
+		}()
+		select {
+		case <-drained:
+		case <-ctx.Done():
+			forceClose()
+		}
+
+		for _, transport := range preauth {
+			_ = transport.CloseWithError(tunnel.CloseShutdown, "edge shutting down")
+		}
+		for _, sess := range sessions {
+			_ = sess.transport.CloseWithError(tunnel.CloseShutdown, "edge shutting down")
+		}
+		if quicIO != nil {
+			_ = quicIO.Close()
+		}
+
+		workersJoined := false
+		if err := waitGroups(
+			ctx,
+			&e.acceptWG,
+			&e.handlerWG,
+			&e.sessionWG,
+			&e.proxyWG,
+			&e.backgroundWG,
+			&e.streamWG,
+		); err != nil {
+			forceClose()
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			cleanupErr := waitGroups(
+				cleanupCtx,
+				&e.acceptWG,
+				&e.handlerWG,
+				&e.sessionWG,
+				&e.proxyWG,
+				&e.backgroundWG,
+				&e.streamWG,
+			)
+			cancel()
+			if cleanupErr != nil {
+				e.shutdownErr = errors.Join(err, fmt.Errorf("forced shutdown cleanup: %w", cleanupErr))
+			} else {
+				e.shutdownErr = err
+				workersJoined = true
+			}
+		} else {
+			workersJoined = true
+		}
+		// Traffic finalization runs in leased-stream watchers. Never race the
+		// persistent store's final flush against a worker that failed to drain.
+		if workersJoined {
+			if err := e.traffic.Flush(); err != nil {
+				slog.Warn("traffic store final flush failed", "err", err.Error())
+				if e.shutdownErr == nil {
+					e.shutdownErr = err
+				}
+			}
+		} else {
+			slog.Warn("traffic store final flush skipped because proxy workers did not drain")
+		}
+	})
+	return e.shutdownErr
+}
+
+func waitGroups(ctx context.Context, groups ...*sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		for _, group := range groups {
+			group.Wait()
+		}
 		close(done)
 	}()
 	select {
 	case <-done:
+		return nil
 	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	// Force-close any lingering yamux sessions.
-	for _, s := range sessions {
-		_ = s.yamux.Close()
-	}
-	return nil
 }
 
 // FirstSession returns a channel closed once the first client has
@@ -363,8 +879,8 @@ func (e *Edge) SessionsCreatedTotal() int64 {
 	return e.metrics.sessionsCreatedTotal.Load()
 }
 
-// CloseAllSessions ends every active client session by closing its
-// yamux session. Test helper for exercising the client's reconnect
+// CloseAllSessions ends every active client transport session. Test helper for
+// exercising the client's reconnect
 // path — production code does NOT call this.
 func (e *Edge) CloseAllSessions() {
 	e.mu.RLock()
@@ -374,84 +890,136 @@ func (e *Edge) CloseAllSessions() {
 	}
 	e.mu.RUnlock()
 	for _, s := range sessions {
-		_ = s.yamux.Close()
+		_ = s.transport.CloseWithError(tunnel.CloseSuperseded, "test forced reconnect")
 	}
 }
 
-// preAuthTimeout bounds everything an unauthenticated peer can make us do:
-// the TLS handshake, and for beam clients the control-stream open + hello
-// exchange. Without it a peer that stalls mid-handshake (or never sends the
-// hello) pins a goroutine and FD forever. Must stay under the yamux keepalive
-// interval (20s) so the deadline can't trip on a legitimate idle keepalive.
+// preAuthTimeout bounds a raw TCP TLS handshake. The common transport hello
+// path has its own five-second context/deadline.
 const preAuthTimeout = 15 * time.Second
 
-func (e *Edge) handle(c net.Conn) {
-	tlsConn, ok := c.(*tls.Conn)
-	if !ok {
-		_ = c.Close()
-		return
-	}
-	_ = c.SetDeadline(time.Now().Add(preAuthTimeout))
-	if err := tlsConn.HandshakeContext(context.Background()); err != nil {
-		slog.Debug("tls handshake failed", "err", err.Error())
-		_ = c.Close()
-		return
-	}
-
-	switch tlsConn.ConnectionState().NegotiatedProtocol {
-	case ALPNBeam:
-		// Deadline stays armed through the hello exchange; handleClient clears
-		// it once the client authenticates.
-		e.handleClient(c)
-	case acmeTLS1:
-		// An ACME TLS-ALPN-01 challenge: validation happened during the
-		// handshake (the challenge cert was served via GetCertificate). There's
-		// no application data — just close.
-		_ = c.Close()
+func (e *Edge) acquirePreauth(transport tunnel.Session) bool {
+	select {
+	case e.preAuthSlots <- struct{}{}:
 	default:
-		// Public HTTP: hand off with no deadline — the http.Server's
-		// ReadHeaderTimeout re-arms reads per request, and writes must stay
-		// unbounded so streaming responses (SSE, websockets) survive.
-		_ = c.SetDeadline(time.Time{})
-		e.handlePublic(c)
+		e.metrics.recordCapacityRejection("preauth_session")
+		return false
+	}
+	e.lifecycleMu.Lock()
+	if e.shuttingDown {
+		e.lifecycleMu.Unlock()
+		<-e.preAuthSlots
+		return false
+	}
+	e.preauth[transport] = struct{}{}
+	e.lifecycleMu.Unlock()
+	e.metrics.addSessionState(transport.Kind(), "preauth", 1)
+	return true
+}
+
+func (e *Edge) releasePreauth(transport tunnel.Session) {
+	e.lifecycleMu.Lock()
+	if _, ok := e.preauth[transport]; !ok {
+		e.lifecycleMu.Unlock()
+		return
+	}
+	delete(e.preauth, transport)
+	e.lifecycleMu.Unlock()
+	e.metrics.addSessionState(transport.Kind(), "preauth", -1)
+	<-e.preAuthSlots
+}
+
+func (e *Edge) acquireAuthenticated() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.shuttingDown {
+		return false
+	}
+	select {
+	case e.authSlots <- struct{}{}:
+		return true
+	default:
+		e.metrics.recordCapacityRejection("authenticated_session")
+		return false
 	}
 }
 
-func (e *Edge) handleClient(c net.Conn) {
-	yamuxSess, err := mux.Server(c, uint32(e.cfg.YamuxStreamWindowBytes))
-	if err != nil {
-		slog.Error("yamux server setup failed", "err", err.Error())
-		_ = c.Close()
-		return
+func (e *Edge) promoteAuthenticated(transport tunnel.Session, sess *Session) bool {
+	e.lifecycleMu.Lock()
+	if e.shuttingDown {
+		e.lifecycleMu.Unlock()
+		return false
 	}
-	defer yamuxSess.Close()
+	if _, ok := e.preauth[transport]; !ok {
+		e.lifecycleMu.Unlock()
+		return false
+	}
+	delete(e.preauth, transport)
+	e.mu.Lock()
+	e.sessions[sess] = struct{}{}
+	e.mu.Unlock()
+	e.lifecycleMu.Unlock()
 
-	control, err := yamuxSess.AcceptStream()
+	e.metrics.addSessionState(transport.Kind(), "preauth", -1)
+	<-e.preAuthSlots
+	return true
+}
+
+func (e *Edge) handleTunnelSession(transport tunnel.Session) {
+	handshakeStarted := time.Now()
+	authenticated := false
+	defer func() {
+		if !authenticated {
+			e.releasePreauth(transport)
+		}
+		if !transport.IsClosed() {
+			_ = transport.CloseWithError(tunnel.CloseNormal, "session handler ended")
+		}
+	}()
+
+	control, cancel, err := acceptPreauthControl(transport, preauthHandshakeBudget)
 	if err != nil {
-		slog.Debug("accept control stream", "err", err.Error())
+		e.metrics.recordHandshakeError(transport.Kind(), classifyHandshakeError(err))
+		slog.Debug("accept control stream", "transport", transport.Kind(), "err", err.Error())
 		return
 	}
+	defer cancel()
 
 	br := bufio.NewReader(control)
 	typ, line, err := proto.Read(br)
 	if err != nil || typ != proto.TypeHello {
+		e.metrics.recordHandshakeError(transport.Kind(), "protocol")
 		_ = proto.Write(control, &proto.Error{
 			Type: proto.TypeError, Code: proto.CodeBadHello,
 			Message: "first message must be hello",
 		})
+		_ = transport.CloseWithError(tunnel.CloseProtocol, "first message must be hello")
 		return
 	}
 
 	var hello proto.Hello
 	if err := json.Unmarshal(line, &hello); err != nil {
+		e.metrics.recordHandshakeError(transport.Kind(), "protocol")
 		_ = proto.Write(control, &proto.Error{
 			Type: proto.TypeError, Code: proto.CodeBadHello, Message: err.Error(),
 		})
+		_ = transport.CloseWithError(tunnel.CloseProtocol, "malformed hello")
+		return
+	}
+	if hello.ProtoVersion != proto.ProtoVersion {
+		e.metrics.recordHandshakeError(transport.Kind(), "protocol")
+		_ = proto.Write(control, &proto.Error{
+			Type:    proto.TypeError,
+			Code:    proto.CodeBadVersion,
+			Message: fmt.Sprintf("protocol version %d is not supported; expected %d", hello.ProtoVersion, proto.ProtoVersion),
+		})
+		_ = transport.CloseWithError(tunnel.CloseProtocol, "protocol version mismatch")
 		return
 	}
 
 	slug, ok := e.tokens.Resolve(hello.Token, hello.Scope)
 	if !ok {
+		e.metrics.recordHandshakeError(transport.Kind(), "protocol")
 		msg := "invalid token"
 		if hello.Scope != "" {
 			msg = fmt.Sprintf("invalid token, or scope %q not available to this login", hello.Scope)
@@ -459,6 +1027,18 @@ func (e *Edge) handleClient(c net.Conn) {
 		_ = proto.Write(control, &proto.Error{
 			Type: proto.TypeError, Code: proto.CodeBadToken, Message: msg,
 		})
+		_ = transport.CloseWithError(tunnel.CloseAuth, "authentication rejected")
+		return
+	}
+	if !e.acquireAuthenticated() {
+		if e.isShuttingDown() {
+			_ = transport.CloseWithError(tunnel.CloseShutdown, "edge shutting down")
+			return
+		}
+		_ = proto.Write(control, &proto.Error{
+			Type: proto.TypeError, Code: proto.CodeOverLimit, Message: "authenticated session capacity reached",
+		})
+		_ = transport.CloseWithError(tunnel.CloseCapacity, "authenticated session capacity reached")
 		return
 	}
 
@@ -466,46 +1046,103 @@ func (e *Edge) handleClient(c net.Conn) {
 		Type: proto.TypeHelloOK, Slug: slug,
 		BaseDomain: e.cfg.BaseDomain, Shape: string(e.cfg.Shape()), ProtoVersion: proto.ProtoVersion,
 	}); err != nil {
-		slog.Error("control: write hello_ok", "err", err.Error())
+		<-e.authSlots
+		e.metrics.recordHandshakeError(transport.Kind(), "other")
+		_ = transport.CloseWithError(tunnel.CloseProtocol, "write hello_ok failed")
 		return
 	}
-
-	// Authenticated: disarm the pre-auth deadline. Liveness from here on is
-	// the heartbeat watchdog's job.
-	_ = c.SetDeadline(time.Time{})
-
 	sess := &Session{
-		yamux:         yamuxSess,
+		transport:     transport,
+		kind:          transport.Kind(),
 		slug:          slug,
 		control:       control,
+		id:            reqlog.NewID(),
+		remote:        transport.RemoteAddr().String(),
+		handshake:     time.Since(handshakeStarted),
+		streamSlots:   make(chan struct{}, e.cfg.MaxStreamsPerSession),
+		writeGate:     make(chan struct{}, 1),
 		names:         make(map[string]struct{}),
 		hosts:         make(map[string][]string),
 		lastHeartbeat: time.Now(),
 	}
-	e.mu.Lock()
-	e.sessions[sess] = struct{}{}
-	e.mu.Unlock()
+	if !e.promoteAuthenticated(transport, sess) {
+		<-e.authSlots
+		_ = transport.CloseWithError(tunnel.CloseShutdown, "edge shutting down")
+		return
+	}
+	_ = control.SetDeadline(time.Time{})
+	cancel()
+	authenticated = true
+
 	e.metrics.activeSessions.Add(1)
 	e.metrics.sessionsCreatedTotal.Add(1)
+	e.metrics.addSessionState(transport.Kind(), "authenticated", 1)
+	e.metrics.recordSessionCreated(transport.Kind())
 	e.firstSessionOnce.Do(func() { close(e.firstSession) })
-	slog.Info("session opened", "slug", slug, "remote", c.RemoteAddr())
-
-	defer e.dropSession(sess)
+	slog.Info("session opened",
+		"event", "session_opened",
+		"session_id", sess.id,
+		"transport", transport.Kind(),
+		"slug", slug,
+		"remote_addr", sess.remote,
+		"handshake_ms", sess.handshake.Milliseconds(),
+		"active_streams", sess.activeStreams.Load(),
+		"close_reason", "",
+		"error_category", "",
+	)
 
 	hbCtx, hbCancel := context.WithCancel(context.Background())
-	defer hbCancel()
-	go e.heartbeatWatch(hbCtx, sess)
+	// Cancel heartbeat before dropSession closes and joins the transport tree.
+	// Keeping both operations in one defer makes the ordering explicit; a
+	// separate later defer could otherwise strand dropSession in helperWG.Wait.
+	defer func() {
+		hbCancel()
+		e.dropSession(sess)
+	}()
+	sess.startHelper(func() { e.heartbeatWatch(hbCtx, sess) })
+	sess.startHelper(func() { e.rejectUnexpectedStreams(sess) })
 
 	for {
 		typ, line, err := proto.Read(br)
 		if err != nil {
-			if err != io.EOF && !errors.Is(err, net.ErrClosed) {
-				slog.Debug("control: read", "err", err.Error())
+			_ = transport.CloseWithError(tunnel.CloseProtocol, "control stream ended")
+			_ = control.CloseWrite()
+			if err != io.EOF && !errors.Is(err, net.ErrClosed) && !errors.Is(err, tunnel.ErrSessionClosed) {
+				slog.Debug("control: read", "transport", transport.Kind(), "err", err.Error())
 			}
 			return
 		}
 		e.handleControlMsg(sess, typ, line)
 	}
+}
+
+// acceptPreauthControl applies one wall-clock budget to both accepting the
+// control stream and reading/writing the hello exchange. The returned cancel
+// must remain live until authentication finishes so the stream deadline is
+// never restarted after AcceptStream.
+func acceptPreauthControl(
+	transport tunnel.Session,
+	budget time.Duration,
+) (tunnel.Stream, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	control, err := transport.AcceptStream(ctx)
+	if err != nil {
+		cancel()
+		return nil, func() {}, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = control.SetDeadline(deadline)
+	}
+	return control, cancel, nil
+}
+
+func (e *Edge) rejectUnexpectedStreams(sess *Session) {
+	stream, err := sess.transport.AcceptStream(context.Background())
+	if err != nil {
+		return
+	}
+	stream.Abort(tunnel.StreamCanceled)
+	_ = sess.transport.CloseWithError(tunnel.CloseProtocol, "unexpected agent-opened stream")
 }
 
 func (e *Edge) handleControlMsg(sess *Session, typ string, line []byte) {
@@ -550,12 +1187,44 @@ func (e *Edge) handleControlMsg(sess *Session, typ string, line []byte) {
 	}
 }
 
-func (sess *Session) send(msg any) {
-	sess.writeMu.Lock()
-	defer sess.writeMu.Unlock()
+func (sess *Session) send(msg any) error {
+	return sess.sendContext(context.Background(), msg)
+}
+
+func (sess *Session) sendContext(ctx context.Context, msg any) error {
+	return sess.writeControlContext(ctx, msg, true)
+}
+
+func (sess *Session) sendShutdownContext(ctx context.Context, msg any) error {
+	return sess.writeControlContext(ctx, msg, false)
+}
+
+func (sess *Session) writeControlContext(ctx context.Context, msg any, closeProtocolOnFailure bool) error {
+	sess.writeOnce.Do(func() {
+		if sess.writeGate == nil {
+			sess.writeGate = make(chan struct{}, 1)
+		}
+	})
+	select {
+	case sess.writeGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-sess.transport.Done():
+		return tunnel.ErrSessionClosed
+	}
+	defer func() { <-sess.writeGate }()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = sess.control.SetWriteDeadline(deadline)
+		defer sess.control.SetWriteDeadline(time.Time{})
+	}
 	if err := proto.Write(sess.control, msg); err != nil {
 		slog.Debug("control: write", "err", err.Error())
+		if closeProtocolOnFailure {
+			_ = sess.transport.CloseWithError(tunnel.CloseProtocol, "control write failed")
+		}
+		return err
 	}
+	return nil
 }
 
 func (e *Edge) register(sess *Session, name string) (string, *proto.Error) {
@@ -604,7 +1273,7 @@ func (e *Edge) register(sess *Session, name string) (string, *proto.Error) {
 		if !ok || existing.session == sess {
 			continue
 		}
-		if existing.session.yamux.IsClosed() {
+		if existing.session.transport.IsClosed() {
 			displaced[displacedKey{existing.session, existing.name}] = struct{}{}
 			continue
 		}
@@ -712,6 +1381,9 @@ func (e *Edge) unregister(sess *Session, name string) {
 }
 
 func (e *Edge) dropSession(sess *Session) {
+	// Close stream admission before removing routes or waiting. This prevents a
+	// zero-counter Wait from racing a late request that captured the old route.
+	sess.stopStreamAdmission()
 	e.mu.Lock()
 	if _, was := e.sessions[sess]; was {
 		delete(e.sessions, sess)
@@ -731,8 +1403,32 @@ func (e *Edge) dropSession(sess *Session) {
 		e.metrics.activeTunnels.Add(-int64(len(removedNames)))
 	}
 	e.mu.Unlock()
-	_ = sess.yamux.Close()
-	slog.Info("session dropped", "slug", sess.slug)
+	if !sess.transport.IsClosed() {
+		_ = sess.transport.CloseWithError(tunnel.CloseNormal, "session dropped")
+	}
+	// A successfully authenticated session owns its capacity slot until the
+	// transport's entire child tree is terminal. Releasing on a wall-clock
+	// timeout would allow a slow adapter to exceed the configured session cap.
+	<-sess.transport.Done()
+	sess.waitHelpers()
+	sess.waitStreamWatchers()
+	sess.authRelease.Do(func() {
+		<-e.authSlots
+		e.metrics.addSessionState(sess.kind, "authenticated", -1)
+	})
+	closeReason := classifySessionClose(sess.transport.CloseInfo())
+	e.metrics.recordSessionClose(sess.kind, closeReason)
+	slog.Info("session dropped",
+		"event", "session_closed",
+		"session_id", sess.id,
+		"transport", sess.kind,
+		"slug", sess.slug,
+		"remote_addr", sess.remote,
+		"handshake_ms", sess.handshake.Milliseconds(),
+		"active_streams", sess.activeStreams.Load(),
+		"close_reason", closeReason,
+		"error_category", closeReason,
+	)
 }
 
 func (e *Edge) heartbeatWatch(ctx context.Context, sess *Session) {
@@ -747,7 +1443,7 @@ func (e *Edge) heartbeatWatch(ctx context.Context, sess *Session) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-sess.yamux.CloseChan():
+		case <-sess.transport.Done():
 			return
 		case <-tick.C:
 			sess.mu.Lock()
@@ -755,7 +1451,7 @@ func (e *Edge) heartbeatWatch(ctx context.Context, sess *Session) {
 			sess.mu.Unlock()
 			if since > e.heartbeatTimeout {
 				slog.Warn("session: heartbeat timeout", "slug", sess.slug, "since", since)
-				_ = sess.yamux.Close()
+				_ = sess.transport.CloseWithError(tunnel.CloseProtocol, "heartbeat timeout")
 				return
 			}
 		}
@@ -774,9 +1470,16 @@ func (e *Edge) handlePublic(c net.Conn) {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
+	e.lifecycleMu.Lock()
+	if e.shuttingDown {
+		e.lifecycleMu.Unlock()
+		_ = c.Close()
+		return
+	}
 	e.mu.Lock()
 	e.pubSrvs[srv] = struct{}{}
 	e.mu.Unlock()
+	e.lifecycleMu.Unlock()
 	defer func() {
 		e.mu.Lock()
 		delete(e.pubSrvs, srv)
@@ -831,15 +1534,17 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 
 	rr := &responseRecorder{ResponseWriter: w}
 	start := time.Now()
+	var finishOrdinaryProxy func()
 
 	// Count request bytes (bytes_in), then cap body size. Oversized bodies
 	// produce HTTP 413 via http.MaxBytesReader's error response.
 	var bodyCount *countingReader
+	var proxyBody io.ReadCloser
 	if r.Body != nil {
 		bodyCount = &countingReader{rc: r.Body}
-		r.Body = bodyCount
+		proxyBody = bodyCount
 		if cap := e.cfg.MaxRequestBodyBytes; cap > 0 {
-			r.Body = http.MaxBytesReader(rr, bodyCount, cap)
+			proxyBody = http.MaxBytesReader(rr, bodyCount, cap)
 		}
 	}
 
@@ -861,14 +1566,65 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 		slug = route.session.slug
 	}
 	meta := e.metaFor(host, slug, r.Method, requestTarget(r), r.RemoteAddr, r.UserAgent(), r.Referer(), start)
+	declaredBodyTooLarge := e.cfg.MaxRequestBodyBytes > 0 &&
+		r.ContentLength > e.cfg.MaxRequestBodyBytes
 
 	if route == nil {
 		http.Error(rr, "no route for host "+host, http.StatusNotFound)
+	} else if declaredBodyTooLarge {
+		// Reject a known oversized request before opening a tunnel stream. The
+		// MaxBytesReader below remains authoritative for chunked/unknown-length
+		// bodies whose actual size can only be discovered while reading.
+		http.Error(rr, "request body too large", http.StatusRequestEntityTooLarge)
 	} else {
-		// On a WebSocket/upgrade, the bytes flow through the hijacked conn (not
-		// the recorder); wrap it so they're counted + heartbeated.
-		rr.wrapHijack = func(c net.Conn) net.Conn { return e.startWSHeartbeat(meta, c) }
-		e.proxyFor(host).ServeHTTP(rr, r)
+		if !e.beginProxy() {
+			rr.Header().Set("Content-Type", "application/json")
+			rr.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(rr, `{"error":"edge shutting down"}`+"\n")
+		} else {
+			var proxyDone sync.Once
+			finishProxy := func() { proxyDone.Do(e.proxyWG.Done) }
+			finishOrdinaryProxy = finishProxy
+
+			// On a WebSocket/upgrade, transfer active-proxy ownership to the
+			// hijacked connection. Its Close removes it from the shutdown set
+			// and decrements the wait group exactly once.
+			rr.wrapHijack = func(c net.Conn) (net.Conn, bool) {
+				e.lifecycleMu.Lock()
+				if e.shuttingDown {
+					e.lifecycleMu.Unlock()
+					_ = c.Close()
+					return c, false
+				}
+				var tracked net.Conn
+				tracked = e.startWSHeartbeat(meta, c, func() {
+					e.lifecycleMu.Lock()
+					delete(e.hijacked, tracked)
+					e.lifecycleMu.Unlock()
+					finishProxy()
+				})
+				e.hijacked[tracked] = struct{}{}
+				e.lifecycleMu.Unlock()
+				return tracked, true
+			}
+			// net/http.Transport deliberately detaches DialContext
+			// cancellation from the request once dialing begins, but preserves
+			// context values. Carry the original visitor context explicitly so
+			// stream setup and the leased stream retain request cancellation
+			// semantics instead of the dial-only context.
+			proxyRequest := r.WithContext(context.WithValue(
+				r.Context(),
+				visitorRequestContextKey{},
+				r.Context(),
+			))
+			// Keep r.Body itself untouched. net/http's HTTP/1.1 server uses its
+			// concrete body type to detect a final response sent before request
+			// EOF and invoke its RST-avoidance half-close path. Counting and
+			// limiting only the cloned outbound request preserves that server
+			// lifecycle behavior while ReverseProxy sees the same wrapped body.
+			proxyRequest.Body = proxyBody
+			e.proxyFor(host).ServeHTTP(rr, proxyRequest)
+		}
 	}
 
 	if rr.status == 0 {
@@ -900,6 +1656,14 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 			firstByte = time.Time{}
 		}
 		e.emitRequest(meta, rr.status, outcome, bytesIn, rr.bytes, firstByte)
+		if finishOrdinaryProxy != nil {
+			// Keep shutdown ownership until the terminal request event is
+			// committed. This is essential for an upgrade that hijacked just
+			// after shutdown began: no HTTP server owns that handler anymore,
+			// so proxyWG is the only join preventing sink teardown from racing
+			// the ordinary fallback event.
+			finishOrdinaryProxy()
+		}
 	}
 
 	slog.Debug("request",
@@ -911,6 +1675,16 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 		"slug", slug,
 		"outcome", outcome,
 	)
+}
+
+func (e *Edge) beginProxy() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.shuttingDown {
+		return false
+	}
+	e.proxyWG.Add(1)
+	return true
 }
 
 // bearerTokenOK reports whether the request carries `Authorization: Bearer
@@ -1031,29 +1805,32 @@ func (e *Edge) proxyFor(host string) *httputil.ReverseProxy {
 		},
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				e.mu.RLock()
-				route := e.routes[host]
-				e.mu.RUnlock()
-				if route == nil {
-					return nil, fmt.Errorf("no route for %s", host)
+				visitorCtx, ok := ctx.Value(visitorRequestContextKey{}).(context.Context)
+				if !ok {
+					return nil, errors.New("proxy dial missing visitor request context")
 				}
-				stream, err := route.session.yamux.OpenStream()
-				if err != nil {
-					return nil, fmt.Errorf("open stream: %w", err)
-				}
-				if _, err := fmt.Fprintf(stream, "%s\n", route.name); err != nil {
-					_ = stream.Close()
-					return nil, fmt.Errorf("write name prefix: %w", err)
-				}
-				// Wrap after the name prefix so only real app traffic is
-				// counted. Reported per-tunnel on close (incl. WebSocket).
-				slug, name := route.session.slug, route.name
-				return &countingConn{
-					Conn:    stream,
-					onClose: func(in, out int64) { e.recordTraffic(slug, name, in, out) },
-				}, nil
+				return e.openRouteStream(visitorCtx, host)
 			},
 			DisableKeepAlives: true,
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if r.Context().Err() != nil {
+				return
+			}
+			var bodyTooLarge *http.MaxBytesError
+			if errors.As(err, &bodyTooLarge) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if errors.Is(err, tunnel.ErrCapacity) {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = io.WriteString(w, `{"error":"tunnel capacity reached"}`+"\n")
+				return
+			}
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(w, `{"error":"bad gateway"}`+"\n")
 		},
 	}
 	// When preview embedding is enabled, strip headers that would block
@@ -1064,6 +1841,113 @@ func (e *Edge) proxyFor(host string) *httputil.ReverseProxy {
 	}
 	e.proxies[host] = p
 	return p
+}
+
+func (e *Edge) openRouteStream(ctx context.Context, host string) (net.Conn, error) {
+	e.mu.RLock()
+	route := e.routes[host]
+	e.mu.RUnlock()
+	if route == nil {
+		return nil, fmt.Errorf("no route for %s", host)
+	}
+	return e.openRouteStreamForRoute(ctx, host, route)
+}
+
+// openRouteStreamForRoute owns admission after a route snapshot has been
+// captured. Keeping the snapshot explicit makes the identity recheck below
+// testable and documents that leases belong to that exact route/session, not
+// merely whichever route happens to occupy the hostname later.
+func (e *Edge) openRouteStreamForRoute(
+	ctx context.Context,
+	host string,
+	route *Route,
+) (net.Conn, error) {
+	watcherReserved := e.reserveStreamWatcher(route.session)
+	if !watcherReserved {
+		return nil, tunnel.ErrSessionClosed
+	}
+	defer func() {
+		if watcherReserved {
+			e.releaseStreamWatcher(route.session)
+		}
+	}()
+
+	lease, err := e.acquireStreamLease(route.session)
+	if err != nil {
+		return nil, err
+	}
+	releaseBeforeStream := true
+	defer func() {
+		if releaseBeforeStream {
+			lease.release()
+		}
+	}()
+
+	e.mu.RLock()
+	current := e.routes[host]
+	stillCurrent := current == route &&
+		current != nil &&
+		current.session == route.session &&
+		current.name == route.name
+	e.mu.RUnlock()
+	if !stillCurrent {
+		return nil, errStaleRoute
+	}
+	if route.session.transport.IsClosed() {
+		return nil, tunnel.ErrSessionClosed
+	}
+
+	stream, err := route.session.transport.OpenStream(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.metrics.recordStreamOpenError(route.session.kind, classifyStreamOpenError(err))
+		}
+		return nil, fmt.Errorf("open stream: %w", err)
+	}
+	slug, name := route.session.slug, route.name
+	conn := newLeasedConn(
+		ctx,
+		stream,
+		func(in, out int64) { e.recordTraffic(slug, name, in, out) },
+		func() {
+			lease.release()
+			e.releaseStreamWatcher(route.session)
+		},
+	)
+	releaseBeforeStream = false
+	watcherReserved = false
+
+	prefixDeadline := time.Now().Add(5 * time.Second)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(prefixDeadline) {
+		prefixDeadline = callerDeadline
+	}
+	_ = stream.SetWriteDeadline(prefixDeadline)
+	_, prefixErr := io.WriteString(stream, route.name+"\n")
+	_ = stream.SetWriteDeadline(time.Time{})
+	if prefixErr != nil {
+		stream.Abort(tunnel.StreamCanceled)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("write name prefix: %w", prefixErr)
+	}
+	if err := ctx.Err(); err != nil {
+		stream.Abort(tunnel.StreamCanceled)
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+func classifyStreamOpenError(err error) string {
+	switch {
+	case errors.Is(err, tunnel.ErrOpenTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, tunnel.ErrSessionClosed), errors.Is(err, net.ErrClosed):
+		return "closed"
+	default:
+		return "other"
+	}
 }
 
 // stripFramingHeaders removes the response headers that prevent a page

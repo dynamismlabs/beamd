@@ -372,7 +372,22 @@ func mustYamuxWindow() int64 {
 		fmt.Fprintln(os.Stderr, "config:", err)
 		os.Exit(1)
 	}
+	if err := config.ValidateAgentYamuxWindow(w); err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		os.Exit(1)
+	}
 	return w
+}
+
+// mustTransport resolves the process-level BEAMD_TRANSPORT override over the
+// selected account/explicit config and exits on an invalid value.
+func mustTransport(configured string) string {
+	mode, err := config.ResolveTransport(configured)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		os.Exit(1)
+	}
+	return mode
 }
 
 // dialAndRegister opens a foreground connection to the edge and registers
@@ -380,7 +395,12 @@ func mustYamuxWindow() int64 {
 // owns closing the client.
 func dialAndRegister(cfg *config.Client, port int, name, scope string, insecure bool) (*client.Client, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope, YamuxStreamWindowBytes: mustYamuxWindow()})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{
+		InsecureSkipVerify:     insecure,
+		Scope:                  scope,
+		YamuxStreamWindowBytes: mustYamuxWindow(),
+		Transport:              mustTransport(cfg.Transport),
+	})
 	cancel()
 	if err != nil {
 		return nil, "", fmt.Errorf("connect to edge: %w", err)
@@ -471,7 +491,12 @@ func runCmd(args []string) {
 	// are known right after Connect, so the child can be handed its public
 	// URL up front (BEAMD_URL, allowed-hosts) even though we register later.
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), 30*time.Second)
-	c, err := client.Connect(dialCtx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: *insecure || cfg.InsecureSkipVerify, Scope: ctx.Scope, YamuxStreamWindowBytes: mustYamuxWindow()})
+	c, err := client.Connect(dialCtx, cfg.Server, cfg.Token, client.Options{
+		InsecureSkipVerify:     *insecure || cfg.InsecureSkipVerify,
+		Scope:                  ctx.Scope,
+		YamuxStreamWindowBytes: mustYamuxWindow(),
+		Transport:              mustTransport(cfg.Transport),
+	})
 	cancelDial()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "run: connect to edge:", err)
@@ -725,9 +750,11 @@ func statusCmd(args []string) {
 	running := rc.AgentSocket != "" && daemon.IsRunning(rc.AgentSocket)
 	slug := ""
 	healthy := false
+	var health *daemon.HealthzResponse
 	if running {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if h, err := daemon.NewLocalClient(rc.AgentSocket).Ping(ctx); err == nil {
+			health = h
 			slug = h.Slug
 			healthy = h.Healthy
 		}
@@ -740,14 +767,34 @@ func statusCmd(args []string) {
 	}
 	if *jsonOut {
 		_ = json.NewEncoder(os.Stdout).Encode(struct {
-			AgentRunning bool           `json:"agentRunning"`
-			Server       string         `json:"server"`
-			Slug         string         `json:"slug"`
-			Scope        string         `json:"scope"`
-			Healthy      bool           `json:"healthy"`
-			ProjectFile  string         `json:"projectFile,omitempty"`
-			Services     map[string]int `json:"services,omitempty"`
-		}{running, server, slug, rc.Scope, healthy, projectFileLocation(rc), services})
+			AgentRunning        bool           `json:"agentRunning"`
+			Server              string         `json:"server"`
+			Slug                string         `json:"slug"`
+			Scope               string         `json:"scope"`
+			Healthy             bool           `json:"healthy"`
+			Transport           string         `json:"transport,omitempty"`
+			ConfiguredTransport string         `json:"configuredTransport,omitempty"`
+			FallbackCount       uint64         `json:"fallbackCount,omitempty"`
+			LastFallbackReason  string         `json:"lastFallbackReason,omitempty"`
+			ReconnectCount      uint64         `json:"reconnectCount,omitempty"`
+			LastCloseReason     string         `json:"lastCloseReason,omitempty"`
+			ProjectFile         string         `json:"projectFile,omitempty"`
+			Services            map[string]int `json:"services,omitempty"`
+		}{
+			AgentRunning:        running,
+			Server:              server,
+			Slug:                slug,
+			Scope:               rc.Scope,
+			Healthy:             healthy,
+			Transport:           healthString(health, func(h *daemon.HealthzResponse) string { return h.Transport }),
+			ConfiguredTransport: healthString(health, func(h *daemon.HealthzResponse) string { return h.ConfiguredTransport }),
+			FallbackCount:       healthUint(health, func(h *daemon.HealthzResponse) uint64 { return h.FallbackCount }),
+			LastFallbackReason:  healthString(health, func(h *daemon.HealthzResponse) string { return h.LastFallbackReason }),
+			ReconnectCount:      healthUint(health, func(h *daemon.HealthzResponse) uint64 { return h.ReconnectCount }),
+			LastCloseReason:     healthString(health, func(h *daemon.HealthzResponse) string { return h.LastCloseReason }),
+			ProjectFile:         projectFileLocation(rc),
+			Services:            services,
+		})
 		return
 	}
 
@@ -773,7 +820,24 @@ func statusCmd(args []string) {
 	}
 	if running {
 		fmt.Printf("tunnel:  %s\n", boolWord(healthy, "connected", "disconnected"))
+		if health != nil && health.Transport != "" {
+			fmt.Printf("transport: %s\n", health.Transport)
+		}
 	}
+}
+
+func healthString(h *daemon.HealthzResponse, get func(*daemon.HealthzResponse) string) string {
+	if h == nil {
+		return ""
+	}
+	return get(h)
+}
+
+func healthUint(h *daemon.HealthzResponse, get func(*daemon.HealthzResponse) uint64) uint64 {
+	if h == nil {
+		return 0
+	}
+	return get(h)
 }
 
 func boolWord(b bool, yes, no string) string {
@@ -927,10 +991,24 @@ func agentCmd(args []string) {
 		slog.Error("yamux stream window", "err", err.Error())
 		os.Exit(1)
 	}
-	slog.Info("agent starting", "socket", *socket, "yamux_stream_window_bytes", yamuxWindow)
+	if err := config.ValidateAgentYamuxWindow(yamuxWindow); err != nil {
+		slog.Error("yamux stream window exposure", "err", err.Error())
+		os.Exit(1)
+	}
+	transportMode := mustTransport(cfg.Transport)
+	slog.Info("agent starting",
+		"socket", *socket,
+		"transport", transportMode,
+		"yamux_stream_window_bytes", yamuxWindow,
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: insecure, Scope: scope, YamuxStreamWindowBytes: yamuxWindow})
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{
+		InsecureSkipVerify:     insecure,
+		Scope:                  scope,
+		YamuxStreamWindowBytes: yamuxWindow,
+		Transport:              transportMode,
+	})
 	cancel()
 	if err != nil {
 		slog.Error("connect to edge failed", "err", err.Error())

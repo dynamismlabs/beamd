@@ -21,9 +21,11 @@ beamd login --server <base_domain> --token <token>
 beamd open 3000            # → https://3000.<base_domain> resolves over HTTPS
 ```
 
-That requires, on the server: the edge running on `:443`, DNS `A`/`AAAA` for
-`<base_domain>` (+ wildcard) pointing at it, a Let's Encrypt cert issued via
-DNS-01, and one developer token minted.
+That requires, on the server: public HTTPS and tuned fallback on `443/tcp`,
+QUIC tunnel ingress on `443/udp`, DNS `A`/`AAAA` for `<base_domain>` (+
+wildcard) pointing at it, a Let's Encrypt cert issued via DNS-01, and one
+developer token minted. QUIC is default-off until qualification, so TCP alone
+remains a valid rollout and rollback state.
 
 ## The two things only *you* can do (irreducible)
 
@@ -39,23 +41,24 @@ these is **hosted mode** — we own the domain + edge, you just `beamd login`.)
 
 ## The networking constraint (where beamd can run)
 
-beamd terminates its **own** TLS and ALPN-demuxes the control plane vs public
-HTTPS on a single `:443`. So it needs a **raw TCP `:443` on a public IP** — it
-cannot sit behind a platform that terminates TLS / routes L7 HTTP. This is the
-whole story of platform fit (and is a *hosting* property, not a Docker one):
+beamd terminates its **own** TLS and ALPN-demuxes the TCP control plane vs
+public HTTPS on `443/tcp`; the preferred tunnel transport independently binds
+QUIC on `443/udp`. A full deployment therefore needs raw TCP and UDP 443 on one
+public IP. A TCP-only L4 target can run the fallback path but cannot run QUIC.
+An L7 platform that terminates TLS cannot run either tunnel listener:
 
 | Target | Fits? | Why |
 |---|:---:|---|
-| Any VM — DO droplet, Hetzner, Linode, Vultr, EC2, GCE | ✅ | you are the host; raw `:443` + public IP |
-| Fly.io | ✅ | raw-TCP passthrough (`handlers = []`) + a dedicated IP |
+| Any VM — DO droplet, Hetzner, Linode, Vultr, EC2, GCE | ✅ | you control raw `443/tcp` + `443/udp` on the public IP |
+| Fly.io | Conditional | needs raw TCP and UDP services on the same numeric port plus a dedicated IP; verify the current platform contract before publishing a blueprint |
 | Render, Railway, DO App Platform, Heroku, Cloud Run | ❌ | they terminate TLS in front of your container |
-| Cloudflare Workers / Pages / Containers | ❌ | request-scoped, no raw `:443` + custom TLS/ALPN |
+| Cloudflare Workers / Pages / Containers | ❌ | request-scoped; no raw TCP/UDP 443 with beamd-owned TLS |
 
 **Blueprint consequence:** only Fly (a managed *app* platform) needs its own
 file (`fly.toml`). Every VM uses **`cloud-init`**, and *one* cloud-init file
 works across every VM cloud. So there are really **two** blueprint artifacts to
 maintain, not a dozen. Docker is fine on either — the container is portable; the
-raw-`:443`-and-IP requirement is what gates portability.
+raw-TCP/UDP-`:443`-and-IP requirement is what gates portability.
 
 > **Cloudflare clarified:** it's a *DNS provider* (cert issuance + records), not
 > a host. You can't run beamd on Cloudflare compute. And DNS is pluggable
@@ -100,7 +103,7 @@ Every path runs these steps; they differ only in who/what executes them.
 | 5 | Detect the server's public IP | metadata / `ifconfig.me` | ✅ |
 | 6 | Write `A`/`AAAA` for base + wildcard | via the DNS token | ✅ |
 | 7 | Write `beamd.yaml` config | `beamd init --non-interactive` | ✅ |
-| 8 | Start the edge on `:443` | systemd / `docker compose up -d` | ✅ |
+| 8 | Start TCP 443; publish UDP 443 default-off until the pilot | systemd / `docker compose up -d` | ✅ |
 | 9 | Issue + pre-warm the cert (DNS-01) | `beamd add-developer` / pre-warm | ✅ |
 | 10 | Mint the first developer token | `beamd add-developer` | ✅ |
 | 11 | `beamd login` from a laptop | **user** (one paste) | ❌ (trivial) |
@@ -139,7 +142,8 @@ from chat or the committed config. The rule for the skill and the docs:
 ## Limitations (state them plainly)
 
 - **HTTP-terminating PaaS won't work** (Render/Heroku/App Platform/Cloud Run) —
-  beamd needs raw `:443`. Don't ship buttons there.
+  beamd needs raw `443/tcp`, and full transport support also needs
+  `443/udp`. Don't ship buttons there.
 - **No Cloudflare-compute hosting** — CF is DNS only.
 - **DNS = Cloudflare only today** (pluggable; more providers are small adds).
 - **You must own a domain.**

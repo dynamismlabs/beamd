@@ -49,6 +49,7 @@ type ScopeRef struct {
 type Account struct {
 	Server             string     `yaml:"server"`
 	Token              string     `yaml:"token"`
+	Transport          string     `yaml:"transport,omitempty"`
 	Kind               string     `yaml:"kind,omitempty"` // "token" (OSS / API key) | "session" (hosted login)
 	InsecureSkipVerify bool       `yaml:"insecure_skip_verify,omitempty"`
 	Slug               string     `yaml:"slug,omitempty"`          // OSS: operator-assigned fixed scope
@@ -63,6 +64,7 @@ func (a *Account) Client() *Client {
 	return &Client{
 		Server:             a.Server,
 		Token:              a.Token,
+		Transport:          a.Transport,
 		InsecureSkipVerify: a.InsecureSkipVerify,
 	}
 }

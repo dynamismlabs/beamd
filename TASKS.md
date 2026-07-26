@@ -28,8 +28,11 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 
 ### Still deferred (non-blocking for OSS v1)
 
-- [ ] **Tunnel performance hardening (A1, measurement gate, and conditional
-  A2).** The single canonical specification and executable checklist is
+- [ ] **Tunnel performance hardening (A1 shipped; QUIC implementation
+  approved).** A1 and the G1 measurement/decision gate are complete. Implement
+  Part B default-off, then complete B4 qualification and the production-link
+  pilot before changing the default. The single canonical specification and
+  executable checklist is
   [`docs/transport-performance-spec.md`](docs/transport-performance-spec.md).
   Work its Section 16 top to bottom; do not duplicate or independently track
   the subtasks here.

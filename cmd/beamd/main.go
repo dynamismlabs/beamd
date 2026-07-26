@@ -160,6 +160,10 @@ func serveCmd(args []string) {
 		os.Exit(1)
 	}
 	cfg.YamuxStreamWindowBytes = yamuxWindow
+	if err := cfg.FinalizeRuntime(); err != nil {
+		slog.Error("transport configuration", "err", err.Error())
+		os.Exit(1)
+	}
 
 	tokens, err := auth.Open(cfg.TokenStore)
 	if err != nil {
@@ -172,15 +176,6 @@ func serveCmd(args []string) {
 		slog.Error("cert manager init failed", "err", err.Error())
 		os.Exit(1)
 	}
-
-	slog.Info("ready",
-		"version", Version,
-		"base_domain", cfg.BaseDomain,
-		"listen_https", cfg.ListenHTTPS,
-		"dns_provider", cfg.DNSProvider,
-		"token_store", cfg.TokenStore,
-		"yamux_stream_window_bytes", yamuxWindow,
-	)
 
 	e := edge.New(cfg, Version, tokens, certMgr)
 

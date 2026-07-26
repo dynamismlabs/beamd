@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Conservative A2 gate analyzer (transport-performance-spec G1.5).
+"""Conservative solo/parallel control analyzer for the G1 evidence.
 
 Fails CLOSED. It exits nonzero with INCONCLUSIVE when the evidence can't support
-a decision — missing required cases, too few samples, or ANY transport
-errors/corruption — and it will not call an RTO ladder from a single observation
-(a ladder needs a repeatable multi-rung TTFB pattern). As a methodology guard,
-if the A2 criteria fire on the CLEAN control profile (where there is no loss),
-it reports INCONCLUSIVE rather than a real A2 result — that pattern means the
-harness is manufacturing artifacts (e.g. shaping applied after establishment)
-rather than measuring A2.
+the solo/parallel control — missing required cases, too few samples, or ANY
+transport errors/corruption — and it will not call an RTO ladder from a single
+observation (a ladder needs a repeatable multi-rung TTFB pattern). As a
+methodology guard, if the solo-collapse criteria fire on the CLEAN profile, it
+reports INCONCLUSIVE rather than a real signal. This axis is supporting
+evidence only; ``hol_analyze.py`` evaluates the primary mixed-load A2 signal.
 
 Usage: analyze.py <results-dir>
-Exit:  0 = definitive verdict (REPRODUCED or NOT); 2 = INCONCLUSIVE.
+Exit:  0 = complete solo-control result; 2 = INCONCLUSIVE.
 """
 import sys
 import json
@@ -38,7 +37,7 @@ def find(cl, size, d, conc):
 
 def inconclusive(msg):
     print(f"\nINCONCLUSIVE: {msg}")
-    print("  -> Cannot make a G1 go/no-go from this data.")
+    print("  -> Cannot evaluate the solo/parallel control from this data.")
     sys.exit(2)
 
 
@@ -124,12 +123,12 @@ for prof in sorted(cases):
               f"max={e.get('max', 0):9.1f}ms  solo={c.get('median_throughput_bps', 0) / 1e6:6.2f} "
               f"agg={c.get('aggregate_throughput_bps', 0) / 1e6:6.2f}MB/s")
 
-# 4) methodology guard: A2 must NOT fire on the clean control.
+# 4) methodology guard: solo-collapse criteria must NOT fire on clean.
 if "clean" in cases:
     csigs = a2_signals(cases["clean"])
     if csigs:
-        inconclusive(f"A2 criteria fired on the CLEAN control ({csigs}) — the harness is "
-                     "manufacturing artifacts (not a real A2 result). Fix the methodology and re-run.")
+        inconclusive(f"solo-collapse criteria fired on CLEAN ({csigs}) — the harness is "
+                     "manufacturing artifacts. Fix the methodology and re-run.")
 
 # 5) evaluate the lossy profiles.
 fired = {}
@@ -137,15 +136,15 @@ for prof in ("lossy", "high-rtt-lossy"):
     if prof in cases:
         sigs = a2_signals(cases[prof])
         fired[prof] = sigs
-        print(f"\n  [{prof}] A2 signals: {sigs if sigs else 'none'}")
+        print(f"\n  [{prof}] solo-control signals: {sigs if sigs else 'none'}")
 
 print("\n" + "=" * 60)
 if any(fired.values()):
-    print("VERDICT: A2 REPRODUCED after A1 on a lossy profile (G1.5 threshold met).")
-    print("  -> Part B (QUIC) is justified BY THE MEASUREMENT. Still combine with")
-    print("     real-world network-exposure judgment before committing to the build.")
+    print("SOLO CONTROL: collapse/timeout supporting signal WAS reproduced.")
+    print("  -> Supporting evidence only. Use hol_analyze.py for the primary")
+    print("     mixed-load A2 result and the dated decision record for G1.")
 else:
-    print("VERDICT: A2 NOT reproduced after A1 under the tested conditions (G1.6).")
-    print("  -> Part B not justified by G1. Make no QUIC changes; revisit if real")
-    print("     lossy-network pain appears.")
+    print("SOLO CONTROL: collapse/timeout signal was NOT reproduced.")
+    print("  -> This does not decide G1. The primary mixed-load HoL result is")
+    print("     evaluated by hol_analyze.py and controls the dated decision.")
 sys.exit(0)

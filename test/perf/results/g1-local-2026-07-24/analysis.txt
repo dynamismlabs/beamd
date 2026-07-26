@@ -23,11 +23,11 @@
   download   8388608B conc=1 n= 10 p50= 28667.8 p95=  31129.7 p99=  31420.6 max=  31493.4ms  solo=  0.29 agg=  0.29MB/s
   download   8388608B conc=8 n=  8 p50=225537.2 p95= 226712.9 p99= 226713.0 max= 226713.0ms  solo=  0.04 agg=  0.30MB/s
 
-  [lossy] A2 signals: none
+  [lossy] solo-control signals: none
 
-  [high-rtt-lossy] A2 signals: none
+  [high-rtt-lossy] solo-control signals: none
 
 ============================================================
-VERDICT: A2 NOT reproduced after A1 under the tested conditions (G1.6).
-  -> Part B not justified by G1. Make no QUIC changes; revisit if real
-     lossy-network pain appears.
+SOLO CONTROL: collapse/timeout signal was NOT reproduced.
+  -> This does not decide G1. The primary mixed-load HoL result is
+     evaluated by hol_analyze.py and controls the dated decision.

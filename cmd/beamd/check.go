@@ -17,43 +17,61 @@ import (
 // "test connection" (vs opening a throwaway probe tunnel).
 func checkCmd(args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false, "print one JSON object {ok,server,slug,baseDomain} and nothing else")
+	jsonOut := fs.Bool("json", false, "print one JSON object and nothing else")
 	insecure := fs.Bool("insecure", false, "skip edge TLS verification (self-signed dev edges only)")
+	transportFlag := fs.String("transport", "", "force transport for this check: tcp, quic, or auto")
 	cf := addClientFlags(fs)
-	_ = fs.Parse(hoistFlags(args, clientFlagValueNames()))
+	_ = fs.Parse(hoistFlags(args, clientFlagValueNames("transport")))
 
 	rc := resolveContext(cf)
 	cfg := rc.mustAuth()
 	ins := *insecure || cfg.InsecureSkipVerify
+	transportMode := *transportFlag
+	if transportMode == "" {
+		transportMode = mustTransport(cfg.Transport)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{InsecureSkipVerify: ins, Scope: rc.Scope, YamuxStreamWindowBytes: mustYamuxWindow()})
+	started := time.Now()
+	c, err := client.Connect(ctx, cfg.Server, cfg.Token, client.Options{
+		InsecureSkipVerify:     ins,
+		Scope:                  rc.Scope,
+		YamuxStreamWindowBytes: mustYamuxWindow(),
+		Transport:              transportMode,
+	})
+	handshakeMs := time.Since(started).Milliseconds()
 	cancel()
 	if err != nil {
 		if *jsonOut {
 			_ = json.NewEncoder(os.Stdout).Encode(struct {
-				Ok     bool   `json:"ok"`
-				Server string `json:"server"`
-				Error  string `json:"error"`
-			}{false, cfg.Server, err.Error()})
+				Ok          bool   `json:"ok"`
+				Server      string `json:"server"`
+				Error       string `json:"error"`
+				Transport   string `json:"transport,omitempty"`
+				HandshakeMs int64  `json:"handshakeMs"`
+			}{false, cfg.Server, err.Error(), transportMode, handshakeMs})
 		} else {
 			fmt.Fprintln(os.Stderr, "check failed:", err)
 		}
 		os.Exit(1)
 	}
 	slug, base := c.Slug(), c.BaseDomain()
+	selectedTransport := string(c.Transport())
 	_ = c.Close() // no tunnel was registered; just drop the control session
 
 	if *jsonOut {
 		_ = json.NewEncoder(os.Stdout).Encode(struct {
-			Ok         bool   `json:"ok"`
-			Server     string `json:"server"`
-			Slug       string `json:"slug"`
-			BaseDomain string `json:"baseDomain"`
-		}{true, cfg.Server, slug, base})
+			Ok          bool   `json:"ok"`
+			Server      string `json:"server"`
+			Slug        string `json:"slug"`
+			BaseDomain  string `json:"baseDomain"`
+			Transport   string `json:"transport"`
+			HandshakeMs int64  `json:"handshakeMs"`
+		}{true, cfg.Server, slug, base, selectedTransport, handshakeMs})
 		return
 	}
-	fmt.Printf("ok\nserver:  %s\nslug:    %s\nbase:    %s\n", cfg.Server, orDash(slug), base)
+	fmt.Printf("ok\nserver:    %s\nslug:      %s\nbase:      %s\ntransport: %s\nhandshake: %dms\n",
+		cfg.Server, orDash(slug), base, selectedTransport, handshakeMs)
 }
 
 // reloadCmd restarts the selected profile's background agent so a changed

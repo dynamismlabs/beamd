@@ -25,10 +25,11 @@ services:
       - 1.1.1.1
       - 8.8.8.8
 
-    # :443 is the only public port. ALPN-demuxed: public HTTPS visitors
-    # share it with beam client control connections.
+    # Public HTTPS and tuned TLS/yamux share TCP 443. QUIC tunnel sessions use
+    # UDP 443. Both mappings are required before opting an agent into `auto`.
     ports:
-      - "443:443"
+      - "443:443/tcp"
+      - "443:443/udp"
 
     volumes:
       # rw (not :ro) so `beamd add-developer` can update tokens.json.
@@ -42,5 +43,15 @@ services:
       # Key-only form: forwarded from /etc/beamd/.env when set, and left ABSENT
       # (not empty) when unset — a present-but-empty value is a fatal startup error.
       - BEAMD_YAMUX_STREAM_WINDOW_BYTES
+      # QUIC stays disabled until B4 qualification and the production pilot.
+      # Key-only form preserves YAML/default behavior when an override is absent.
+      - BEAMD_LISTEN_QUIC
+      - BEAMD_DISABLE_QUIC
+      - BEAMD_MAX_STREAMS_PER_SESSION
+      - BEAMD_MAX_STREAMS_TOTAL
+      - BEAMD_MAX_PRE_AUTH_SESSIONS
+      - BEAMD_MAX_SESSIONS_TOTAL
+      # Recommended for the documented 2 GiB single-user host.
+      - GOMEMLIMIT
 
     # The default entrypoint is `beamd serve --config /etc/beamd/beamd.yaml`.

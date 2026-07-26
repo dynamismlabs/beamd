@@ -38,12 +38,21 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: stable
+          go-version-file: go.mod
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Test exact release source
+        run: go test ./...
+
+      - name: Cross-build npm platform packages
+        run: node scripts/build-npm.mjs "${GITHUB_REF_NAME#v}"
+
+      - name: Package smoke before publish
+        run: node scripts/package-smoke.mjs "${GITHUB_REF_NAME#v}"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -61,6 +70,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to npm
-        run: node scripts/build-npm.mjs "${GITHUB_REF_NAME#v}" --publish
+        run: node scripts/build-npm.mjs "${GITHUB_REF_NAME#v}" --publish-existing
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

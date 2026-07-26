@@ -21,6 +21,7 @@ func TestE2E_ScopeRequest(t *testing.T) {
 			HeartbeatInterval:  200 * time.Millisecond,
 			RegisterTimeout:    2 * time.Second,
 			InsecureSkipVerify: true,
+			Transport:          e2eTransport(t),
 			Scope:              scope,
 		}
 	}

@@ -1,10 +1,16 @@
 package edge
 
 import (
+	"context"
+	"errors"
 	"net"
+	"net/http"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/dynamismlabs/beamd/internal/tunnel"
 )
 
 func TestTrafficStore_RecordsAndRollsUpBySlug(t *testing.T) {
@@ -92,5 +98,59 @@ func TestCountingConn_TalliesBothDirections(t *testing.T) {
 	}
 	if gotOut != 14 {
 		t.Errorf("bytesOut = %d, want 14 (response)", gotOut)
+	}
+}
+
+func TestShutdownJoinsStreamTrafficBeforeFinalFlush(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bandwidth.json")
+	e := &Edge{
+		sessions:     make(map[*Session]struct{}),
+		pubSrvs:      make(map[*http.Server]struct{}),
+		rawConns:     make(map[net.Conn]struct{}),
+		preauth:      make(map[tunnel.Session]struct{}),
+		hijacked:     make(map[net.Conn]struct{}),
+		metrics:      newMetrics(),
+		traffic:      newTrafficStore(path),
+		shutdown:     make(chan struct{}),
+		shutdownDone: make(chan struct{}),
+	}
+
+	releaseStream := make(chan struct{})
+	e.streamWG.Add(1)
+	go func() {
+		defer e.streamWG.Done()
+		<-releaseStream
+		// This mirrors leasedConn.watch: record the final byte totals before
+		// declaring the leased-stream watcher drained.
+		e.traffic.RecordTraffic("turing", "api", 7, 11)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- e.Shutdown(ctx) }()
+
+	// The public deadline expires, but forced cleanup must still join the
+	// active stream watcher before returning or flushing the store.
+	time.Sleep(40 * time.Millisecond)
+	select {
+	case err := <-result:
+		t.Fatalf("Shutdown returned before stream cleanup: %v", err)
+	default:
+	}
+	close(releaseStream)
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Shutdown error = %v, want original deadline error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not finish after stream watcher drained")
+	}
+
+	reloaded := newTrafficStore(path)
+	counts := reloaded.m[trafficKey{Slug: "turing", Name: "api"}]
+	if counts.In != 7 || counts.Out != 11 {
+		t.Fatalf("persisted counts = %+v, want 7/11", counts)
 	}
 }

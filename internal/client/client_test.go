@@ -18,10 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/yamux"
-
-	"github.com/dynamismlabs/beamd/internal/mux"
 	"github.com/dynamismlabs/beamd/internal/proto"
+	"github.com/dynamismlabs/beamd/internal/tunnel"
 )
 
 // fakeEdge is a minimal in-process edge for unit-testing the client. It
@@ -32,13 +30,13 @@ import (
 type fakeEdge struct {
 	ln     net.Listener
 	addr   string
-	script func(ctrl *yamux.Stream, sess *yamux.Session, br *bufio.Reader, hello proto.Hello)
+	script func(ctrl tunnel.Stream, sess tunnel.Session, br *bufio.Reader, hello proto.Hello)
 
 	mu    sync.Mutex
 	conns int
 }
 
-func newFakeEdge(t *testing.T, script func(*yamux.Stream, *yamux.Session, *bufio.Reader, proto.Hello)) *fakeEdge {
+func newFakeEdge(t *testing.T, script func(tunnel.Stream, tunnel.Session, *bufio.Reader, proto.Hello)) *fakeEdge {
 	t.Helper()
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", fakeEdgeTLS(t))
 	if err != nil {
@@ -65,12 +63,12 @@ func (fe *fakeEdge) handle(c net.Conn) {
 	if err := c.(*tls.Conn).Handshake(); err != nil {
 		return
 	}
-	sess, err := mux.Server(c, 0) // 0 → mux.DefaultStreamWindow (test fake edge)
+	sess, err := tunnel.NewYamuxServer(c, 0)
 	if err != nil {
 		return
 	}
-	defer sess.Close()
-	ctrl, err := sess.AcceptStream()
+	defer sess.CloseWithError(tunnel.CloseNormal, "fake edge closed")
+	ctrl, err := sess.AcceptStream(context.Background())
 	if err != nil {
 		return
 	}
@@ -140,7 +138,7 @@ func dialFake(t *testing.T, fe *fakeEdge, opts Options) *Client {
 
 // A register that the edge accepts returns the URL and populates identity.
 func TestClient_RegisterSuccess(t *testing.T) {
-	fe := newFakeEdge(t, func(ctrl *yamux.Stream, _ *yamux.Session, br *bufio.Reader, _ proto.Hello) {
+	fe := newFakeEdge(t, func(ctrl tunnel.Stream, _ tunnel.Session, br *bufio.Reader, _ proto.Hello) {
 		for {
 			typ, line, err := proto.Read(br)
 			if err != nil {
@@ -175,11 +173,11 @@ func TestClient_RegisterSuccess(t *testing.T) {
 // register times out forever). Regression for the readControl teardown fix.
 func TestClient_TornControlLineReconnects(t *testing.T) {
 	var round int32
-	fe := newFakeEdge(t, func(ctrl *yamux.Stream, sess *yamux.Session, _ *bufio.Reader, _ proto.Hello) {
+	fe := newFakeEdge(t, func(ctrl tunnel.Stream, sess tunnel.Session, _ *bufio.Reader, _ proto.Hello) {
 		if atomic.AddInt32(&round, 1) == 1 {
 			_, _ = ctrl.Write([]byte("this is not json\n")) // garbage → client must drop the session
 		}
-		<-sess.CloseChan()
+		<-sess.Done()
 	})
 	c := dialFake(t, fe, Options{ReconnectInitial: 20 * time.Millisecond, ReconnectMax: 50 * time.Millisecond})
 	_ = c
@@ -196,7 +194,7 @@ func TestClient_TornControlLineReconnects(t *testing.T) {
 // A failed register must not linger in intended state (or the next reconnect's
 // replay resurrects it as a ghost tunnel). Regression for the rollback fix.
 func TestClient_RegisterRollsBackIntendedOnError(t *testing.T) {
-	fe := newFakeEdge(t, func(ctrl *yamux.Stream, _ *yamux.Session, br *bufio.Reader, _ proto.Hello) {
+	fe := newFakeEdge(t, func(ctrl tunnel.Stream, _ tunnel.Session, br *bufio.Reader, _ proto.Hello) {
 		for {
 			typ, line, err := proto.Read(br)
 			if err != nil {
@@ -225,7 +223,7 @@ func TestClient_RegisterRollsBackIntendedOnError(t *testing.T) {
 // register fails the next one and orphans a live tunnel. Regression for the
 // error-reply correlation fix (proto.Error.Name).
 func TestClient_MismatchedErrorReplyDropped(t *testing.T) {
-	fe := newFakeEdge(t, func(ctrl *yamux.Stream, _ *yamux.Session, br *bufio.Reader, _ proto.Hello) {
+	fe := newFakeEdge(t, func(ctrl tunnel.Stream, _ tunnel.Session, br *bufio.Reader, _ proto.Hello) {
 		for {
 			typ, _, err := proto.Read(br)
 			if err != nil {
@@ -253,7 +251,7 @@ func TestClient_MismatchedErrorReplyDropped(t *testing.T) {
 // register (which would cache the wrong URL). It should be dropped and the
 // register should time out. Regression for the reply-name correlation fix.
 func TestClient_MismatchedRegisteredReplyDropped(t *testing.T) {
-	fe := newFakeEdge(t, func(ctrl *yamux.Stream, _ *yamux.Session, br *bufio.Reader, _ proto.Hello) {
+	fe := newFakeEdge(t, func(ctrl tunnel.Stream, _ tunnel.Session, br *bufio.Reader, _ proto.Hello) {
 		for {
 			typ, _, err := proto.Read(br)
 			if err != nil {

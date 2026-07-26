@@ -43,13 +43,13 @@ the OSS happy path from [`setup.md`](setup.md).
                                                  │   DNS   │               │
                                                  └─────────┘               │
                                                                            │
-   [ CLI ] ── beamd open · tunnel :443 (ALPN beam/1) ──┐                   │
+   [ CLI ] ── QUIC/UDP 443 or TLS+yamux/TCP 443 ───────┐                   │
    [ public visitor ] ── HTTPS :443 ───────────────────┼──▶ ┌──────────────┴───────────┐
                                                        └────│  EDGE(S) — `beamd serve` │
                                                             │  SEPARATE domain per tier:│
                                                             │   paid  edge.example.com  │
                                                             │   free  edge-free.example │
-                                                            │  TLS · route Host · yamux │
+                                                            │ route Host · QUIC/yamux   │
                                                             └───────────────────────────┘
 ```
 
@@ -980,8 +980,9 @@ working tunnel:
    default scope. (Self-host instead passes `--server <edge> --token`.)
 4. User runs `beamd open 3001 --as api` — it lands in scope `acme` (their
    default; `--scope` or a project `beamd.yaml` would pick another).
-5. Client dials beamd at `:443`, ALPN `beam/1`, sends `hello` with the
-   session token and the requested scope `acme`.
+5. Client dials the assigned edge. `auto` prefers QUIC on UDP 443 and falls
+   back to TLS/yamux on TCP 443; both carry the same control `hello` with the
+   session token and requested scope `acme`.
 6. Beamd POSTs `/api/internal/verify-token` → web app returns the session's
    **scope set**; beamd checks `acme` is in it. Cached 60s.
 7. Beamd registers the tunnel host (nested-shape example:

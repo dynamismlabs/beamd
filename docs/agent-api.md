@@ -89,8 +89,23 @@ Agent + connection status.
 
 Response `200`:
 ```json
-{ "status": "ok", "slug": "turing", "healthy": true }
+{
+  "status": "ok",
+  "slug": "turing",
+  "healthy": true,
+  "transport": "quic",
+  "configuredTransport": "auto",
+  "fallbackCount": 0,
+  "reconnectCount": 1
+}
 ```
+
+`transport` is omitted while disconnected. `configuredTransport` is always
+`auto`, `quic`, or `tcp`. `fallbackCount` and `reconnectCount` are monotonic
+for the current agent process. When present, `lastFallbackReason` is one of
+`network`, `timeout`, or `handshake`; `lastCloseReason` is a fixed diagnostic
+category rather than a raw error. Do not build automation around log text when
+these fields are available.
 
 ## Error shape
 
