@@ -80,6 +80,14 @@ reconnect, and edge restart. `auto` must select QUIC when UDP works and fall
 back to TCP when UDP is deliberately dropped. Forced `quic` must fail clearly
 when UDP is dropped; forced `tcp` must never open UDP.
 
+Exercise both public HTTP protocols as a separate ingress check. The edge
+advertises HTTP/2, so a successful HTTP/1.1-only smoke is not sufficient:
+
+```text
+curl --http2   -fsS https://<edge-base-domain>/healthz
+curl --http1.1 -fsS https://<edge-base-domain>/healthz
+```
+
 The privileged synthetic gate is separate:
 
 ```text

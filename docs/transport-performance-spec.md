@@ -1364,6 +1364,8 @@ Part B must implement:
 Run the current end-to-end behavior once with forced QUIC and once with forced
 TCP:
 
+- public TLS ALPN serves a real HTTP/2 request and the forced HTTP/1.1 path
+  remains healthy;
 - small GET;
 - 253 KiB, 257 KiB, 1 MiB, 16 MiB, and 100 MiB downloads;
 - the same sizes as successful request uploads with the test edge's

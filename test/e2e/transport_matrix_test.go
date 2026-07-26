@@ -2,8 +2,10 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -722,6 +724,46 @@ func TestTransportMatrix_BackendHalfClose(t *testing.T) {
 	}
 	host := "half.turing." + testBaseDomain
 	checkResponse(t, publicHTTPSClient(edgeAddr, host), "https://"+host+"/", "half-close")
+}
+
+// TestTransportMatrix_PublicHTTP2 proves the edge serves the protocol it
+// advertises during public TLS ALPN negotiation. The per-connection listener
+// must return the concrete *tls.Conn; wrapping it makes net/http parse the h2
+// preface as HTTP/1.1 and breaks modern browser/curl clients.
+func TestTransportMatrix_PublicHTTP2(t *testing.T) {
+	_, edgeAddr := startEdge(t, map[string]string{})
+	dialer := &net.Dialer{}
+	hc := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // self-signed test edge
+				ServerName:         testBaseDomain,
+			},
+			ForceAttemptHTTP2: true,
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, edgeAddr)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+	t.Cleanup(hc.CloseIdleConnections)
+
+	resp, err := hc.Get("https://" + testBaseDomain + "/healthz")
+	if err != nil {
+		t.Fatalf("HTTP/2 health request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("HTTP/2 health body: %v", readErr)
+	}
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("negotiated protocol = %q, want HTTP/2", resp.Proto)
+	}
+	if resp.StatusCode != http.StatusOK ||
+		!bytes.Contains(body, []byte(`"version":"test"`)) {
+		t.Fatalf("health response = status %d body %q", resp.StatusCode, body)
+	}
 }
 
 // TestTransportMatrix_EarlyBackendResponse proves a response can complete

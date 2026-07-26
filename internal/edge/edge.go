@@ -1459,6 +1459,7 @@ func (e *Edge) heartbeatWatch(ctx context.Context, sess *Session) {
 }
 
 func (e *Edge) handlePublic(c net.Conn) {
+	listener := &singleConnListener{conn: c}
 	srv := &http.Server{
 		Handler:        http.HandlerFunc(e.handler),
 		MaxHeaderBytes: 1 << 20, // 1 MiB
@@ -1469,6 +1470,16 @@ func (e *Edge) handlePublic(c net.Conn) {
 		// sever them mid-flight.
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+		// Serve blocks in the listener's second Accept so this server remains
+		// tracked for the accepted connection's full lifetime. Wake that
+		// Accept only after net/http is finished with the connection. Returning
+		// the original *tls.Conn from the listener is required for net/http to
+		// dispatch a negotiated h2 connection to its HTTP/2 implementation.
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateClosed || state == http.StateHijacked {
+				_ = listener.Close()
+			}
+		},
 	}
 	e.lifecycleMu.Lock()
 	if e.shuttingDown {
@@ -1485,7 +1496,7 @@ func (e *Edge) handlePublic(c net.Conn) {
 		delete(e.pubSrvs, srv)
 		e.mu.Unlock()
 	}()
-	if err := srv.Serve(&singleConnListener{conn: c}); err != nil && !errors.Is(err, errListenerExhausted) && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(listener); err != nil && !errors.Is(err, errListenerExhausted) && !errors.Is(err, http.ErrServerClosed) {
 		slog.Debug("public conn ended", "err", err.Error())
 	}
 }
