@@ -187,6 +187,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         "cpu",
         "ram_bytes",
         "resource_limits",
+        "container_limits",
         "interface_offload",
         "effective_config",
         "direct_fixture",
@@ -293,6 +294,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         "os",
         "cpu",
         "resource_limits",
+        "container_limits",
         "interface_offload",
     ):
         if not isinstance(metadata[field], str) or not metadata[field].strip():

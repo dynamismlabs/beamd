@@ -48,6 +48,13 @@ class B4AnalyzerTest(unittest.TestCase):
         recurring, _ = B4.recurring_backoff([100.0] * 100 + [1000.0, 2000.0])
         self.assertFalse(recurring)
 
+    def test_qualification_requires_container_limit_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "metadata.json"
+            path.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(B4.EvidenceError, "container_limits"):
+                B4.load_metadata(path.parent)
+
     def test_complete_synthetic_matrix_passes(self):
         seeds = [101, 202, 303]
         records = {}

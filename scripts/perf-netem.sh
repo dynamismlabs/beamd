@@ -46,6 +46,14 @@ sha256_file() {
   fi
 }
 
+read_limit_file() {
+  if [ -r "$1" ]; then
+    tr '\n' ' ' < "$1" | sed 's/[[:space:]]*$//'
+  else
+    printf unavailable
+  fi
+}
+
 source_status() {
   git -C "$ROOT" status --porcelain --untracked-files=all -- \
     . ':(exclude,glob)test/perf/results/b4-*/**'
@@ -383,16 +391,20 @@ if [ "$MODE" = qualification ]; then
   MIX_N=50
   MIX_WARMUP=8
   PROTOCOL_WARMUP=5
+  PROTOCOL_MULTI_SIZE=16777216
+  BULK_SIZE=8388608
   BULK_N=100000
   BULK_RAMP=5
 else
   PROFILES=(clean lossy)
   SEEDS=(101)
-  PROTOCOL_SIZES=(36 259072 16777216)
+  PROTOCOL_SIZES=(36 259072 1048576)
   MIX_N=2
   MIX_WARMUP=1
   PROTOCOL_WARMUP=1
-  BULK_N=24
+  PROTOCOL_MULTI_SIZE=4096
+  BULK_SIZE=4096
+  BULK_N=1000
   BULK_RAMP=1
 fi
 for seed in "${SEEDS[@]}"; do
@@ -474,12 +486,18 @@ if sys.argv[7]:
     record["condition"] = sys.argv[7]
 samples = record.get("samples")
 if record.get("errors") != 0 or record.get("corrupt") != 0:
-    raise SystemExit("measurement produced request errors or corruption")
+    raise SystemExit(
+        "measurement produced request errors or corruption: "
+        + json.dumps(record, separators=(",", ":"))
+    )
 if not isinstance(samples, list) or any(
     not isinstance(sample, dict) or sample.get("ok") is not True or sample.get("err")
     for sample in samples
 ):
-    raise SystemExit("measurement produced an unsuccessful or missing raw sample")
+    raise SystemExit(
+        "measurement produced an unsuccessful or missing raw sample: "
+        + json.dumps(record, separators=(",", ":"))
+    )
 json.dump(record, sys.stdout, separators=(",", ":"))
 sys.stdout.write("\n")
 ' "$fixture" "$workload" "$seed" "$order" "$order_index" "$warmups" "$condition"
@@ -552,11 +570,29 @@ PY
   AGENT_PID=$!
 
   local healthy=
+  local health_path="$OUTDIR/health-$profile-$seed-$direction-$transport.json"
   for _ in $(seq 1 120); do
     if ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
       --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
       --size 36 --dir "$direction" --n 1 --warmup 0 --concurrency 1 \
-      --profile "$profile" --transport "$transport" --timeout 3s >/dev/null 2>&1; then
+      --profile "$profile" --transport "$transport" --timeout 3s --raw \
+      >"$health_path" 2>/dev/null &&
+      python3 -c '
+import json
+import sys
+record = json.load(open(sys.argv[1]))
+samples = record.get("samples")
+ok = (
+    record.get("errors") == 0
+    and record.get("corrupt") == 0
+    and isinstance(samples, list)
+    and len(samples) == 1
+    and isinstance(samples[0], dict)
+    and samples[0].get("ok") is True
+    and not samples[0].get("err")
+)
+raise SystemExit(0 if ok else 1)
+' "$health_path"; then
       healthy=1
       break
     fi
@@ -604,7 +640,7 @@ run_beamd_protocol() {
   [ "$MODE" = smoke ] && eight_warmup=2
   ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
     --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
-    --size 16777216 --dir "$direction" --n "$eight_n" \
+    --size "$PROTOCOL_MULTI_SIZE" --dir "$direction" --n "$eight_n" \
     --warmup "$eight_warmup" --concurrency 8 --profile "$profile" \
     --transport "$transport" --timeout 20m --raw |
     tag_record beamd protocol "$seed" "$order" "$order_index" "$eight_warmup" \
@@ -685,7 +721,7 @@ run_mixed() {
 
   ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
     --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
-    --size 8388608 --dir "$direction" --n "$BULK_N" --warmup 0 \
+    --size "$BULK_SIZE" --dir "$direction" --n "$BULK_N" --warmup 0 \
     --concurrency 6 --profile "$profile" --transport "$transport" \
     --timeout 20m --progress-file "$bulk_progress" >/dev/null 2>&1 &
   BULK_PID=$!
@@ -787,15 +823,60 @@ verify_immutable_inputs
 GO_VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["go_version"])' "$BINDIR/manifest.json")
 QUIC_VERSION=$(awk '$1 == "github.com/quic-go/quic-go" {print $2}' "$ROOT/go.mod")
 YAMUX_VERSION=$(awk '$1 == "github.com/hashicorp/yamux" {print $2}' "$ROOT/go.mod")
-CPU=$(awk -F: '/model name/ {sub(/^ /, "", $2); print $2; exit}' /proc/cpuinfo)
+CPU=$(
+  awk -F: '
+    /^(model name|Processor|Hardware)[[:space:]]*:/ {
+      sub(/^[[:space:]]+/, "", $2)
+      if (length($2) > 0) {
+        print $2
+        exit
+      }
+    }
+  ' /proc/cpuinfo
+)
+if [ -z "$CPU" ] && command -v lscpu >/dev/null 2>&1; then
+  CPU=$(
+    lscpu | awk -F: '
+      /^Model name[[:space:]]*:/ {
+        sub(/^[[:space:]]+/, "", $2)
+        if (length($2) > 0 && $2 != "-") {
+          print $2
+          exit
+        }
+      }
+    '
+  )
+fi
+[ -n "$CPU" ] || CPU="$(uname -m) (model unavailable)"
 RAM_BYTES=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)
 RESOURCE_LIMITS=$(ulimit -a | tr '\n' ';')
-QDISC_ARTIFACTS=$(find "$OUTDIR/qdisc" -maxdepth 1 -type f -printf '%f\n' | sort | paste -sd, -)
+CONTAINER_KIND=not-detected
+if [ -f /.dockerenv ]; then
+  CONTAINER_KIND=docker
+elif [ -f /run/.containerenv ]; then
+  CONTAINER_KIND=podman
+elif [ -r /proc/1/cgroup ] &&
+  grep -Eiq '(docker|containerd|kubepods|podman|lxc)' /proc/1/cgroup; then
+  CONTAINER_KIND=cgroup-marker
+fi
+CONTAINER_LIMITS=$(
+  printf \
+    'container=%s; cgroup_v2.cpu.max=%s; cgroup_v2.memory.max=%s; cgroup_v2.memory.swap.max=%s; cgroup_v2.cpuset.cpus.effective=%s' \
+    "$CONTAINER_KIND" \
+    "$(read_limit_file /sys/fs/cgroup/cpu.max)" \
+    "$(read_limit_file /sys/fs/cgroup/memory.max)" \
+    "$(read_limit_file /sys/fs/cgroup/memory.swap.max)" \
+    "$(read_limit_file /sys/fs/cgroup/cpuset.cpus.effective)"
+)
+QDISC_ARTIFACTS=$(
+  find "$OUTDIR/qdisc" -maxdepth 1 -type f -exec basename {} \; |
+    sort | paste -sd, -
+)
 SEEDS_CSV=$(IFS=,; echo "${SEEDS[*]}")
-QUALIFICATION=false
-[ "$MODE" = qualification ] && QUALIFICATION=true
-GIT_DIRTY=false
-[ "$MANIFEST_DIRTY" = true ] && GIT_DIRTY=true
+QUALIFICATION=False
+[ "$MODE" = qualification ] && QUALIFICATION=True
+GIT_DIRTY=False
+[ "$MANIFEST_DIRTY" = true ] && GIT_DIRTY=True
 python3 - "$OUTDIR/metadata.json" <<PY
 import json
 import pathlib
@@ -820,7 +901,7 @@ metadata = {
     "cpu": r"""$CPU""",
     "ram_bytes": int("$RAM_BYTES"),
     "resource_limits": r"""$RESOURCE_LIMITS""",
-    "container_limits": "not containerized; namespace processes inherit host limits",
+    "container_limits": r"""$CONTAINER_LIMITS""",
     "interface_offload": "interface-offload.txt",
     "effective_config": {
         "edge": "effective-config/edge.yaml",
@@ -856,11 +937,11 @@ metadata = {
     },
     "workload": {
         "bulk_streams": 6,
-        "bulk_bytes": 8388608,
-        "ramp_seconds": 5,
+        "bulk_bytes": int("$BULK_SIZE"),
+        "ramp_seconds": int("$BULK_RAMP"),
         "interactive_bytes": [4096, 66560],
-        "interactive_warmups": 8,
-        "interactive_samples": 50,
+        "interactive_warmups": int("$MIX_WARMUP"),
+        "interactive_samples": int("$MIX_N"),
     },
     "topology": "edge namespace/public client <-> shaped veth <-> agent namespace/backend",
     "public_leg_shaped": False,
