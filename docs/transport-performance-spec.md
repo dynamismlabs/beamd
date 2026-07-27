@@ -1696,6 +1696,17 @@ decision task, not part of A1 completion.
 - [x] **B4.3 — Pass functional qualification.** Complete the Section 15.2
   matrix over both transports with zero corruption, hangs, or semantic
   regressions.
+- [x] **B4.3a — Complete the pre-production staging rehearsal.** On
+  2026-07-27, deploy matching `90acefa` edge and agent binaries, publish both
+  TCP and UDP 443, apply the UDP sysctls and key permissions, and pass forced
+  TCP, forced QUIC, and `auto` checks; HTTP/1.1 and HTTP/2; forwarded headers;
+  SSE; 16 MiB upload/download checksums; WebSockets; edge restart; rollback;
+  suspend/reap/resume/registration replay; and a sleep-inhibited ten-minute
+  real-link soak. The final soak completed 60/60 HTTP/2 probes plus ten
+  WebSocket probes with zero failures, session closes, heartbeat timeouts,
+  stream-open errors, or capacity rejections; edge RSS ended at about 19 MiB.
+  This is staging evidence only: the host has 1 vCPU, 961 MiB RAM, and no swap,
+  so it does not satisfy Section 17 or close B4.4/B4.5.
 - [ ] **B4.4 — Pass synthetic protocol and head-to-head performance gates.**
   In the deterministic Section 15.3 harness, QUIC must pass its direct baseline
   gates, stay within the clean-path regression budget, materially beat tuned
@@ -1709,12 +1720,13 @@ decision task, not part of A1 completion.
   to `auto` and edge default to `disable_quic: false`, while permanently
   retaining both rollback controls and the tuned TCP path.
 
-> **Implementation status:** B1–B3 and the B4 qualification code/functional
-> matrix are complete. The shipped defaults intentionally remain TCP with the
-> QUIC listener disabled. B4.1 and B4.4–B4.6 are operational rollout gates:
-> apply production-host UDP/firewall/sysctl changes, run and retain the
-> privileged netem qualification, complete the real-link `auto` pilot, and
-> only then flip defaults.
+> **Implementation status:** B1–B3, the B4 qualification code/functional
+> matrix, and the non-production staging rehearsal are complete. The shipped
+> defaults intentionally remain TCP with the QUIC listener disabled. B4.1 and
+> B4.4–B4.6 are operational rollout gates: apply production-host
+> UDP/firewall/sysctl changes, run and retain the privileged netem
+> qualification on a conforming Linux host, complete the production-link
+> `auto` pilot, and only then flip defaults.
 
 The recorded and operator-approved G1 GO satisfies the prerequisite to begin
 B1. Do not execute B4.6 until B1–B4.5, the functional and performance gates,

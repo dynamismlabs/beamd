@@ -15,6 +15,9 @@ All notable changes to beamd are documented here. The format is based on
 
 ### Changed
 
+- **Tunnel liveness diagnostics:** application heartbeat expiry is now
+  classified as `idle` instead of `protocol`, and suspend/resume recovery is
+  covered over both TCP and QUIC.
 - **Transport (A1): tuned yamux stream window.** The yamux per-stream receive
   window now defaults to 4 MiB (up from the 256 KiB library default), lifting the
   `256 KiB / RTT` ceiling on solo transfers. It is set process-wide via the
