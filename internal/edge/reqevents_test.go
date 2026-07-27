@@ -1,6 +1,8 @@
 package edge
 
 import (
+	"bytes"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -8,6 +10,34 @@ import (
 
 	"github.com/dynamismlabs/beamd/internal/reqlog"
 )
+
+func TestCountingReaderCountIsRaceSafe(t *testing.T) {
+	reader, writer := io.Pipe()
+	counted := &countingReader{rc: reader}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, counted)
+		readDone <- err
+	}()
+
+	const chunks = 128
+	chunk := bytes.Repeat([]byte("x"), 1024)
+	for range chunks {
+		if _, err := writer.Write(chunk); err != nil {
+			t.Fatalf("write request body: %v", err)
+		}
+		_ = counted.Count()
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close request body writer: %v", err)
+	}
+	if err := <-readDone; err != nil {
+		t.Fatalf("read request body: %v", err)
+	}
+	if got, want := counted.Count(), int64(chunks*len(chunk)); got != want {
+		t.Fatalf("count = %d, want %d", got, want)
+	}
+}
 
 type capSink struct {
 	mu sync.Mutex

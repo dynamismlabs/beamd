@@ -174,13 +174,15 @@ func (e *Edge) startWSHeartbeat(m reqMeta, raw net.Conn, callbacks ...func()) ne
 // Close to the underlying body.
 type countingReader struct {
 	rc io.ReadCloser
-	n  int64
+	n  atomic.Int64
 }
 
 func (cr *countingReader) Read(b []byte) (int, error) {
 	n, err := cr.rc.Read(b)
-	cr.n += int64(n)
+	cr.n.Add(int64(n))
 	return n, err
 }
 
 func (cr *countingReader) Close() error { return cr.rc.Close() }
+
+func (cr *countingReader) Count() int64 { return cr.n.Load() }

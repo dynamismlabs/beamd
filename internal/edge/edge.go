@@ -1658,7 +1658,7 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	if rr.hijackedConn == nil {
 		var bytesIn int64
 		if bodyCount != nil {
-			bytesIn = bodyCount.n
+			bytesIn = bodyCount.Count()
 		}
 		// TTFB reflects the *backend's* first byte; a no_route 404 is the edge's
 		// own response, so omit it there (spec §3).
