@@ -55,6 +55,27 @@ class B4AnalyzerTest(unittest.TestCase):
             with self.assertRaisesRegex(B4.EvidenceError, "container_limits"):
                 B4.load_metadata(path.parent)
 
+    def test_qualification_host_shape_boundaries(self):
+        B4.validate_host_shape(
+            {"cpu_count": 2, "ram_bytes": 2_000_000_000}
+        )
+        B4.validate_host_shape(
+            {"cpu_count": 2, "ram_bytes": 2_063_216_640}
+        )
+
+        invalid = (
+            ({"cpu_count": 1, "ram_bytes": 2_000_000_000}, "cpu_count"),
+            ({"cpu_count": True, "ram_bytes": 2_000_000_000}, "cpu_count"),
+            ({"ram_bytes": 2_000_000_000}, "cpu_count"),
+            ({"cpu_count": 2, "ram_bytes": 1_999_999_999}, "ram_bytes"),
+            ({"cpu_count": 2, "ram_bytes": True}, "ram_bytes"),
+            ({"cpu_count": 2}, "ram_bytes"),
+        )
+        for metadata, field in invalid:
+            with self.subTest(metadata=metadata):
+                with self.assertRaisesRegex(B4.EvidenceError, field):
+                    B4.validate_host_shape(metadata)
+
     def test_complete_synthetic_matrix_passes(self):
         seeds = [101, 202, 303]
         records = {}

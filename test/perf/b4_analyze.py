@@ -36,6 +36,8 @@ DIRECTIONS = ("download", "upload")
 SIZES = (36, 253 * 1024, 257 * 1024, 1 << 20, 16 << 20, 100 << 20)
 INTERACTIVE_SIZES = (4 << 10, 65 << 10)
 SEED_MINIMUM = 3
+MIN_QUALIFICATION_CPUS = 2
+MIN_QUALIFICATION_RAM_BYTES = 2_000_000_000
 
 
 class EvidenceError(Exception):
@@ -56,6 +58,19 @@ def integer(value: Any, label: str, *, minimum: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise EvidenceError(f"{label} must be an integer >= {minimum}")
     return value
+
+
+def validate_host_shape(metadata: dict[str, Any]) -> None:
+    integer(
+        metadata.get("cpu_count"),
+        "metadata cpu_count",
+        minimum=MIN_QUALIFICATION_CPUS,
+    )
+    integer(
+        metadata.get("ram_bytes"),
+        "metadata ram_bytes",
+        minimum=MIN_QUALIFICATION_RAM_BYTES,
+    )
 
 
 def percentile(values: Iterable[float], quantile: float) -> float:
@@ -185,6 +200,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         "kernel",
         "os",
         "cpu",
+        "cpu_count",
         "ram_bytes",
         "resource_limits",
         "container_limits",
@@ -299,7 +315,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
     ):
         if not isinstance(metadata[field], str) or not metadata[field].strip():
             raise EvidenceError(f"metadata {field} must be a non-empty string")
-    integer(metadata["ram_bytes"], "metadata ram_bytes", minimum=1)
+    validate_host_shape(metadata)
     offload_path = root / metadata["interface_offload"]
     if not offload_path.is_file() or offload_path.stat().st_size == 0:
         raise EvidenceError("recorded interface offload artifact is missing or empty")

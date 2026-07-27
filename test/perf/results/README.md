@@ -25,7 +25,9 @@ head-to-head qualification.
 ## B4 qualification
 
 Run the B4 suite only on a Linux host with network namespaces, `tc netem`,
-ethtool, Python 3.10+, and permission to create privileged networking:
+ethtool, Python 3.10+, at least two online CPUs, Linux
+`MemTotal >= 2000000000` bytes, and permission to create privileged
+networking:
 
 ```text
 scripts/perf-netem.sh build

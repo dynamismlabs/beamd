@@ -17,6 +17,8 @@ ACTION=${1:-}
 BINDIR=${BINDIR:-"$ROOT/bin/perf-b4"}
 MODE=${MODE:-qualification}
 IMAGE_TAG=${IMAGE_TAG:-local}
+MIN_QUALIFICATION_CPUS=2
+MIN_QUALIFICATION_RAM_BYTES=2000000000
 
 usage() {
   cat <<'EOF'
@@ -34,7 +36,8 @@ Environment:
   GOMEMLIMIT=1400MiB
 
 Qualification prerequisites: Linux, root for `run`, iproute2 (ip/tc), ethtool,
-openssl, curl, Python 3.10+, and a clean checkout for `build`.
+openssl, curl, Python 3.10+, at least 2 online CPUs and 2 GB-class usable RAM,
+and a clean checkout for `build`.
 EOF
 }
 
@@ -174,7 +177,7 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "run requires root; build the bundle first, then use sudo -E" >&2
   exit 2
 fi
-for command in ip tc ethtool openssl curl python3 git; do
+for command in ip tc ethtool openssl curl python3 git nproc; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "missing required command: $command" >&2
     exit 2
@@ -255,6 +258,40 @@ verify_immutable_inputs() {
   done
 }
 verify_immutable_inputs
+
+CPU_COUNT=$(nproc)
+RAM_BYTES=$(
+  awk '
+    /MemTotal/ {
+      printf "%.0f\n", $2 * 1024
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' /proc/meminfo
+)
+[[ "$CPU_COUNT" =~ ^[1-9][0-9]*$ ]] || {
+  echo "could not determine a positive online CPU count: $CPU_COUNT" >&2
+  exit 2
+}
+[[ "$RAM_BYTES" =~ ^[1-9][0-9]*$ ]] || {
+  echo "could not determine positive Linux MemTotal bytes: $RAM_BYTES" >&2
+  exit 2
+}
+if [ "$MODE" = qualification ]; then
+  [ "$CPU_COUNT" -ge "$MIN_QUALIFICATION_CPUS" ] || {
+    echo "qualification requires at least $MIN_QUALIFICATION_CPUS online CPUs; found $CPU_COUNT" >&2
+    exit 2
+  }
+  [ "$RAM_BYTES" -ge "$MIN_QUALIFICATION_RAM_BYTES" ] || {
+    echo "qualification requires Linux MemTotal >= $MIN_QUALIFICATION_RAM_BYTES bytes; found $RAM_BYTES" >&2
+    exit 2
+  }
+fi
 
 RUN_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 OUTDIR=${OUTDIR:-"$ROOT/test/perf/results/b4-$RUN_STAMP"}
@@ -848,7 +885,6 @@ if [ -z "$CPU" ] && command -v lscpu >/dev/null 2>&1; then
   )
 fi
 [ -n "$CPU" ] || CPU="$(uname -m) (model unavailable)"
-RAM_BYTES=$(awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo)
 RESOURCE_LIMITS=$(ulimit -a | tr '\n' ';')
 CONTAINER_KIND=not-detected
 if [ -f /.dockerenv ]; then
@@ -899,6 +935,7 @@ metadata = {
     "kernel": platform.release(),
     "os": platform.platform(),
     "cpu": r"""$CPU""",
+    "cpu_count": int("$CPU_COUNT"),
     "ram_bytes": int("$RAM_BYTES"),
     "resource_limits": r"""$RESOURCE_LIMITS""",
     "container_limits": r"""$CONTAINER_LIMITS""",

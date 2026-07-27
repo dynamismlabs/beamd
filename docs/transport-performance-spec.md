@@ -1736,8 +1736,10 @@ validation and Definition of Done.
 ## 17. Production host requirements
 
 For the current single-user deployment, use one stable public VM with at least
-2 vCPU and 2 GiB RAM. Keep the architecture single-cell; multi-region work is
-not justified yet.
+2 vCPU and a nominal 2 GiB-class RAM allocation. Qualification requires at
+least two online CPUs and Linux `MemTotal >= 2000000000` bytes; the usable
+threshold accounts for memory reserved by the kernel on a nominal 2 GiB VM.
+Keep the architecture single-cell; multi-region work is not justified yet.
 
 Required network exposure:
 
