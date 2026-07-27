@@ -24,7 +24,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/perf-netem.sh build
-  sudo -E scripts/perf-netem.sh run
+  sudo scripts/perf-netem.sh run
   scripts/perf-netem.sh analyze RESULTS_DIR
 
 Environment:
@@ -32,12 +32,14 @@ Environment:
   OUTDIR=/path           new evidence directory (run only)
   MODE=qualification     full, fail-closed run (default)
   MODE=smoke             reduced harness check; never valid B4 evidence
+  TC_BIN=/absolute/path  tc with deterministic netem seed support
   NETEM_SEEDS="101 202 303"
   GOMEMLIMIT=1400MiB
 
-Qualification prerequisites: Linux, root for `run`, iproute2 (ip/tc), ethtool,
-openssl, curl, Python 3.10+, at least 2 online CPUs and 2 GB-class usable RAM,
-and a clean checkout for `build`.
+Qualification prerequisites: Linux, root for `run`, iproute2 (ip/tc) with
+deterministic `netem seed` support, ethtool, openssl, curl, Python 3.10+, at
+least 2 online CPUs and 2 GB-class usable RAM, and a clean checkout for
+`build`.
 EOF
 }
 
@@ -174,10 +176,10 @@ if [ "$(uname -s)" != Linux ]; then
   exit 2
 fi
 if [ "$(id -u)" -ne 0 ]; then
-  echo "run requires root; build the bundle first, then use sudo -E" >&2
+  echo "run requires root; build the bundle first, then use sudo" >&2
   exit 2
 fi
-for command in ip tc ethtool openssl curl python3 git nproc; do
+for command in ip ethtool openssl curl python3 git nproc; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "missing required command: $command" >&2
     exit 2
@@ -185,6 +187,34 @@ for command in ip tc ethtool openssl curl python3 git nproc; do
 done
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 2)' || {
   echo "Python 3.10 or newer is required" >&2
+  exit 2
+}
+TC_SOURCE_BIN=${TC_BIN:-}
+if [ -z "$TC_SOURCE_BIN" ]; then
+  TC_SOURCE_BIN=$(command -v tc 2>/dev/null || true)
+fi
+case "$TC_SOURCE_BIN" in
+  /*) ;;
+  *)
+    echo "TC_BIN must resolve to an absolute tc executable; found: ${TC_SOURCE_BIN:-missing}" >&2
+    exit 2
+    ;;
+esac
+[ -f "$TC_SOURCE_BIN" ] && [ -x "$TC_SOURCE_BIN" ] || {
+  echo "TC_BIN is not a regular executable: $TC_SOURCE_BIN" >&2
+  exit 2
+}
+TC_SOURCE_SHA256=$(sha256_file "$TC_SOURCE_BIN")
+TC_SOURCE_VERSION=$("$TC_SOURCE_BIN" -V 2>&1)
+TC_SOURCE_NETEM_HELP=$(
+  "$TC_SOURCE_BIN" qdisc add dev lo root netem help 2>&1 || true
+)
+if ! grep -Eq '(^|[[:space:]])seed([[:space:]]|$)' <<<"$TC_SOURCE_NETEM_HELP"; then
+  echo "$TC_SOURCE_BIN does not support deterministic 'tc netem seed'; use iproute2 6.6+ or an equivalent backport" >&2
+  exit 2
+fi
+[ "$(sha256_file "$TC_SOURCE_BIN")" = "$TC_SOURCE_SHA256" ] || {
+  echo "source tc binary changed during capability preflight: $TC_SOURCE_BIN" >&2
   exit 2
 }
 for binary in beamd perfclient perfserver directclient directserver; do
@@ -299,9 +329,41 @@ if [ -e "$OUTDIR" ]; then
   echo "OUTDIR already exists; evidence is never overwritten: $OUTDIR" >&2
   exit 2
 fi
-mkdir -p "$OUTDIR/logs" "$OUTDIR/qdisc" "$OUTDIR/effective-config"
+mkdir -p \
+  "$OUTDIR/logs" \
+  "$OUTDIR/qdisc" \
+  "$OUTDIR/effective-config" \
+  "$OUTDIR/traffic-control"
 cp "$BINDIR/b4_analyze.py" "$OUTDIR/b4_analyze.py"
 cp "$ROOT/scripts/perf-netem.sh" "$OUTDIR/perf-netem.sh"
+TC_BIN=$(cd "$OUTDIR/traffic-control" && pwd -P)/tc
+cp "$TC_SOURCE_BIN" "$TC_BIN"
+TC_SHA256=$(sha256_file "$TC_BIN")
+[ "$TC_SHA256" = "$TC_SOURCE_SHA256" ] || {
+  echo "recorded tc binary hash does not match the runtime binary" >&2
+  exit 2
+}
+TC_VERSION=$("$TC_BIN" -V 2>&1)
+[ "$TC_VERSION" = "$TC_SOURCE_VERSION" ] || {
+  echo "recorded tc version does not match the source binary" >&2
+  exit 2
+}
+TC_NETEM_HELP=$("$TC_BIN" qdisc add dev lo root netem help 2>&1 || true)
+if ! grep -Eq '(^|[[:space:]])seed([[:space:]]|$)' <<<"$TC_NETEM_HELP"; then
+  echo "recorded tc binary lost deterministic netem seed support" >&2
+  exit 2
+fi
+verify_traffic_control() {
+  [ -f "$TC_BIN" ] && [ -x "$TC_BIN" ] || {
+    echo "recorded tc binary is no longer a regular executable: $TC_BIN" >&2
+    return 2
+  }
+  [ "$(sha256_file "$TC_BIN")" = "$TC_SHA256" ] || {
+    echo "recorded tc binary changed during qualification: $TC_BIN" >&2
+    return 2
+  }
+}
+verify_traffic_control
 WORK=$(mktemp -d)
 SUFFIX=$(printf '%05d' "$$")
 EDGE_NS="bp-e-$SUFFIX"
@@ -469,24 +531,24 @@ apply_netem() {
   local edge_seed=$seed
   local agent_seed=$((seed + 1000003))
   if [ "$loss" = 0 ]; then
-    ip netns exec "$EDGE_NS" tc qdisc replace dev "$EDGE_IF" root \
+    ip netns exec "$EDGE_NS" "$TC_BIN" qdisc replace dev "$EDGE_IF" root \
       netem limit 1000 seed "$edge_seed" delay "${delay}ms" rate "${rate}mbit"
-    ip netns exec "$AGENT_NS" tc qdisc replace dev "$AGENT_IF" root \
+    ip netns exec "$AGENT_NS" "$TC_BIN" qdisc replace dev "$AGENT_IF" root \
       netem limit 1000 seed "$agent_seed" delay "${delay}ms" rate "${rate}mbit"
   else
-    ip netns exec "$EDGE_NS" tc qdisc replace dev "$EDGE_IF" root \
+    ip netns exec "$EDGE_NS" "$TC_BIN" qdisc replace dev "$EDGE_IF" root \
       netem limit 1000 seed "$edge_seed" delay "${delay}ms" \
       loss random "${loss}%" rate "${rate}mbit"
-    ip netns exec "$AGENT_NS" tc qdisc replace dev "$AGENT_IF" root \
+    ip netns exec "$AGENT_NS" "$TC_BIN" qdisc replace dev "$AGENT_IF" root \
       netem limit 1000 seed "$agent_seed" delay "${delay}ms" \
       loss random "${loss}%" rate "${rate}mbit"
   fi
   {
     echo "profile=$profile seed=$seed"
     echo "edge-to-agent:"
-    ip netns exec "$EDGE_NS" tc -s qdisc show dev "$EDGE_IF"
+    ip netns exec "$EDGE_NS" "$TC_BIN" -s qdisc show dev "$EDGE_IF"
     echo "agent-to-edge:"
-    ip netns exec "$AGENT_NS" tc -s qdisc show dev "$AGENT_IF"
+    ip netns exec "$AGENT_NS" "$TC_BIN" -s qdisc show dev "$AGENT_IF"
   } > "$OUTDIR/qdisc/$profile-$seed.txt"
 }
 
@@ -496,9 +558,9 @@ record_qdisc_snapshot() {
     echo
     echo "after direction=$direction transport=$transport"
     echo "edge-to-agent:"
-    ip netns exec "$EDGE_NS" tc -s qdisc show dev "$EDGE_IF"
+    ip netns exec "$EDGE_NS" "$TC_BIN" -s qdisc show dev "$EDGE_IF"
     echo "agent-to-edge:"
-    ip netns exec "$AGENT_NS" tc -s qdisc show dev "$AGENT_IF"
+    ip netns exec "$AGENT_NS" "$TC_BIN" -s qdisc show dev "$AGENT_IF"
   } >> "$OUTDIR/qdisc/$profile-$seed.txt"
 }
 
@@ -838,14 +900,15 @@ done
 
 {
   echo "## edge/$EDGE_IF"
-  ip netns exec "$EDGE_NS" tc -s qdisc show dev "$EDGE_IF"
+  ip netns exec "$EDGE_NS" "$TC_BIN" -s qdisc show dev "$EDGE_IF"
   echo "## agent/$AGENT_IF"
-  ip netns exec "$AGENT_NS" tc -s qdisc show dev "$AGENT_IF"
+  ip netns exec "$AGENT_NS" "$TC_BIN" -s qdisc show dev "$AGENT_IF"
 } > "$OUTDIR/qdisc-final.txt"
 
 # Re-verify the checkout, harness, analyzer, and every executable after the
 # long collection phase. The final verdict never runs from mutable source.
 verify_immutable_inputs
+verify_traffic_control
 [ "$(sha256_file "$OUTDIR/b4_analyze.py")" = \
   "$(sha256_file "$BINDIR/b4_analyze.py")" ] || {
   echo "recorded analyzer changed during qualification" >&2
@@ -939,6 +1002,14 @@ metadata = {
     "ram_bytes": int("$RAM_BYTES"),
     "resource_limits": r"""$RESOURCE_LIMITS""",
     "container_limits": r"""$CONTAINER_LIMITS""",
+    "traffic_control": {
+        "binary": r"""$TC_BIN""",
+        "source_binary": r"""$TC_SOURCE_BIN""",
+        "recorded_binary": "traffic-control/tc",
+        "version": r"""$TC_VERSION""",
+        "sha256": "$TC_SHA256",
+        "deterministic_seed_supported": True,
+    },
     "interface_offload": "interface-offload.txt",
     "effective_config": {
         "edge": "effective-config/edge.yaml",
@@ -1006,14 +1077,21 @@ PY
 
 if [ "$MODE" = smoke ]; then
   verify_immutable_inputs
+  verify_traffic_control
+  [ "$(sha256_file "$OUTDIR/traffic-control/tc")" = "$TC_SHA256" ] || {
+    echo "recorded tc binary changed while producing smoke evidence" >&2
+    exit 2
+  }
   echo "SMOKE COMPLETE — non-qualification evidence in $OUTDIR"
   exit 0
 fi
 
 verify_immutable_inputs
+verify_traffic_control
 python3 "$BINDIR/b4_analyze.py" "$OUTDIR" --summary "$OUTDIR/summary.json" |
   tee "$OUTDIR/analysis.txt"
 verify_immutable_inputs
+verify_traffic_control
 [ "$(sha256_file "$OUTDIR/b4_analyze.py")" = \
   "$(sha256_file "$BINDIR/b4_analyze.py")" ] || {
   echo "recorded analyzer changed while producing the verdict" >&2
@@ -1022,6 +1100,10 @@ verify_immutable_inputs
 [ "$(sha256_file "$OUTDIR/perf-netem.sh")" = \
   "$(sha256_file "$ROOT/scripts/perf-netem.sh")" ] || {
   echo "recorded harness changed while producing the verdict" >&2
+  exit 2
+}
+[ "$(sha256_file "$OUTDIR/traffic-control/tc")" = "$TC_SHA256" ] || {
+  echo "recorded tc binary changed while producing the verdict" >&2
   exit 2
 }
 echo "QUALIFICATION COMPLETE — evidence in $OUTDIR"

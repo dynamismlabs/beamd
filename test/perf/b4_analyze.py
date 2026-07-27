@@ -73,6 +73,71 @@ def validate_host_shape(metadata: dict[str, Any]) -> None:
     )
 
 
+def validate_traffic_control(root: pathlib.Path, value: Any) -> None:
+    required = {
+        "binary",
+        "source_binary",
+        "recorded_binary",
+        "version",
+        "sha256",
+        "deterministic_seed_supported",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise EvidenceError("metadata traffic_control is missing or invalid")
+    for field in (
+        "binary",
+        "source_binary",
+        "recorded_binary",
+        "version",
+        "sha256",
+    ):
+        if not isinstance(value[field], str) or not value[field].strip():
+            raise EvidenceError(f"metadata traffic_control.{field} is invalid")
+    for field in ("binary", "source_binary"):
+        if not pathlib.Path(value[field]).is_absolute():
+            raise EvidenceError(f"metadata traffic_control.{field} must be absolute")
+    if value["deterministic_seed_supported"] is not True:
+        raise EvidenceError(
+            "metadata traffic_control must confirm deterministic netem seed support"
+        )
+    digest = value["sha256"]
+    try:
+        valid_digest = len(digest) == 64 and int(digest, 16) >= 0
+    except ValueError:
+        valid_digest = False
+    if not valid_digest:
+        raise EvidenceError("metadata traffic_control.sha256 is invalid")
+    relative = pathlib.Path(value["recorded_binary"])
+    if relative.is_absolute() or ".." in relative.parts:
+        raise EvidenceError("metadata traffic_control.recorded_binary is unsafe")
+    recorded = root / relative
+    cursor = root
+    for part in relative.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            raise EvidenceError(
+                "metadata traffic_control.recorded_binary traverses a symlink"
+            )
+    try:
+        root_resolved = root.resolve(strict=True)
+        recorded_resolved = recorded.resolve(strict=True)
+    except (FileNotFoundError, OSError) as err:
+        raise EvidenceError("recorded tc binary is missing or unreadable") from err
+    if not recorded_resolved.is_relative_to(root_resolved):
+        raise EvidenceError("metadata traffic_control.recorded_binary escapes evidence")
+    if not recorded.is_file():
+        raise EvidenceError("recorded tc binary is missing")
+    size = recorded.stat().st_size
+    if size <= 0 or size > 50 << 20:
+        raise EvidenceError("recorded tc binary has an invalid size")
+    hasher = hashlib.sha256()
+    with recorded.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            hasher.update(chunk)
+    if hasher.hexdigest() != digest:
+        raise EvidenceError("recorded tc binary hash disagrees with metadata")
+
+
 def percentile(values: Iterable[float], quantile: float) -> float:
     ordered = sorted(values)
     if not ordered:
@@ -204,6 +269,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         "ram_bytes",
         "resource_limits",
         "container_limits",
+        "traffic_control",
         "interface_offload",
         "effective_config",
         "direct_fixture",
@@ -316,6 +382,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         if not isinstance(metadata[field], str) or not metadata[field].strip():
             raise EvidenceError(f"metadata {field} must be a non-empty string")
     validate_host_shape(metadata)
+    validate_traffic_control(root, metadata["traffic_control"])
     offload_path = root / metadata["interface_offload"]
     if not offload_path.is_file() or offload_path.stat().st_size == 0:
         raise EvidenceError("recorded interface offload artifact is missing or empty")

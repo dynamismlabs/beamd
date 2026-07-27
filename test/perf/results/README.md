@@ -24,14 +24,21 @@ head-to-head qualification.
 
 ## B4 qualification
 
-Run the B4 suite only on a Linux host with network namespaces, `tc netem`,
-ethtool, Python 3.10+, at least two online CPUs, Linux
-`MemTotal >= 2000000000` bytes, and permission to create privileged
+Run the B4 suite only on a Linux host with network namespaces, `tc netem`
+deterministic seed support, ethtool, Python 3.10+, at least two online CPUs,
+Linux `MemTotal >= 2000000000` bytes, and permission to create privileged
 networking:
 
 ```text
 scripts/perf-netem.sh build
-sudo -E scripts/perf-netem.sh run
+sudo scripts/perf-netem.sh run
+```
+
+If the system `tc` lacks deterministic seed support, select a compatible
+kernel/userspace pair with an explicit absolute path:
+
+```text
+sudo env TC_BIN=/absolute/path/to/tc scripts/perf-netem.sh run
 ```
 
 The build step writes a hash manifest for all five binaries. Qualification
@@ -43,8 +50,10 @@ directory and never overwrites evidence. It records:
 - `raw-mixed.jsonl`: frozen baseline/under-load cases in both directions;
 - `bulk-live.jsonl`: fail-closed ramp/4 KiB/65 KiB snapshots proving all six
   continuous bulk workers remained live with zero errors or corruption;
-- `metadata.json`: commit, binary hashes, versions, limits, offloads, exact
-  fixture/workload configuration, seeds, order, and handshake policy;
+- `metadata.json`: commit, binary hashes (including the recorded `tc`),
+  versions, limits, offloads, exact fixture/workload configuration, seeds,
+  order, and handshake policy;
+- `traffic-control/tc`: the exact `tc` binary used for every shaped qdisc;
 - `qdisc/`, `effective-config/`, `check-*.json`, and `logs/`: audit inputs;
 - `perf-netem.sh` and `b4_analyze.py`: manifest-hashed copies used for the run
   and verdict, revalidated after collection;

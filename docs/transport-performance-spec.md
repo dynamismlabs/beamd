@@ -1434,6 +1434,14 @@ links.
 run the edge and agent on opposite sides, and shape both directions explicitly
 with these profiles:
 
+The host kernel and selected `tc` must both support deterministic `netem seed`
+configuration. Select a non-system build only through an absolute `TC_BIN`
+path. Before topology setup, the harness must verify the selected userspace
+parser, copy that binary into the new evidence directory, and use the immutable
+recorded copy for every qdisc mutation and snapshot. The first real seeded
+qdisc must fail closed if the kernel lacks support, and every analyzer-validated
+snapshot must retain the exact requested seeds.
+
 | Profile | One-way delay | Loss | Rate |
 | --- | ---: | ---: | ---: |
 | `clean` | 75 ms | 0% | 100 Mbit/s |
@@ -1522,9 +1530,11 @@ Performance gates:
 
 Store raw JSON and a summary beside metadata containing the beamd commit,
 Go/quic-go/yamux versions, kernel and OS, CPU/RAM/container limits, interface
-offload state, exact `tc qdisc` output, effective beamd configuration, direct
-fixture settings, frozen workload values, netem seeds, transport order, and
-whether handshake time was included (it must be `false` for transfer gates).
+offload state, the exact `tc` version and binary hash, exact `tc qdisc` output,
+effective beamd configuration, direct fixture settings, frozen workload
+values, netem seeds, transport order, and whether handshake time was included
+(it must be `false` for transfer gates). Persist the actual beamd, fixture,
+analyzer, harness, and `tc` binaries or their manifest-verified hashes.
 
 The netem suite is a manual or scheduled privileged job, not a required
 unprivileged pull-request job. Passing it is necessary but not sufficient for

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -75,6 +76,71 @@ class B4AnalyzerTest(unittest.TestCase):
             with self.subTest(metadata=metadata):
                 with self.assertRaisesRegex(B4.EvidenceError, field):
                     B4.validate_host_shape(metadata)
+
+    def test_traffic_control_binary_is_self_contained_and_hashed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = pathlib.Path(directory)
+            root = sandbox / "evidence"
+            recorded = root / "traffic-control" / "tc"
+            recorded.parent.mkdir(parents=True)
+            recorded.write_bytes(b"synthetic tc binary")
+            metadata = {
+                "binary": "/evidence/traffic-control/tc",
+                "source_binary": "/opt/iproute2/tc",
+                "recorded_binary": "traffic-control/tc",
+                "version": "tc utility, iproute2-6.8.0",
+                "sha256": hashlib.sha256(recorded.read_bytes()).hexdigest(),
+                "deterministic_seed_supported": True,
+            }
+            B4.validate_traffic_control(root, metadata)
+
+            invalid = dict(metadata)
+            invalid["sha256"] = "0" * 64
+            with self.assertRaisesRegex(B4.EvidenceError, "hash disagrees"):
+                B4.validate_traffic_control(root, invalid)
+
+            invalid = dict(metadata)
+            invalid["binary"] = "traffic-control/tc"
+            with self.assertRaisesRegex(B4.EvidenceError, "must be absolute"):
+                B4.validate_traffic_control(root, invalid)
+
+            invalid = dict(metadata)
+            invalid["source_binary"] = "tc"
+            with self.assertRaisesRegex(B4.EvidenceError, "must be absolute"):
+                B4.validate_traffic_control(root, invalid)
+
+            invalid = dict(metadata)
+            invalid["recorded_binary"] = "../tc"
+            with self.assertRaisesRegex(B4.EvidenceError, "unsafe"):
+                B4.validate_traffic_control(root, invalid)
+
+            invalid = dict(metadata)
+            invalid["recorded_binary"] = "/usr/sbin/tc"
+            with self.assertRaisesRegex(B4.EvidenceError, "unsafe"):
+                B4.validate_traffic_control(root, invalid)
+
+            invalid = dict(metadata)
+            invalid["deterministic_seed_supported"] = False
+            with self.assertRaisesRegex(B4.EvidenceError, "seed support"):
+                B4.validate_traffic_control(root, invalid)
+
+            outside = sandbox / "outside-tc"
+            outside.write_bytes(recorded.read_bytes())
+            recorded.unlink()
+            recorded.symlink_to(outside)
+            with self.assertRaisesRegex(B4.EvidenceError, "symlink"):
+                B4.validate_traffic_control(root, metadata)
+
+            recorded.unlink()
+            recorded.parent.rmdir()
+            outside_dir = sandbox / "outside-dir"
+            outside_dir.mkdir()
+            (outside_dir / "tc").write_bytes(outside.read_bytes())
+            (root / "traffic-control").symlink_to(
+                outside_dir, target_is_directory=True
+            )
+            with self.assertRaisesRegex(B4.EvidenceError, "symlink"):
+                B4.validate_traffic_control(root, metadata)
 
     def test_complete_synthetic_matrix_passes(self):
         seeds = [101, 202, 303]

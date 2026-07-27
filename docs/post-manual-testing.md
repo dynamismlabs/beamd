@@ -92,8 +92,11 @@ The privileged synthetic gate is separate:
 
 ```text
 scripts/perf-netem.sh build
-sudo -E scripts/perf-netem.sh run
+sudo scripts/perf-netem.sh run
 ```
+
+If the host needs a non-system `tc`, select it with
+`sudo env TC_BIN=/absolute/path/to/tc scripts/perf-netem.sh run`.
 
 Do not tag a release that flips the defaults unless its complete
 `test/perf/results/b4-*` evidence passes and the production-link `auto` pilot
