@@ -51,8 +51,8 @@ directory and never overwrites evidence. It records:
 - `bulk-live.jsonl`: fail-closed ramp/4 KiB/65 KiB snapshots proving all six
   continuous bulk workers remained live with zero errors or corruption;
 - `metadata.json`: commit, binary hashes (including the recorded `tc`),
-  versions, limits, offloads, exact fixture/workload configuration, seeds,
-  order, and handshake policy;
+  versions, limits, offloads, isolated beamd HOME policy, exact
+  fixture/workload configuration, seeds, order, and handshake policy;
 - `traffic-control/tc`: the exact `tc` binary used for every shaped qdisc;
 - `qdisc/`, `effective-config/`, `check-*.json`, and `logs/`: audit inputs;
 - `perf-netem.sh` and `b4_analyze.py`: manifest-hashed copies used for the run
@@ -62,4 +62,7 @@ directory and never overwrites evidence. It records:
 `test/perf/b4_analyze.py` returns 0 only for complete passing evidence, 1 for
 complete evidence that fails a gate, and 2 for missing/invalid/inconclusive
 evidence. `MODE=smoke` is useful for harness development but is permanently
-marked non-qualification and cannot pass the analyzer.
+marked non-qualification and cannot pass the analyzer. The harness supplies
+an empty temporary HOME to every beamd fixture process; do not inject `/root`
+or a developer HOME when running it from systemd or another unattended
+runner.

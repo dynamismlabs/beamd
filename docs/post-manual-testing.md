@@ -98,6 +98,10 @@ sudo scripts/perf-netem.sh run
 If the host needs a non-system `tc`, select it with
 `sudo env TC_BIN=/absolute/path/to/tc scripts/perf-netem.sh run`.
 
+The harness supplies an empty temporary HOME to every beamd fixture process.
+Do not set it to `/root` or a developer HOME for unattended runs; a systemd
+unit may omit HOME entirely.
+
 Do not tag a release that flips the defaults unless its complete
 `test/perf/results/b4-*` evidence passes and the production-link `auto` pilot
 and both rollback controls were rehearsed. A smoke-mode harness run is never

@@ -402,6 +402,10 @@ sudo scripts/perf-netem.sh run
 Pass a non-system traffic-control build only with
 `sudo env TC_BIN=/absolute/path/to/tc scripts/perf-netem.sh run`.
 
+The harness gives its beamd fixture processes an empty temporary HOME, so it
+is safe to launch from systemd with no HOME and never reads the operator's
+accounts or credentials.
+
 It records immutable TCP, QUIC, and same-protocol direct evidence under
 `test/perf/results/` and fails closed through `test/perf/b4_analyze.py`.
 

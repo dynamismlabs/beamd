@@ -73,6 +73,19 @@ def validate_host_shape(metadata: dict[str, Any]) -> None:
     )
 
 
+def validate_runtime_environment(value: Any) -> None:
+    required = {"beamd_home_isolated", "beamd_home_inherited"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise EvidenceError("metadata runtime_environment is missing or invalid")
+    if (
+        value["beamd_home_isolated"] is not True
+        or value["beamd_home_inherited"] is not False
+    ):
+        raise EvidenceError(
+            "qualification beamd processes must use an isolated, non-inherited HOME"
+        )
+
+
 def validate_traffic_control(root: pathlib.Path, value: Any) -> None:
     required = {
         "binary",
@@ -269,6 +282,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         "ram_bytes",
         "resource_limits",
         "container_limits",
+        "runtime_environment",
         "traffic_control",
         "interface_offload",
         "effective_config",
@@ -382,6 +396,7 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         if not isinstance(metadata[field], str) or not metadata[field].strip():
             raise EvidenceError(f"metadata {field} must be a non-empty string")
     validate_host_shape(metadata)
+    validate_runtime_environment(metadata["runtime_environment"])
     validate_traffic_control(root, metadata["traffic_control"])
     offload_path = root / metadata["interface_offload"]
     if not offload_path.is_file() or offload_path.stat().st_size == 0:

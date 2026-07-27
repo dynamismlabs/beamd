@@ -77,6 +77,35 @@ class B4AnalyzerTest(unittest.TestCase):
                 with self.assertRaisesRegex(B4.EvidenceError, field):
                     B4.validate_host_shape(metadata)
 
+    def test_qualification_requires_isolated_beamd_home(self):
+        B4.validate_runtime_environment(
+            {
+                "beamd_home_isolated": True,
+                "beamd_home_inherited": False,
+            }
+        )
+
+        invalid = (
+            {},
+            {"beamd_home_isolated": True},
+            {
+                "beamd_home_isolated": False,
+                "beamd_home_inherited": False,
+            },
+            {
+                "beamd_home_isolated": True,
+                "beamd_home_inherited": True,
+            },
+            {
+                "beamd_home_isolated": 1,
+                "beamd_home_inherited": False,
+            },
+        )
+        for runtime_environment in invalid:
+            with self.subTest(runtime_environment=runtime_environment):
+                with self.assertRaises(B4.EvidenceError):
+                    B4.validate_runtime_environment(runtime_environment)
+
     def test_traffic_control_binary_is_self_contained_and_hashed(self):
         with tempfile.TemporaryDirectory() as directory:
             sandbox = pathlib.Path(directory)

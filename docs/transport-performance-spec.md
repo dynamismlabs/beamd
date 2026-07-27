@@ -6,7 +6,7 @@ changing either default.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-07-25
+**Last updated:** 2026-07-27
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -1489,6 +1489,15 @@ defaults:
 - zero request errors, corruption, timeouts, or missing cases, enforced by a
   fail-closed analyzer.
 
+Run every beamd fixture process with an explicit, harness-created empty HOME
+directory with mode `0700`; never inherit the invoking operator's HOME. This
+keeps accounts, global naming defaults, agent state, and credentials out of
+the measurements and permits unattended runners whose service environment has
+no HOME. Record
+`runtime_environment.beamd_home_isolated=true` and
+`runtime_environment.beamd_home_inherited=false`; the analyzer must reject
+qualification evidence without both assertions.
+
 Performance gates:
 
 - Every throughput and tail gate below must pass separately for upload and
@@ -1532,9 +1541,10 @@ Store raw JSON and a summary beside metadata containing the beamd commit,
 Go/quic-go/yamux versions, kernel and OS, CPU/RAM/container limits, interface
 offload state, the exact `tc` version and binary hash, exact `tc qdisc` output,
 effective beamd configuration, direct fixture settings, frozen workload
-values, netem seeds, transport order, and whether handshake time was included
-(it must be `false` for transfer gates). Persist the actual beamd, fixture,
-analyzer, harness, and `tc` binaries or their manifest-verified hashes.
+values, netem seeds, transport order, isolated-HOME policy, and whether
+handshake time was included (it must be `false` for transfer gates). Persist
+the actual beamd, fixture, analyzer, harness, and `tc` binaries or their
+manifest-verified hashes.
 
 The netem suite is a manual or scheduled privileged job, not a required
 unprivileged pull-request job. Passing it is necessary but not sufficient for

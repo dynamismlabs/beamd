@@ -39,7 +39,8 @@ Environment:
 Qualification prerequisites: Linux, root for `run`, iproute2 (ip/tc) with
 deterministic `netem seed` support, ethtool, openssl, curl, Python 3.10+, at
 least 2 online CPUs and 2 GB-class usable RAM, and a clean checkout for
-`build`.
+`build`. Fixture beamd processes use a harness-created empty HOME rather than
+the operator or service account HOME.
 EOF
 }
 
@@ -365,6 +366,9 @@ verify_traffic_control() {
 }
 verify_traffic_control
 WORK=$(mktemp -d)
+BEAMD_HOME="$WORK/home"
+mkdir -p "$BEAMD_HOME/.beamd"
+chmod 0700 "$BEAMD_HOME" "$BEAMD_HOME/.beamd"
 SUFFIX=$(printf '%05d' "$$")
 EDGE_NS="bp-e-$SUFFIX"
 AGENT_NS="bp-a-$SUFFIX"
@@ -452,7 +456,8 @@ EOF
 cp "$WORK/edge.yaml" "$OUTDIR/effective-config/edge.yaml"
 
 GOMEMLIMIT=${GOMEMLIMIT:-1400MiB}
-ip netns exec "$EDGE_NS" env GOMEMLIMIT="$GOMEMLIMIT" BEAMD_DISABLE_QUIC=false \
+ip netns exec "$EDGE_NS" env HOME="$BEAMD_HOME" \
+  GOMEMLIMIT="$GOMEMLIMIT" BEAMD_DISABLE_QUIC=false \
   BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304 \
   "$BINDIR/beamd" serve --config "$WORK/edge.yaml" \
   >"$OUTDIR/logs/edge.log" 2>&1 &
@@ -647,7 +652,8 @@ start_agent() {
   local profile=$1 seed=$2 direction=$3 transport=$4
   write_client_config "$transport"
   local check_path="$OUTDIR/check-$profile-$seed-$direction-$transport.json"
-  if ! ip netns exec "$AGENT_NS" env BEAMD_TRANSPORT="$transport" \
+  if ! ip netns exec "$AGENT_NS" env HOME="$BEAMD_HOME" \
+    BEAMD_TRANSPORT="$transport" \
     BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304 \
     "$BINDIR/beamd" check --json --transport "$transport" \
     --config "$WORK/client-$transport.yaml" > "$check_path"; then
@@ -661,7 +667,8 @@ record = json.load(open(sys.argv[1]))
 if record.get("ok") is not True or record.get("transport") != sys.argv[2]:
     raise SystemExit(f"preflight did not select forced transport: {record}")
 PY
-  ip netns exec "$AGENT_NS" env BEAMD_TRANSPORT="$transport" \
+  ip netns exec "$AGENT_NS" env HOME="$BEAMD_HOME" \
+    BEAMD_TRANSPORT="$transport" \
     BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304 \
     "$BINDIR/beamd" open 9000 --as "$NAME" \
     --config "$WORK/client-$transport.yaml" \
@@ -1002,6 +1009,10 @@ metadata = {
     "ram_bytes": int("$RAM_BYTES"),
     "resource_limits": r"""$RESOURCE_LIMITS""",
     "container_limits": r"""$CONTAINER_LIMITS""",
+    "runtime_environment": {
+        "beamd_home_isolated": True,
+        "beamd_home_inherited": False,
+    },
     "traffic_control": {
         "binary": r"""$TC_BIN""",
         "source_binary": r"""$TC_SOURCE_BIN""",
