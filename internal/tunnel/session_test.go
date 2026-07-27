@@ -16,6 +16,7 @@ func TestStableErrorCodes(t *testing.T) {
 		CloseAuth:       0x03,
 		CloseSuperseded: 0x04,
 		CloseCapacity:   0x05,
+		CloseIdle:       0x06,
 		StreamCanceled:  0x10,
 		StreamCapacity:  0x11,
 	}
@@ -36,6 +37,7 @@ func TestCloseReasonMapping(t *testing.T) {
 		{CloseInfo{CodeValid: true, Code: CloseShutdown}, "shutdown"},
 		{CloseInfo{CodeValid: true, Code: CloseProtocol}, "protocol"},
 		{CloseInfo{CodeValid: true, Code: CloseAuth}, "protocol"},
+		{CloseInfo{CodeValid: true, Code: CloseIdle}, "idle"},
 		{CloseInfo{CodeValid: true, Code: CloseCapacity}, "other"},
 		{CloseInfo{CodeValid: true, Code: 0xff}, "other"},
 		{CloseInfo{Reason: "idle"}, "idle"},

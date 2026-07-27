@@ -281,6 +281,7 @@ Use stable QUIC application error codes:
 | `0x03` | `CloseAuth` | Authentication was rejected |
 | `0x04` | `CloseSuperseded` | Session was replaced |
 | `0x05` | `CloseCapacity` | Edge session capacity was reached |
+| `0x06` | `CloseIdle` | Application heartbeats timed out |
 | `0x10` | `StreamCanceled` | Request, backend, or caller canceled a stream |
 | `0x11` | `StreamCapacity` | Stream could not be admitted |
 
@@ -306,11 +307,12 @@ failure already recorded. The adapters populate it as follows:
 
 Application-code mapping is fixed: `CloseNormal` and `CloseSuperseded` map to
 `normal`; `CloseShutdown` maps to `shutdown`; `CloseProtocol` and `CloseAuth`
-map to `protocol`; `CloseCapacity` and unknown codes map to `other`. Capacity
-has its own rejection counter. `Reason` is the local description or peer
-application-close description, sanitized to valid UTF-8 and capped at 256
-bytes before storage or logging. It is never a metric label. `Cause` retains
-the original wrapped error for `errors.Is` / `errors.As` and debug diagnostics.
+map to `protocol`; `CloseIdle` maps to `idle`; `CloseCapacity` and unknown
+codes map to `other`. Capacity has its own rejection counter. `Reason` is the
+local description or peer application-close description, sanitized to valid
+UTF-8 and capped at 256 bytes before storage or logging. It is never a metric
+label. `Cause` retains the original wrapped error for `errors.Is` /
+`errors.As` and debug diagnostics.
 
 Stream I/O errors are deliberately not normalized beyond standard `io.EOF`,
 context errors, deadlines/`net.Error`, and `ErrSessionClosed`. Proxy callers

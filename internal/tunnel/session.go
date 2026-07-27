@@ -24,6 +24,7 @@ const (
 	CloseAuth       ErrorCode = 0x03
 	CloseSuperseded ErrorCode = 0x04
 	CloseCapacity   ErrorCode = 0x05
+	CloseIdle       ErrorCode = 0x06
 
 	StreamCanceled ErrorCode = 0x10
 	StreamCapacity ErrorCode = 0x11
@@ -74,6 +75,8 @@ func CloseReason(info CloseInfo) string {
 			return "shutdown"
 		case CloseProtocol, CloseAuth:
 			return "protocol"
+		case CloseIdle:
+			return "idle"
 		default:
 			return "other"
 		}

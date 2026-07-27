@@ -1451,7 +1451,7 @@ func (e *Edge) heartbeatWatch(ctx context.Context, sess *Session) {
 			sess.mu.Unlock()
 			if since > e.heartbeatTimeout {
 				slog.Warn("session: heartbeat timeout", "slug", sess.slug, "since", since)
-				_ = sess.transport.CloseWithError(tunnel.CloseProtocol, "heartbeat timeout")
+				_ = sess.transport.CloseWithError(tunnel.CloseIdle, "heartbeat timeout")
 				return
 			}
 		}
