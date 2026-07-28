@@ -21,11 +21,12 @@ beamd login --server <base_domain> --token <token>
 beamd open 3000            # → https://3000.<base_domain> resolves over HTTPS
 ```
 
-That requires, on the server: public HTTPS and tuned fallback on `443/tcp`,
-QUIC tunnel ingress on `443/udp`, DNS `A`/`AAAA` for `<base_domain>` (+
-wildcard) pointing at it, a Let's Encrypt cert issued via DNS-01, and one
-developer token minted. QUIC is default-off until qualification, so TCP alone
-remains a valid rollout and rollback state.
+That requires, on the server: public HTTPS and the tuned tunnel path on
+`443/tcp`, DNS `A`/`AAAA` for `<base_domain>` (+ wildcard) pointing at it, a
+Let's Encrypt cert issued via DNS-01, and one developer token minted. The
+permanent self-hosted default is TCP with QUIC disabled. An operator who
+explicitly opts into QUIC must additionally expose `443/udp`; the hosted
+deployment does so after its qualification and production pilot pass.
 
 ## The two things only *you* can do (irreducible)
 
@@ -42,9 +43,10 @@ these is **hosted mode** — we own the domain + edge, you just `beamd login`.)
 ## The networking constraint (where beamd can run)
 
 beamd terminates its **own** TLS and ALPN-demuxes the TCP control plane vs
-public HTTPS on `443/tcp`; the preferred tunnel transport independently binds
-QUIC on `443/udp`. A full deployment therefore needs raw TCP and UDP 443 on one
-public IP. A TCP-only L4 target can run the fallback path but cannot run QUIC.
+public HTTPS on `443/tcp`; the optional self-hosted / preferred hosted tunnel
+transport independently binds QUIC on `443/udp`. A QUIC-enabled deployment
+therefore needs raw TCP and UDP 443 on one public IP. A TCP-only L4 target can
+run the default self-hosted path and hosted fallback but cannot run QUIC.
 An L7 platform that terminates TLS cannot run either tunnel listener:
 
 | Target | Fits? | Why |
@@ -103,7 +105,7 @@ Every path runs these steps; they differ only in who/what executes them.
 | 5 | Detect the server's public IP | metadata / `ifconfig.me` | ✅ |
 | 6 | Write `A`/`AAAA` for base + wildcard | via the DNS token | ✅ |
 | 7 | Write `beamd.yaml` config | `beamd init --non-interactive` | ✅ |
-| 8 | Start TCP 443; publish UDP 443 default-off until the pilot | systemd / `docker compose up -d` | ✅ |
+| 8 | Start TCP 443; optionally publish UDP 443 while keeping edge QUIC disabled by default | systemd / `docker compose up -d` | ✅ |
 | 9 | Issue + pre-warm the cert (DNS-01) | `beamd add-developer` / pre-warm | ✅ |
 | 10 | Mint the first developer token | `beamd add-developer` | ✅ |
 | 11 | `beamd login` from a laptop | **user** (one paste) | ❌ (trivial) |

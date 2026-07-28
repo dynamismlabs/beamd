@@ -268,6 +268,48 @@ func TestControlEOFClosesSessionBeforeControlSendHalf(t *testing.T) {
 	}
 }
 
+func TestControlShutdownMessageClaimsShutdownBeforeEOF(t *testing.T) {
+	local, peer := net.Pipe()
+	control := newTrackedPipeStream(local)
+	t.Cleanup(func() { _ = control.Close() })
+	events := make(chan string, 1)
+	transport := newSelectionTestSession(tunnel.KindQUIC, events)
+	s := &session{
+		transport: transport,
+		control:   control,
+		br:        bufio.NewReader(control),
+	}
+	c := newSelectionTestClient("unused", Options{Transport: "quic"})
+
+	writeDone := make(chan error, 1)
+	go func() {
+		err := proto.Write(peer, &proto.Error{
+			Type:    proto.TypeError,
+			Code:    proto.CodeShutdown,
+			Message: "planned restart",
+		})
+		if closeErr := peer.Close(); err == nil {
+			err = closeErr
+		}
+		writeDone <- err
+	}()
+
+	c.readControl(s)
+	if err := <-writeDone; err != nil {
+		t.Fatalf("write shutdown control message: %v", err)
+	}
+	if got := awaitEvent(t, events); got != "close" {
+		t.Fatalf("teardown event = %q, want session close", got)
+	}
+	info := transport.CloseInfo()
+	if !info.CodeValid || info.Code != tunnel.CloseShutdown || info.Reason != "planned restart" {
+		t.Fatalf("CloseInfo = %+v, want authoritative shutdown message", info)
+	}
+	if !c.skipBackoff.Load() {
+		t.Fatal("shutdown control message did not request immediate reconnect")
+	}
+}
+
 func TestSuccessfulCandidateHonorsOuterCancellationBeforeInstall(t *testing.T) {
 	events := make(chan string, 4)
 	stream := newSelectionTestStream(events)
@@ -1098,7 +1140,16 @@ func (s *selectionTestSession) setCloseInfo(info tunnel.CloseInfo) {
 	s.closeInfo = info
 	s.infoMu.Unlock()
 }
-func (s *selectionTestSession) CloseWithError(tunnel.ErrorCode, string) error {
+func (s *selectionTestSession) CloseWithError(code tunnel.ErrorCode, reason string) error {
+	s.infoMu.Lock()
+	if !s.closeInfo.CodeValid && s.closeInfo.Cause == nil && s.closeInfo.Reason == "" {
+		s.closeInfo = tunnel.CloseInfo{
+			Code:      code,
+			CodeValid: true,
+			Reason:    reason,
+		}
+	}
+	s.infoMu.Unlock()
 	if s.events != nil {
 		s.events <- "close"
 	}

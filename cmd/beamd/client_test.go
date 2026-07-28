@@ -2,9 +2,12 @@ package main
 
 import (
 	"net"
+	"os"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/dynamismlabs/beamd/internal/config"
 )
 
 func TestHoistFlags(t *testing.T) {
@@ -123,5 +126,61 @@ func TestControlPlaneHost(t *testing.T) {
 	t.Setenv("BEAMD_DEFAULT_HOST", "staging.beamd.ai")
 	if got := controlPlaneHost(); got != "staging.beamd.ai" {
 		t.Errorf("env override: controlPlaneHost() = %q, want staging.beamd.ai", got)
+	}
+}
+
+func TestMustTransportUsesCredentialKindAndPreservesPrecedence(t *testing.T) {
+	t.Setenv(config.TransportEnvVar, "placeholder")
+	if err := os.Unsetenv(config.TransportEnvVar); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		cfg  config.Client
+		want string
+	}{
+		{name: "hosted session default", cfg: config.Client{Kind: "session"}, want: config.TransportAuto},
+		{name: "self-hosted token default", cfg: config.Client{Kind: "token"}, want: config.TransportTCP},
+		{name: "standalone config default", cfg: config.Client{}, want: config.TransportTCP},
+		{
+			name: "explicit account pin",
+			cfg:  config.Client{Kind: "session", Transport: config.TransportTCP},
+			want: config.TransportTCP,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mustTransport(&tc.cfg); got != tc.want {
+				t.Errorf("mustTransport(%+v) = %q, want %q", tc.cfg, got, tc.want)
+			}
+		})
+	}
+
+	t.Setenv(config.TransportEnvVar, config.TransportQUIC)
+	if got := mustTransport(&config.Client{Kind: "session", Transport: config.TransportTCP}); got != config.TransportQUIC {
+		t.Errorf("environment override = %q, want quic", got)
+	}
+}
+
+func TestTransportForAccountRefresh(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	got, err := transportForAccountRefresh("edge.example.com:443")
+	if err != nil || got != "" {
+		t.Fatalf("new account transport = %q, %v; want empty, nil", got, err)
+	}
+
+	if err := config.SaveAccount(&config.Account{
+		Server:    "edge.example.com:443",
+		Token:     "old-token",
+		Kind:      "session",
+		Transport: config.TransportTCP,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = transportForAccountRefresh("edge.example.com:443")
+	if err != nil || got != config.TransportTCP {
+		t.Fatalf("refreshed account transport = %q, %v; want tcp, nil", got, err)
 	}
 }

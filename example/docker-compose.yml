@@ -43,8 +43,8 @@ services:
       # Key-only form: forwarded from /etc/beamd/.env when set, and left ABSENT
       # (not empty) when unset — a present-but-empty value is a fatal startup error.
       - BEAMD_YAMUX_STREAM_WINDOW_BYTES
-      # QUIC stays disabled until B4 qualification and the production pilot.
-      # Key-only form preserves YAML/default behavior when an override is absent.
+      # QUIC is disabled by default for self-hosted edges. Key-only form
+      # preserves YAML/default behavior when an override is absent.
       - BEAMD_LISTEN_QUIC
       - BEAMD_DISABLE_QUIC
       - BEAMD_MAX_STREAMS_PER_SESSION

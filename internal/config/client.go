@@ -15,9 +15,13 @@ import (
 type Client struct {
 	Server string `yaml:"server"`
 	Token  string `yaml:"token"`
+	// Kind identifies how the credential was issued. An exact "session" kind
+	// selects the hosted auto-transport default when Transport is empty.
+	// Missing and all other kinds retain the conservative tcp default.
+	Kind string `yaml:"kind,omitempty"`
 	// Transport selects the tunnel transport: tcp, auto, or quic. Empty is
-	// resolved to the shipped tcp default at runtime. BEAMD_TRANSPORT may
-	// override it without changing the persisted profile.
+	// resolved from Kind at runtime. BEAMD_TRANSPORT may override it without
+	// changing the persisted profile.
 	Transport string `yaml:"transport,omitempty"`
 	// InsecureSkipVerify disables TLS verification of the edge's control
 	// connection. Default (false) verifies the edge cert, so the bearer

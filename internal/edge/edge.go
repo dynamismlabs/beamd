@@ -1106,7 +1106,11 @@ func (e *Edge) handleTunnelSession(transport tunnel.Session) {
 		typ, line, err := proto.Read(br)
 		if err != nil {
 			_ = transport.CloseWithError(tunnel.CloseProtocol, "control stream ended")
-			_ = control.CloseWrite()
+			// Closing the session owns control-stream teardown. Sending a
+			// stream FIN after CONNECTION_CLOSE has been claimed can reach a
+			// QUIC peer first, where the clean EOF races the authoritative
+			// application close and may be misclassified as a local protocol
+			// failure.
 			if err != io.EOF && !errors.Is(err, net.ErrClosed) && !errors.Is(err, tunnel.ErrSessionClosed) {
 				slog.Debug("control: read", "transport", transport.Kind(), "err", err.Error())
 			}

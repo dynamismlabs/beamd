@@ -39,12 +39,53 @@ func TestAccountRoundTrip(t *testing.T) {
 	}
 	// Client() projects just the connection credential.
 	c := got.Client()
-	if c.Server != a.Server || c.Token != a.Token || c.Transport != TransportAuto {
+	if c.Server != a.Server || c.Token != a.Token || c.Kind != "session" || c.Transport != TransportAuto {
 		t.Errorf("Client() = %+v", c)
+	}
+	// Detached agents load the account YAML through LoadClient, so Kind must
+	// survive that path as well as the foreground Account.Client projection.
+	accountPath, err := AccountPath(a.Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detached, err := LoadClient(accountPath)
+	if err != nil {
+		t.Fatalf("LoadClient(account): %v", err)
+	}
+	if detached.Kind != "session" || detached.Transport != TransportAuto {
+		t.Errorf("detached client config = %+v, want session/auto", detached)
 	}
 	accts, err := ListAccounts()
 	if err != nil || len(accts) != 1 || accts[0].Server != "edge.example.com:443" {
 		t.Errorf("ListAccounts = %v, %v", accts, err)
+	}
+}
+
+func TestSessionAccountDefaultsToAutoWhenLoadedByDetachedAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	account := &Account{
+		Server: "hosted.example.com:443",
+		Token:  "session-token",
+		Kind:   "session",
+	}
+	if err := SaveAccount(account); err != nil {
+		t.Fatalf("SaveAccount: %v", err)
+	}
+	accountPath, err := AccountPath(account.Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detached, err := LoadClient(accountPath)
+	if err != nil {
+		t.Fatalf("LoadClient(account): %v", err)
+	}
+	got, err := ResolveClientTransport(detached)
+	if err != nil {
+		t.Fatalf("ResolveClientTransport: %v", err)
+	}
+	if got != TransportAuto {
+		t.Fatalf("detached session transport = %q, want %q", got, TransportAuto)
 	}
 }
 

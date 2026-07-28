@@ -1,12 +1,16 @@
 # Beamd Transport Performance — Specification and Task Checklist
 
-**Status:** A1 shipped. G1 is GO and operator-approved: implement QUIC
-default-off, then require B4 qualification and a production-link pilot before
-changing either default.
+**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. B4
+qualification is paused after a TCP/yamux graceful-close regression discovered
+by the first full matrix run. Its narrow correction is implemented and fully
+verified locally; a targeted staging recheck precedes a fresh full run.
+Qualification and a production-link pilot still gate enabling QUIC for the
+hosted service. The compiled and self-hosted defaults permanently remain TCP
+with the edge QUIC listener disabled.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-07-27
+**Last updated:** 2026-07-28
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -38,19 +42,22 @@ removes the single largest, most certain defect (a solo stream capped at
 `256 KiB / RTT`) with a small, bounded change and makes the eventual TCP path
 good.
 
-**Part B — QUIC over UDP 443 — is built later, behind a default-off flag, and
-becomes the default only after it beats the tuned-yamux baseline in the
-deterministic impairment harness and succeeds in a real production-link
+**Part B — QUIC over UDP 443 — is built behind a default-off edge flag and is
+activated by product policy only after it beats the tuned-yamux baseline in
+the deterministic impairment harness and succeeds in a real production-link
 pilot.** Building QUIC is the large effort (a transport abstraction, both
 adapters, listener/key lifecycle, selection/fallback, capacity, and a netem
 qualification harness). Turning the flag *off* does not make that work cheap;
 the flag buys a safe default and operational reversibility, not less code.
-QUIC ships as opt-in (`transport: auto` on the agent, QUIC listener enabled on
-the edge); forced `transport: quic` is for qualification and diagnosis. The
-edge-wide rollback is `BEAMD_DISABLE_QUIC=true` plus an edge restart, after
-which `auto` agents reconnect over TCP. The abstraction layer is introduced
-only when QUIC is greenlit — it has no value while there is a single
-implementation.
+The same binary supports both product modes. Self-hosted/token accounts retain
+`transport: tcp` and self-hosted edges retain `disable_quic: true` when the
+operator supplies no override. Hosted/session accounts resolve an omitted
+transport to `auto`, and the hosted edge deployment explicitly enables its
+QUIC listener after B4 and the pilot pass. Forced `transport: quic` is for
+qualification and diagnosis. The edge-wide rollback is
+`BEAMD_DISABLE_QUIC=true` plus an edge restart, after which `auto` agents
+reconnect over TCP. The abstraction layer is introduced only when QUIC is
+greenlit — it has no value while there is a single implementation.
 
 Between the two parts, **prove A2 on real beamd processes** (Section 16): with the
 4 MiB window already live, measure interactive-request latency under concurrent
@@ -78,10 +85,10 @@ The **eventual** full scope, once Part B is greenlit and proven, spans:
 | Deployment | Publish UDP 443, raise host UDP buffers, set a memory limit | B |
 | npm/release | Rebuild and ship the Go binary | A + B |
 
-The **target end-state** production design (reached only after Part B passes
-its gates) is:
+The **target end-state** production design is:
 
-1. Raw QUIC over UDP 443 is the preferred client-to-edge transport.
+1. Raw QUIC over UDP 443 is the preferred hosted client-to-edge transport
+   after the hosted rollout gates pass.
 2. TLS + yamux over TCP 443 remains an automatic availability fallback for
    networks that block or impair UDP, carrying the 4 MiB window from Part A.
 3. The edge admits at most 64 active proxy streams per session and 128
@@ -89,9 +96,15 @@ its gates) is:
    claim that all window credit is preallocated resident memory.
 4. The edge admits at most 128 concurrent raw TCP TLS handshakes, 32 tunnel
    pre-authentication sessions, and eight authenticated sessions.
-5. Until QUIC is proven, the shipped default is TCP/yamux only; QUIC is opt-in.
-   The default flips to QUIC-preferred (`auto`) only after the deterministic
-   Section 15.3 gates and the real-link production pilot both pass.
+5. Product defaults remain deliberately different:
+   - self-hosted/token accounts, legacy accounts with no kind, and standalone
+     client configs default to `tcp`; the compiled edge default remains
+     `disable_quic: true`;
+   - hosted/session accounts default to `auto`, and the hosted deployment
+     explicitly sets `disable_quic: false` only after the deterministic
+     Section 15.3 gates and the real-link production pilot both pass.
+   Explicit account/profile settings and environment overrides retain
+   precedence in both modes.
 6. When both transports ship, the client and edge are upgraded together. There
    is no mixed-version compatibility period, rollout cohort, or legacy protocol
    adapter.
@@ -136,8 +149,9 @@ OpenZiti reached with its westworld3/dilithium "Transwarp" UDP transport; beamd
 uses off-the-shelf quic-go rather than a custom protocol. QUIC still has
 connection-level congestion control, so it is not assumed to eliminate every
 effect; the interactive-latency-under-load gate (Section 15.3) must prove QUIC
-collapses the head-of-line penalty before it becomes the default. The tuned
-yamux path remains the fallback and the immediate A1 win while QUIC lands.
+collapses the head-of-line penalty before the hosted service activates it. The
+tuned yamux path remains the self-hosted default, hosted fallback, and the
+immediate A1 win while QUIC lands.
 
 This design does **not** add a rate limiter. Limits in this specification bound
 concurrency and memory, not bytes per second.
@@ -178,8 +192,8 @@ public visitor -- HTTPS/TCP 443 --> edge
                                       | one stream per public request/upgrade
                                       |
                          +------------+-------------+
-                         | preferred: QUIC/UDP 443  |
-                         | fallback: TLS+yamux/TCP  |
+                         | hosted: QUIC/UDP 443     |
+                         | default/fallback: TCP    |
                          +------------+-------------+
                                       |
                                    agent
@@ -384,10 +398,22 @@ for response bodies, uploads, early responses, and cancellation.
 
 The yamux stream wrapper must provide the same interface. yamux has no public
 per-stream reset, so its `Abort` sends the local FIN and relies on the
-configured five-second `StreamCloseTimeout` for forced cleanup. Its `Done`
-closes when local close and remote EOF are both observed, or when that timeout
-expires. Parent-session death overrides the timeout and closes `Done`
-immediately.
+configured five-minute `StreamCloseTimeout` for forced cleanup. The same
+fallback applies to graceful `CloseWrite`: yamux v0.1.2 cannot distinguish the
+two operations through its public API. Its `Done` closes when local close and
+remote EOF are both observed, or through an adapter fallback one second after
+yamux's raw timeout. That guard keeps the admission lease alive until raw
+stream cleanup is guaranteed to have begun. Parent-session death overrides the
+timeout and closes `Done` immediately. If parent death races a blocked raw
+`Close`, the wrapper must remember that it is already complete and must not arm
+a new fallback timer when the raw call returns.
+
+Five minutes deliberately restores yamux's upstream default. Expiry forcibly
+closes the stream and sends RST; on the peer, that reset takes precedence over
+data already in `recvBuf`. The former five-second setting can therefore corrupt
+otherwise healthy slow response tails and reproduces the observed failure
+mechanism locally. Do not shorten the graceful-close fallback unless the
+adapter first gains a separate, tested per-stream reset for `Abort`.
 
 Each session adapter owns a mutex-protected registry of every child stream
 wrapper. `OpenStream` and `AcceptStream` register the wrapper before returning
@@ -586,10 +612,11 @@ The protocol is unchanged:
 
 The control stream must remain bidirectionally open for the full session
 lifetime. Any control EOF, reset, read/write error, or heartbeat failure is
-session-terminal: record the cause and begin closing the session before
-gracefully closing the local control send half. This ordering prevents the
-application from intentionally returning QUIC stream credit while the session
-is still usable.
+session-terminal: record the cause and close the transport session. Session
+teardown owns control-stream cleanup; do not send a separate stream FIN after
+claiming the connection close. Over QUIC that FIN can arrive before the
+authoritative application close and make an intentional shutdown appear to
+the peer as a local protocol failure.
 
 Run the unexpected-agent-stream guard on the edge for **both** adapters after
 accepting the control stream. Any second agent-opened stream is aborted and the
@@ -659,12 +686,21 @@ cfg.AcceptBacklog = 64
 cfg.EnableKeepAlive = false
 cfg.KeepAliveInterval = 20 * time.Second // yamux validates it even when disabled
 cfg.StreamOpenTimeout = 5 * time.Second
-cfg.StreamCloseTimeout = 5 * time.Second
+cfg.StreamCloseTimeout = 5 * time.Minute
 ```
 
 The application control heartbeat then becomes the single liveness mechanism.
 Running both yamux keepalives and application heartbeats is redundant and can
 leave a session transport-alive while its control stream is unusable.
+
+The five-minute close value is a correctness boundary, not a liveness
+interval. `yamux.Stream.Close` starts this timer after an ordinary FIN; expiry
+discards the peer's unread buffered tail through RST. A five-second value
+reproduced `connection reset` locally, matching the mechanism that can surface
+as the `unexpected EOF` seen on a 100 MiB lossy staging download. B4.4b confirms
+that causal link on staging. Normal cooperative FIN exchange still completes
+`Done` immediately; only an abandoned stream retains resources for the
+fallback interval.
 
 In yamux v0.1.2, `AcceptBacklog` sizes both the incoming accept queue and the
 local in-flight-SYN semaphore. It is not an active-stream or memory limit.
@@ -704,13 +740,24 @@ Add `Transport` to `internal/client.Options` with values `auto`, `quic`, and
 
 ### 9.1 Selection
 
-- **Until QUIC passes the deterministic Section 15.3 gates and the real-link
-  production pilot, the shipped default is `tcp`, and `auto`/`quic` are
-  opt-in.** Once both gates pass, the default flips to `auto`. The behavior
-  below describes `auto`.
-- `auto` is the production pilot and normal production mode because it retains
-  TCP fallback. Forced `quic` is for `beamd check`, qualification, and
-  diagnosis; do not use it as the unattended production-agent mode.
+- Resolution order is
+  `BEAMD_TRANSPORT` (when present) > explicit account/profile `Transport` >
+  the product default below. A present empty or invalid environment value is
+  fatal.
+- When `Transport` is omitted, a hosted account whose persisted
+  `Account.Kind` is `session` resolves to `auto`. A self-hosted/API-key account
+  whose kind is `token`, a legacy account with a missing or unknown kind, and a
+  standalone client config all resolve to `tcp`. `Kind` is local product
+  metadata, not a server-side authorization boundary.
+- The `session => auto` behavior may ship in the common binary before hosted
+  activation because the hosted edge listener remains explicitly disabled
+  until B4 and the production-link pilot pass. Release coordination must avoid
+  imposing repeated fallback delays on unattended hosted agents while that
+  listener is disabled.
+- `auto` is the hosted production pilot and normal hosted production mode
+  because it retains TCP fallback. Forced `quic` is for `beamd check`,
+  qualification, and diagnosis; do not use it as the unattended
+  production-agent mode.
 - On the first connection, `auto` tries QUIC, including the control hello,
   with a three-second candidate deadline.
 - If QUIC fails, `auto` immediately attempts TCP/yamux with a five-second
@@ -889,7 +936,8 @@ must remain held until `tunnel.Stream.Done`.
 
 This distinction is load-bearing on yamux: `Stream.Close` is a local
 half-close, and its receive buffer may remain until remote FIN or the
-five-second close timeout. Releasing the lease at `Close` would make the
+five-minute raw close timeout. The wrapper releases its lease no earlier than
+one second after that fallback. Releasing the lease at `Close` would make the
 window-by-active-stream budget false during cancellation churn.
 
 ### 10.3 Resource accounting
@@ -1020,7 +1068,7 @@ rollback works. A present-empty or invalid environment override is fatal.
 | YAML field | Default |
 | --- | --- |
 | `listen_quic` | Same host and numeric port as `listen_https` |
-| `disable_quic` | `true` until QUIC passes its gates, then `false` |
+| `disable_quic` | `true` permanently as the compiled/self-hosted default |
 | `max_streams_per_session` | `64` |
 | `max_streams_total` | `128` |
 | `max_pre_auth_sessions` | `32` |
@@ -1041,11 +1089,11 @@ Validation after all overrides:
   `536870912` (512 MiB) unless a future explicit unsafe override is added.
 - the fixed 64 MiB maximum QUIC connection window multiplied by
   `max_sessions_total` must not exceed 512 MiB.
-- When the field lands in Part B, `disable_quic: true` is its initial shipped
-  default and also a rollback switch. While QUIC is unproven,
-  startup logs an informational note that only the tuned TCP path is enabled —
-  not worded as "degraded." After QUIC is proven and made default,
-  `disable_quic: true` reverts to a warning-level rollback switch.
+- `disable_quic: true` is both the permanent compiled/self-hosted default and
+  the hosted rollback switch. Startup with only the tuned TCP path is a normal
+  self-hosted state and must not be worded as "degraded." Hosted deployment
+  checks, rather than a global startup warning, detect an unintended disabled
+  listener after hosted activation.
 
 Add environment overrides:
 
@@ -1075,17 +1123,22 @@ An operator increasing the window to 16 MiB must lower both stream settings;
 the setting remains tunable, but startup must not silently exceed the memory
 budget.
 
-Example production YAML:
+Example self-hosted YAML:
 
 ```yaml
 listen_https: ":443"
 listen_quic: ":443"                  # Part B
-disable_quic: true                   # Part B: true until QUIC passes its gates
+disable_quic: true                   # compiled/self-hosted default
 max_streams_per_session: 64          # Part B
 max_streams_total: 128               # Part B
 max_pre_auth_sessions: 32            # Part B
 max_sessions_total: 8                # Part B
 ```
+
+The hosted deployment uses the same binary and explicitly sets
+`BEAMD_DISABLE_QUIC=false` (or `disable_quic: false`) only after B4 and the
+production-link pilot pass. It must continue to carry the environment kill
+switch so rollback does not require a new binary.
 
 The Part A process environment is configured separately:
 
@@ -1101,8 +1154,7 @@ Part A adds no client/profile field. Add `Transport` only with Part B:
 Transport string `yaml:"transport,omitempty"`
 ```
 
-The shipped default remains `tcp` until QUIC passes every gate; it then changes
-to `auto`:
+An explicit setting is unchanged:
 
 ```yaml
 transport: tcp
@@ -1121,7 +1173,26 @@ or environment takes effect after `beamd reload`.
 Normal logins use `internal/config.Account`, not only `Client`. Add the same
 `Transport` field to `Account`, copy it in `Account.Client()`, and apply one
 shared default/validation/environment function to explicit configs and
-account-derived clients.
+account-derived clients. That resolver implements this permanent product
+split when the field is omitted:
+
+| Client source | Empty `transport` resolves to |
+| --- | --- |
+| Hosted device-login account (`kind: session`) | `auto` |
+| Self-hosted/API-key account (`kind: token`) | `tcp` |
+| Legacy/ambiguous account (missing or unknown `kind`) | `tcp` |
+| Standalone explicit client config with no `kind` | `tcp` |
+
+An explicit `transport` value wins over the kind-derived default, and
+`BEAMD_TRANSPORT` wins over both. Login must persist `kind: session` for hosted
+device-code login and `kind: token` for pasted-token/self-hosted login; it need
+not persist a redundant `transport` value. Refreshing/re-logging into an
+existing account must preserve that account's non-empty explicit `Transport`
+pin. This keeps existing and ambiguous credentials conservative while allowing
+the hosted product to choose QUIC without a separate binary. Managed paid
+automation/API-key configs cannot be distinguished safely from OSS token
+configs, so their generator must persist `transport: auto` explicitly; a
+bearer token or hostname must never be used to infer the product tier.
 
 ## 12. CLI and local-agent diagnostics
 
@@ -1212,7 +1283,8 @@ represented by the active gauge and handshake-error counter, so rejected
 connections do not inflate successful-session totals.
 
 `beam_transport_streams_active` counts leased data streams, including yamux
-streams retained during their close timeout; it excludes control streams.
+streams retained through the full five-minute raw close fallback and the
+adapter's one-second accounting guard; it excludes control streams.
 Capacity rejection increments only
 `beam_transport_capacity_rejections_total`, because no transport open was
 attempted. Preserve the existing `beam_active_sessions` metric unchanged for
@@ -1311,6 +1383,14 @@ Part B must implement:
 - server transport/capacity environment overrides and memory-product
   validation, including conflicting YAML/environment values and present-empty
   overrides;
+- the permanent product-default matrix: omitted transport resolves to `auto`
+  only for `kind: session`, while `kind: token`, missing kind, and standalone
+  configs resolve to `tcp`; explicit configuration overrides that default and
+  `BEAMD_TRANSPORT` overrides both;
+- login persists `kind: session` for hosted device-code accounts and
+  `kind: token` for pasted-token/self-hosted accounts without requiring a
+  redundant persisted transport value, and re-login preserves an existing
+  explicit transport pin;
 - `max_streams_total=128` is accepted and `129` is rejected;
 - QUIC and yamux adapters satisfy the same session contract;
 - QUIC `Close`, `CloseWrite`, `Abort`, deadlines, and addresses;
@@ -1339,7 +1419,9 @@ Part B must implement:
   every child `Done` before `Session.Done` is observable and releases every
   lease/gauge; race this against both open and accept registration;
 - canceled yamux streams retain their leases through remote EOF or the
-  five-second close timeout;
+  five-minute raw close timeout plus the adapter accounting guard, and a
+  graceful FIN with a buffered unread tail remains byte-exact beyond the
+  former five-second boundary;
 - capacity errors map to 503 with `Retry-After: 1`;
 - other stream-open errors map to 502;
 - the 129th concurrent raw TLS handshake, 33rd pre-auth session, and ninth
@@ -1423,8 +1505,8 @@ edge and agent inside controlled Linux namespaces; it does not claim to be the
 production link. The accepted G1 run used real beamd edge and agent processes
 inside the controlled topology and proved the corrected mixed-load A2 symptom;
 it disproved the original solo-transfer hypothesis. B4.5 separately validates
-the qualified implementation on the real production link before any default
-flip.
+the qualified implementation on the real production link before hosted
+activation. It does not gate or change the permanent self-hosted defaults.
 
 The network impairment must apply only to the agent-to-edge leg. Do not shape
 the public test client's connection to the edge, or the results conflate two
@@ -1472,7 +1554,7 @@ least three recorded deterministic netem seeds per gated profile and
 counterbalance transport order (`QUIC,TCP` then `TCP,QUIC`, or equivalent)
 rather than running every sample of one transport first. Summaries aggregate
 the same seed/order blocks. This head-to-head comparison decides whether QUIC
-becomes the default.
+is activated for hosted/session accounts.
 
 Freeze the primary mixed-load workload rather than inheriting mutable script
 defaults:
@@ -1546,9 +1628,43 @@ handshake time was included (it must be `false` for transfer gates). Persist
 the actual beamd, fixture, analyzer, harness, and `tc` binaries or their
 manifest-verified hashes.
 
+Before a fail-closed exit caused by a tagged serial request error, corruption,
+or unsuccessful raw sample, persist the fully tagged offending record to
+`raw-failures.jsonl`. This file is diagnostic evidence only and must never be
+fed into or used to relax the passing analyzer matrix. Error samples retain
+elapsed time and partial payload bytes; for downloads, bytes means response-body
+bytes read, while for uploads it is an atomic snapshot of request-body bytes
+consumed by `net/http` when `Client.Do` returned and is not a wire-delivery
+guarantee. Background bulk-load failures retain their progress snapshot and
+console log instead of being represented as serial request records.
+
+`MODE=targeted` is the reusable incident-recheck path. It retains the clean
+manifest, deterministic `tc`, isolated HOME, host-resource, topology, qdisc,
+configuration, log, and checksum requirements, but runs exactly one profile,
+seed, direction, and payload through the direct fixture and beamd for both
+ordered transports. It writes `targeted-summary.json` and exits without
+invoking the full B4 analyzer; targeted evidence can establish a cause/fix but
+can never substitute for the complete qualification. Reusing a seed reproduces
+the same impairment parameters, not the same packet-loss trace: transport
+order and preceding traffic advance netem's seeded PRNG state. Targeted serial
+clients are fail-fast: the first failed warm-up or measurement is retained with
+elapsed/partial-byte diagnostics and stops that case. When the test
+infrastructure remains viable, case failures are accumulated through both
+transports before final qdisc, process-memory, configuration, manifest,
+integrity, stage-status, and summary artifacts are written; the final exit
+remains nonzero. Its inputs are:
+
+```text
+TARGET_PROFILE=lossy
+TARGET_SEED=101
+TARGET_DIRECTION=download
+TARGET_SIZE_BYTES=104857600
+TARGET_TRANSPORTS="tcp quic"
+```
+
 The netem suite is a manual or scheduled privileged job, not a required
 unprivileged pull-request job. Passing it is necessary but not sufficient for
-the default flip; the B4.5 production-link pilot is also required.
+hosted activation; the B4.5 production-link pilot is also required.
 
 ## 16. Canonical implementation task list
 
@@ -1588,7 +1704,7 @@ measurement gate before starting any Part B implementation.
   responsiveness improvement. A dedicated artifact containing both 16 MiB
   directions and memory observation was not captured; that historical evidence
   gap is recorded and is not a Part B prerequisite because B4 repeats the
-  stricter bidirectional and memory validation before any default flip.
+  stricter bidirectional and memory validation before hosted activation.
 
 Part A is complete after A1.1–A1.8. The measurement gate below is a separate
 decision task, not part of A1 completion.
@@ -1604,11 +1720,11 @@ decision task, not part of A1 completion.
 > ~38× (bursty loss), reaching 1.7–7.7 s once bulk shares the one tunnel TCP
 > connection (`hol-2026-07-24/`). That is the shared-connection head-of-line
 > problem QUIC fixes (§2). Full decision + caveats (QUIC fix expected but B4
-> must confirm before the default flip; load-dependent; controlled reproduction):
+> must confirm before hosted activation; load-dependent; controlled reproduction):
 > `test/perf/results/decision-2026-07-24-g1.md`. The controlled reproduction is
 > accepted as the implementation gate. Remote-edge confirmation remains
-> optional rigor; B4.5 is the required production-link gate for changing
-> defaults.
+> optional rigor; B4.5 is the required production-link gate for activating
+> QUIC in hosted production.
 
 - [x] **G1.1 — Establish the tuned-TCP baseline.** Ran real A1 beamd edge and
   agent processes with impairment applied before dial and recorded the qdiscs
@@ -1651,7 +1767,7 @@ decision task, not part of A1 completion.
   2026-07-24 and operator-approved on 2026-07-25.
 - [x] **G1.6 — Apply the stop condition.** Not triggered: G1.3b proved a severe
   repeatable defect, so the recorded decision authorizes B1–B4 with QUIC
-  default-off and preserves B4 as the default-flip gate.
+  default-off and preserves B4 as the hosted-activation gate.
 
 ### Part B, Change 1 — abstraction and generic-session guardrails
 
@@ -1681,14 +1797,22 @@ decision task, not part of A1 completion.
   full HTTP/streaming/WebSocket/reconnect/cancellation suite over forced QUIC
   and forced TCP.
 - [x] **B2.4 — Keep QUIC unreachable by default.** Ship the edge with
-  `disable_quic: true` and the agent with `transport: tcp`; use forced QUIC
-  only in tests and explicit `beamd check` qualification.
+  `disable_quic: true` and the generic/self-hosted agent with
+  `transport: tcp`; use forced QUIC only in tests and explicit `beamd check`
+  qualification.
 
 ### Part B, Change 3 — selection, flags, diagnostics, and rollback
 
 - [x] **B3.1 — Implement transport modes.** Add `tcp`, `auto`, and `quic`
   selection with the exact fallback classification, cleanup, reconnect, and
   re-probe behavior in Section 9.
+- [x] **B3.1a — Implement permanent product-aware defaults.** Resolve an
+  omitted transport to `auto` only for hosted `kind: session` accounts and to
+  `tcp` for `kind: token`, missing/unknown-kind legacy accounts, and standalone
+  configs. Preserve explicit/account values (including across re-login) and
+  the `BEAMD_TRANSPORT` precedence; keep the server's compiled
+  `disable_quic: true` default. Exercise the complete resolution and
+  login-persistence matrix in tests.
 - [x] **B3.2 — Implement the two rollback controls.**
   `BEAMD_DISABLE_QUIC=true` plus an edge restart is the global kill switch;
   `BEAMD_TRANSPORT=tcp` plus `beamd reload` is the local-agent override.
@@ -1704,7 +1828,7 @@ decision task, not part of A1 completion.
   TCP without changing its configuration. Separately verify the local
   `BEAMD_TRANSPORT=tcp` override.
 
-### Part B, Change 4 — deployment, qualification, and default flip
+### Part B, Change 4 — deployment, qualification, and hosted activation
 
 - [ ] **B4.1 — Prepare production networking.** Publish UDP 443, update
   Docker/firewall configuration, persist required UDP sysctls, and document
@@ -1731,27 +1855,60 @@ decision task, not part of A1 completion.
   In the deterministic Section 15.3 harness, QUIC must pass its direct baseline
   gates, stay within the clean-path regression budget, materially beat tuned
   yamux on every qualifying A2 profile/direction, and introduce no recurring
-  timer-backoff ladder.
+  timer-backoff ladder. The 2026-07-27/28 full run stopped fail-closed in the
+  first lossy seed's 100 MiB TCP download case after two of five measured
+  samples returned `unexpected EOF`; the corresponding QUIC case completed
+  successfully. In matrix-block terms, 13 of 48 blocks completed error-free,
+  block 14 failed partway through, and 34 never started. That partial run is
+  not a B4 verdict. Local adapter A/B testing reproduced the failure mechanism:
+  yamux's former five-second graceful-close timer sent RST and made the peer
+  discard an unread buffered response tail; the same test passes after
+  restoring the upstream five-minute timeout. Targeted staging confirmation is
+  still required before treating that mechanism as the run's proven cause.
+- [x] **B4.4a — Correct the qualification-discovered TCP truncation locally.**
+  Restore yamux's raw close fallback to five minutes, keep the wrapper/lease
+  fallback strictly after raw cleanup, add the byte-exact delayed-drain
+  regression, and preserve elapsed time plus partial byte counts in a separate
+  raw failure artifact. Do not weaken any zero-error qualification gate.
+  Completed 2026-07-28: the five-second failure reproducer fails with
+  `connection reset`, the unchanged delayed-drain test passes at five minutes,
+  parent-close/timer ordering passes 100 race-detector repetitions, and the
+  complete Go/race/vet/package checks pass.
+- [ ] **B4.4b — Confirm the correction on staging.** Deploy matching candidate
+  edge and agent binaries, first repeat the same-seed direct-TCP 100 MiB
+  baseline, then rerun the same-parameter lossy/seed-101/download/TCP/100 MiB
+  beamd case with five successful checksum-verified samples, followed by its
+  matching direct-QUIC and beamd-QUIC controls. Record versions, effective
+  configuration, partial-byte diagnostics, logs, and memory through the
+  non-qualifying `MODE=targeted` evidence path. This is not claimed to replay
+  the original packet-loss sequence.
+- [ ] **B4.4c — Restart and pass the full qualification.** Discard the partial
+  13-of-48 result as a verdict, start a fresh counterbalanced 48-block run only
+  after B4.4b passes, and retain complete analyzer-accepted evidence.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
-  default agent mode unchanged, explicitly opt the production agent into
-  `auto`, validate both directions/WebSockets/reconnect over the real
+  compiled/self-hosted defaults unchanged, run the hosted production session
+  in `auto`, validate both directions/WebSockets/reconnect over the real
   production link, and observe metrics and memory.
-- [ ] **B4.6 — Flip defaults only after the pilot.** Change the agent default
-  to `auto` and edge default to `disable_quic: false`, while permanently
-  retaining both rollback controls and the tuned TCP path.
+- [ ] **B4.6 — Activate the permanent hosted policy after the pilot.**
+  Explicitly set `disable_quic: false` in the hosted edge deployment; the
+  tested `kind: session => auto` resolver is already implemented. Confirm
+  hosted sessions and managed paid configs select QUIC, while fresh
+  self-hosted/token, missing-kind, and ordinary standalone clients still
+  select TCP and a default self-hosted edge does not bind UDP. Permanently
+  retain both rollback controls and the tuned TCP path.
 
 > **Implementation status:** B1–B3, the B4 qualification code/functional
-> matrix, and the non-production staging rehearsal are complete. The shipped
-> defaults intentionally remain TCP with the QUIC listener disabled. B4.1 and
-> B4.4–B4.6 are operational rollout gates: apply production-host
-> UDP/firewall/sysctl changes, run and retain the privileged netem
+> matrix, and the non-production staging rehearsal are complete. The compiled
+> and self-hosted defaults intentionally remain TCP with the QUIC listener
+> disabled. B4.1 and B4.4–B4.6 are operational rollout gates: apply
+> production-host UDP/firewall/sysctl changes, run and retain the privileged netem
 > qualification on a conforming Linux host, complete the production-link
-> `auto` pilot, and only then flip defaults.
+> `auto` pilot, and only then activate QUIC in the hosted deployment.
 
 The recorded and operator-approved G1 GO satisfies the prerequisite to begin
 B1. Do not execute B4.6 until B1–B4.5, the functional and performance gates,
-and the rollback rehearsal all pass. After B4.6, complete the final production
-validation and Definition of Done.
+the product-default matrix, and the rollback rehearsal all pass. After B4.6,
+complete the final hosted production validation and Definition of Done.
 
 ## 17. Production host requirements
 
@@ -1761,7 +1918,8 @@ least two online CPUs and Linux `MemTotal >= 2000000000` bytes; the usable
 threshold accounts for memory reserved by the kernel on a nominal 2 GiB VM.
 Keep the architecture single-cell; multi-region work is not justified yet.
 
-Required network exposure:
+Required network exposure for the hosted deployment or an explicitly
+QUIC-enabled self-hosted deployment:
 
 ```text
 443/tcp  public HTTPS + TLS/yamux fallback
@@ -1770,6 +1928,9 @@ Required network exposure:
 
 The tunnel-control hostname must resolve directly to this host. A TCP-only
 reverse proxy in front of it cannot carry the QUIC path.
+
+A default self-hosted deployment requires only `443/tcp`; it neither binds nor
+requires `443/udp` until its operator explicitly enables QUIC.
 
 On Linux, persist:
 
@@ -1802,8 +1963,8 @@ Alert or investigate when:
 
 - process RSS remains above 1.5 GiB;
 - any capacity rejection occurs during normal single-user work;
-- after `auto` is enabled for the pilot or becomes the default, the agent
-  unexpectedly selects TCP;
+- after `auto` is enabled for the hosted pilot or hosted session policy, the
+  agent unexpectedly selects TCP;
 - QUIC stream-open errors persist for more than five minutes;
 - reconnects repeat without a stable session.
 
@@ -1827,7 +1988,9 @@ Part A (the yamux window) is an ordinary release: build, deploy the edge, and
 restart the agent. The edge receiver setting improves downloads; the agent
 receiver setting improves uploads. Mismatched versions or values are safe, so
 no firewall, sysctl, or flag-day coordination is needed. The coordinated
-flag-day below applies to **Part B**, when QUIC is enabled.
+flag-day below applies to the **hosted Part B activation** (or an operator's
+explicit self-hosted QUIC opt-in). It is not required for the default
+self-hosted TCP deployment.
 
 Because there is one user, use a coordinated flag-day deployment:
 
@@ -1836,7 +1999,8 @@ Because there is one user, use a coordinated flag-day deployment:
 3. Apply the UDP sysctls.
 4. Stop the local agent.
 5. Install or stage the matching local `beamd` binary/npm release.
-6. Deploy the new edge with its initial `BEAMD_DISABLE_QUIC=true` default.
+6. Deploy the new edge with the compiled
+   `BEAMD_DISABLE_QUIC=true`-equivalent default.
 7. Run the staged matching binary's `beamd check --transport tcp` against the
    new edge.
 8. Set `BEAMD_DISABLE_QUIC=false` (or `disable_quic: false`) and restart the
@@ -1887,7 +2051,10 @@ even if G1 concludes that Part B is unnecessary.
 - [x] neither `internal/client` nor `internal/edge` imports yamux or quic-go
   directly;
 - [x] the npm shim remains a launcher and contains no transport code;
-- [ ] UDP 443 QUIC is the default selected production path;
+- [ ] hosted/session accounts select QUIC through `auto` in production while
+  self-hosted/token, missing-kind, and standalone clients still default to TCP;
+- [ ] the hosted edge explicitly enables UDP 443 while the compiled/default
+  self-hosted edge leaves QUIC disabled;
 - [x] both the edge-wide and agent-local rollback controls are rehearsed;
 - [x] TCP/yamux fallback has a verified 4 MiB default window;
 - [x] all HTTP, streaming, WebSocket, reconnect, cancellation, and shutdown tests

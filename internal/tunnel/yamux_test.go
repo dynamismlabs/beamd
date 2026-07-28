@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -72,8 +73,15 @@ func TestYamuxConfigPartBHardening(t *testing.T) {
 	if cfg.StreamOpenTimeout != 5*time.Second {
 		t.Errorf("StreamOpenTimeout = %v, want 5s", cfg.StreamOpenTimeout)
 	}
-	if cfg.StreamCloseTimeout != 5*time.Second {
-		t.Errorf("StreamCloseTimeout = %v, want 5s", cfg.StreamCloseTimeout)
+	if cfg.StreamCloseTimeout != 5*time.Minute {
+		t.Errorf("StreamCloseTimeout = %v, want 5m", cfg.StreamCloseTimeout)
+	}
+	if streamCompletionTimeout <= cfg.StreamCloseTimeout {
+		t.Errorf(
+			"streamCompletionTimeout = %v, must outlive raw close timeout %v",
+			streamCompletionTimeout,
+			cfg.StreamCloseTimeout,
+		)
 	}
 }
 
@@ -234,6 +242,156 @@ type blockedYamuxAddr string
 func (a blockedYamuxAddr) Network() string { return "blocked-yamux" }
 func (a blockedYamuxAddr) String() string  { return string(a) }
 
+type gatedCloseYamuxConn struct {
+	closeStarted chan struct{}
+	closeRelease chan struct{}
+	closeOnce    sync.Once
+}
+
+func newGatedCloseYamuxConn() *gatedCloseYamuxConn {
+	return &gatedCloseYamuxConn{
+		closeStarted: make(chan struct{}),
+		closeRelease: make(chan struct{}),
+	}
+}
+
+func (c *gatedCloseYamuxConn) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *gatedCloseYamuxConn) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+func (c *gatedCloseYamuxConn) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.closeStarted)
+		<-c.closeRelease
+	})
+	return nil
+}
+func (c *gatedCloseYamuxConn) LocalAddr() net.Addr              { return blockedYamuxAddr("local") }
+func (c *gatedCloseYamuxConn) RemoteAddr() net.Addr             { return blockedYamuxAddr("remote") }
+func (c *gatedCloseYamuxConn) SetDeadline(time.Time) error      { return nil }
+func (c *gatedCloseYamuxConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *gatedCloseYamuxConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestYamuxRawClosePrecedesWrapperCompletionTimer(t *testing.T) {
+	tests := []struct {
+		name      string
+		terminate func(*yamuxStream) error
+	}{
+		{
+			name: "close write",
+			terminate: func(stream *yamuxStream) error {
+				return stream.CloseWrite()
+			},
+		},
+		{
+			name: "abort",
+			terminate: func(stream *yamuxStream) error {
+				stream.Abort(StreamCanceled)
+				return nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stream := newTestYamuxCompletionStream()
+			raw := newGatedCloseYamuxConn()
+			stream.raw = raw
+			var releaseOnce sync.Once
+			releaseRawClose := func() {
+				releaseOnce.Do(func() { close(raw.closeRelease) })
+			}
+			t.Cleanup(func() {
+				releaseRawClose()
+				stream.parent.state.finish(CloseInfo{Reason: "test cleanup"})
+			})
+
+			returned := make(chan error, 1)
+			go func() {
+				returned <- test.terminate(stream)
+			}()
+			awaitClosed(t, raw.closeStarted, "raw yamux close to start")
+
+			stream.mu.Lock()
+			localClosed := stream.localClosed
+			timerSet := stream.closeTimer != nil
+			stream.mu.Unlock()
+			if localClosed || timerSet {
+				t.Fatalf(
+					"wrapper completion started while raw Close was blocked: localClosed=%t timerSet=%t",
+					localClosed,
+					timerSet,
+				)
+			}
+			select {
+			case err := <-returned:
+				t.Fatalf("terminal call returned before raw Close: %v", err)
+			default:
+			}
+
+			releaseRawClose()
+			select {
+			case err := <-returned:
+				if err != nil {
+					t.Fatalf("terminal call: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for terminal call")
+			}
+
+			stream.mu.Lock()
+			localClosed = stream.localClosed
+			stream.mu.Unlock()
+			if !localClosed {
+				t.Fatal("wrapper completion did not start after raw Close returned")
+			}
+		})
+	}
+}
+
+func TestYamuxParentCompletionDuringRawCloseDoesNotRearmTimer(t *testing.T) {
+	stream := newTestYamuxCompletionStream()
+	raw := newGatedCloseYamuxConn()
+	stream.raw = raw
+	var releaseOnce sync.Once
+	releaseRawClose := func() {
+		releaseOnce.Do(func() { close(raw.closeRelease) })
+	}
+	t.Cleanup(releaseRawClose)
+
+	returned := make(chan error, 1)
+	go func() {
+		returned <- stream.CloseWrite()
+	}()
+	awaitClosed(t, raw.closeStarted, "raw yamux close to start")
+
+	stream.parent.state.finish(CloseInfo{Reason: "test parent shutdown"})
+	awaitClosed(t, stream.Done(), "stream completion from parent shutdown")
+	releaseRawClose()
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatalf("CloseWrite: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for CloseWrite")
+	}
+
+	stream.mu.Lock()
+	localClosed := stream.localClosed
+	completed := stream.completed
+	timerSet := stream.closeTimer != nil
+	stream.mu.Unlock()
+	if !localClosed || !completed || timerSet {
+		t.Fatalf(
+			"post-parent-close state: localClosed=%t completed=%t timerSet=%t",
+			localClosed,
+			completed,
+			timerSet,
+		)
+	}
+}
+
 func TestYamuxStuckOpenTimeoutClosesJoinsAndReleasesGate(t *testing.T) {
 	conn := newBlockedYamuxConn()
 	session, err := NewYamuxClient(conn, 0)
@@ -363,6 +521,63 @@ func TestYamuxSessionContractAndDoneOrdering(t *testing.T) {
 	if !info.CodeValid || info.Code != CloseProtocol || info.Remote {
 		t.Fatalf("CloseInfo = %+v, want local protocol close", info)
 	}
+}
+
+func TestYamuxGracefulClosePreservesBufferedTailPastFiveSeconds(t *testing.T) {
+	client, server := newYamuxPair(t)
+	clientStream, serverStream := openYamuxStreamPair(t, client, server)
+	deadline := time.Now().Add(15 * time.Second)
+	if err := clientStream.SetDeadline(deadline); err != nil {
+		t.Fatalf("set client stream deadline: %v", err)
+	}
+	if err := serverStream.SetDeadline(deadline); err != nil {
+		t.Fatalf("set server stream deadline: %v", err)
+	}
+
+	payload := bytes.Repeat([]byte{0xa5}, 1<<20)
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := serverStream.Write(payload)
+		if err == nil {
+			err = serverStream.CloseWrite()
+		}
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("write buffered response: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out writing buffered response")
+	}
+
+	// A graceful FIN may sit behind already-accepted response bytes while the
+	// receiving application is paused. The former five-second close timeout
+	// turned that healthy close into an RST and made yamux discard recvBuf.
+	time.Sleep(6 * time.Second)
+
+	select {
+	case <-serverStream.Done():
+		t.Fatal("sender Stream.Done closed before the peer returned FIN")
+	default:
+	}
+	got, err := io.ReadAll(clientStream)
+	if err != nil {
+		t.Fatalf("read buffered response after graceful close: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("buffered response length = %d, want %d exact bytes", len(got), len(payload))
+	}
+
+	if err := clientStream.CloseWrite(); err != nil {
+		t.Fatalf("close receiving side: %v", err)
+	}
+	if _, err := io.ReadAll(serverStream); err != nil {
+		t.Fatalf("observe receiving-side FIN: %v", err)
+	}
+	awaitClosed(t, clientStream.Done(), "client stream Done")
+	awaitClosed(t, serverStream.Done(), "server stream Done")
 }
 
 func TestYamuxFullCloseObservesRemoteFINAfterContentLengthRead(t *testing.T) {

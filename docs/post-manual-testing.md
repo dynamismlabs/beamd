@@ -102,10 +102,11 @@ The harness supplies an empty temporary HOME to every beamd fixture process.
 Do not set it to `/root` or a developer HOME for unattended runs; a systemd
 unit may omit HOME entirely.
 
-Do not tag a release that flips the defaults unless its complete
+Do not activate QUIC in the hosted deployment unless its complete
 `test/perf/results/b4-*` evidence passes and the production-link `auto` pilot
 and both rollback controls were rehearsed. A smoke-mode harness run is never
-qualification evidence.
+qualification evidence. The compiled and self-hosted defaults remain TCP with
+edge QUIC disabled regardless of that hosted decision.
 
 ---
 

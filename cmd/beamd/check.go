@@ -28,7 +28,7 @@ func checkCmd(args []string) {
 	ins := *insecure || cfg.InsecureSkipVerify
 	transportMode := *transportFlag
 	if transportMode == "" {
-		transportMode = mustTransport(cfg.Transport)
+		transportMode = mustTransport(cfg)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

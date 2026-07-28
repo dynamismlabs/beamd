@@ -12,9 +12,10 @@ edge_ipv6: ""
 # Use :443 in production; :8443 here so local dev doesn't need root.
 listen_https: ":8443"
 
-# QUIC uses the same numeric port over UDP. It ships disabled until the B4
-# synthetic gates and production pilot pass. `disable_quic: true` is also the
-# edge-wide rollback switch: disabled mode does not bind UDP or read QUIC keys.
+# QUIC uses the same numeric port over UDP. The permanent compiled/self-hosted
+# default is disabled; a hosted deployment explicitly enables it after its B4
+# gates and pilot pass. `disable_quic: true` is also the edge-wide rollback
+# switch: disabled mode does not bind UDP or read QUIC keys.
 listen_quic: ":8443"
 disable_quic: true
 

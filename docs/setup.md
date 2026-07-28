@@ -267,17 +267,17 @@ after `beamd reload` (which restarts the background agent).
 BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304
 ```
 
-Part B adds QUIC on UDP 443, but it remains disabled during the initial
-deployment. Keep this in `/etc/beamd/.env` until synthetic qualification and
-the explicit production pilot pass:
+Part B makes QUIC available on UDP 443, but the permanent self-hosted default
+keeps it disabled. Keep this in `/etc/beamd/.env` unless you explicitly opt
+this edge into QUIC:
 
 ```text
 BEAMD_DISABLE_QUIC=true
 GOMEMLIMIT=1400MiB
 ```
 
-Prepare the host before the pilot. Open both protocols in the cloud firewall
-and host firewall (the exact cloud command varies):
+Before an explicit QUIC pilot, prepare the host. Open both protocols in the
+cloud firewall and host firewall (the exact cloud command varies):
 
 ```text
 sudo ufw allow 443/tcp
@@ -337,10 +337,12 @@ Before the pilot, run a TCP preflight from the matching developer binary:
 beamd check --transport tcp
 ```
 
-For the pilot, set `BEAMD_DISABLE_QUIC=false`, restart the edge, confirm its
-readiness/metrics show both listeners, then run `beamd check --transport quic`.
-Set the developer environment to `BEAMD_TRANSPORT=auto`, run `beamd reload`,
-and confirm `beamd status` reports `transport: quic`.
+For an explicit self-hosted pilot, set `BEAMD_DISABLE_QUIC=false`, restart the
+edge, confirm its readiness/metrics show both listeners, then run
+`beamd check --transport quic`. Set the developer environment to
+`BEAMD_TRANSPORT=auto`, run `beamd reload`, and confirm `beamd status` reports
+`transport: quic`. This opt-in does not change the default for this or other
+self-hosted installations.
 
 ---
 
@@ -647,7 +649,8 @@ After=network.target
 Type=simple
 User=root
 Environment=BEAMD_DNS_PROVIDER_CREDS=YOUR_CF_TOKEN
-# QUIC is default-off until qualification and the explicit production pilot.
+# QUIC is permanently default-off for self-hosted edges; explicitly set false
+# only when opting this edge into QUIC.
 Environment=BEAMD_DISABLE_QUIC=true
 # Optional: yamux per-stream receive window in bytes (default 4 MiB; 262144–16777216).
 # Environment=BEAMD_YAMUX_STREAM_WINDOW_BYTES=4194304

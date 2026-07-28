@@ -77,8 +77,9 @@ type Options struct {
 	// already defaulted and range-validated). See transport-performance-spec §8.1.
 	YamuxStreamWindowBytes int64
 
-	// Transport selects tcp, quic, or auto. Until the Part B qualification and
-	// production pilot pass, the shipped default remains tcp.
+	// Transport selects tcp, quic, or auto. Direct library callers retain the
+	// conservative tcp default; the CLI resolves hosted session credentials to
+	// auto before constructing Options.
 	Transport string
 }
 
@@ -1093,8 +1094,10 @@ func (c *Client) readControl(s *session) {
 	// data plane "alive" with nobody reading replies: every register times out
 	// forever, and the only cure is a manual restart. Closing the session
 	// makes Session.Done fire, so manage() reconnects and replays.
+	terminalCode := tunnel.CloseProtocol
+	terminalReason := "control stream ended"
 	defer func() {
-		_ = s.transport.CloseWithError(tunnel.CloseProtocol, "control stream ended")
+		_ = s.transport.CloseWithError(terminalCode, terminalReason)
 		_ = s.control.CloseWrite()
 	}()
 	for {
@@ -1131,6 +1134,11 @@ func (c *Client) readControl(s *session) {
 			}
 			if msg.Code == proto.CodeShutdown {
 				c.skipBackoff.Store(true)
+				terminalCode = tunnel.CloseShutdown
+				terminalReason = msg.Message
+				if terminalReason == "" {
+					terminalReason = "edge shutting down"
+				}
 				slog.Info("client: server signaled shutdown — reconnect will skip backoff")
 			}
 			// A register-scoped error carries the register's Name; drop it if it

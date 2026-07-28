@@ -42,6 +42,21 @@ func ResolveTransport(configured string) (string, error) {
 	}
 }
 
+// ResolveClientTransport applies the product-specific credential default before
+// using the global transport resolver: an exact hosted session with no explicit
+// transport uses auto; token, missing, and unknown kinds retain tcp. Explicit
+// Transport and BEAMD_TRANSPORT keep their normal precedence.
+func ResolveClientTransport(client *Client) (string, error) {
+	configured := ""
+	if client != nil {
+		configured = client.Transport
+		if configured == "" && client.Kind == "session" {
+			configured = TransportAuto
+		}
+	}
+	return ResolveTransport(configured)
+}
+
 // ValidateAgentYamuxWindow validates the resolved process-wide yamux window
 // against both its per-stream bounds and the agent's fixed 64-stream handler
 // ceiling. The product is receive-flow-control exposure, not preallocated

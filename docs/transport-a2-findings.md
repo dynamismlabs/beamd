@@ -2,8 +2,13 @@
 
 **Date:** 2026-07-24 → 25
 **Status:** **APPROVED / GO** — the operator approved implementing Part B
-(QUIC) behind a default-off flag. A1 shipped. The later default flip remains
-gated on B4 qualification and the production-link pilot.
+(QUIC) behind a default-off flag. A1 shipped and Part B is implemented. The
+first full B4 run exposed a separate TCP/yamux graceful-close regression. Its
+narrow correction is implemented and verified locally; qualification is
+paused for the targeted staging recheck. Hosted activation remains gated on a
+fresh complete B4 qualification
+and the production-link pilot; the self-hosted defaults permanently remain TCP
+with edge QUIC disabled.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
 
@@ -27,11 +32,17 @@ gated on B4 qualification and the production-link pilot.
   (bursty loss)** under bulk load, reaching **1.7–7.7 s** on wifi/mobile.
 - **That justifies QUIC** (independent per-stream delivery). The operator
   approved building Part B behind a default-off flag; the B4 qualification must
-  prove QUIC collapses the under-load interactive tail before the default is
-  flipped.
+  prove QUIC collapses the under-load interactive tail before it is activated
+  for hosted/session accounts. It does not change the self-hosted default.
 - **Prior art confirms the direction:** OpenZiti (which powers zrok) hit the same
   wall and built its own UDP transport (westworld3 / dilithium / "Transwarp").
   beamd uses off-the-shelf `quic-go` instead of rolling its own.
+- **B4 found and locally reproduced a distinct TCP correctness regression.**
+  The new five-second yamux `StreamCloseTimeout` can reset an ordinarily closed
+  stream before the peer drains its buffered response tail. Restore yamux's
+  five-minute default and recheck the failed staging case with the same
+  profile, seed, direction, payload, and sample count before
+  restarting B4; this does not change the A2/QUIC decision.
 
 ---
 
@@ -167,7 +178,7 @@ Caveats (carry these into B4):
   real WAN would be similar or worse. A remote-edge G1 confirmation
   (`scripts/perf-g1.sh` against a real remote edge) is optional additional rigor,
   not a prerequisite for the approved default-off implementation. The B4
-  production-link pilot remains required before the default flip.
+  production-link pilot remains required before hosted activation.
 - **Load-dependent.** 6 concurrent bulk streams = "busy, not extreme"; the effect
   is smaller under lighter load but present whenever bulk shares the tunnel.
 - **A1 interaction.** Part of the *no-loss* 10× is send-side queuing that A1's
@@ -187,9 +198,14 @@ Caveats (carry these into B4):
 - Gate run + evidence (`test/perf/results/{g1-local,hol}-2026-07-24/`).
 - Decision record + corrected spec.
 - Operator approval to implement Part B with QUIC default-off; B4 still gates
-  changing the default.
+  hosted activation.
 
 **Pending / optional:**
+- Confirm the five-minute yamux close correction on the same-parameter
+  lossy/seed-101/download/TCP/100 MiB staging case, rerun its QUIC control,
+  then restart the full B4 matrix from block one. This is a causal recheck,
+  not an identical packet-loss trace: the targeted path intentionally omits
+  preceding matrix traffic and runs TCP before QUIC.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation
@@ -202,8 +218,9 @@ Caveats (carry these into B4):
 
 ## 7. Part B execution handoff
 
-Implementation is approved. QUIC must remain default-off until the B4
-qualification and production-link pilot pass.
+Implementation is approved. The compiled/self-hosted edge default remains
+QUIC-off permanently. The hosted deployment must also remain QUIC-off until
+the B4 qualification and production-link pilot pass.
 
 Follow `docs/transport-performance-spec.md` §16 **Part B, Changes 1–4**, in order:
 
@@ -213,16 +230,20 @@ Follow `docs/transport-performance-spec.md` §16 **Part B, Changes 1–4**, in o
 2. **Change 2 — QUIC engine, default OFF.** Add `quic-go`, listener/dial/adapters,
    key persistence. Opt-in only.
 3. **Change 3 — selection/flags/diagnostics.** `transport: tcp|quic|auto`
-   (default `tcp`), fallback, health/metrics/logs.
-4. **Change 4 — deploy + B4 qualification + default flip.**
+   with hosted/session accounts defaulting to `auto` and self-hosted/token,
+   missing-kind, and standalone clients defaulting to `tcp`; fallback,
+   health/metrics/logs.
+4. **Change 4 — deploy + B4 qualification + hosted activation.**
    - **The gate that matters:** extend the frozen `scripts/perf-hol.sh`
      workload into the full bidirectional B4 comparator from §15.3, preserving
      separate TCP and QUIC evidence. QUIC must cut the
      **interactive-latency-under-load p95 by ≥ 50%** on every qualifying lossy
      profile/direction, without regressing the clean path or solo
-     guardrails. Only then flip the default to `auto`/QUIC.
-   - Do **not** flip the default on solo-throughput metrics — those were already
-     healthy and are guardrails, not the target.
+     guardrails. The hosted `session => auto` resolver can be implemented
+     beforehand; only then explicitly enable QUIC on the hosted edge. Do not
+     change the compiled or self-hosted defaults.
+   - Do **not** activate hosted QUIC on solo-throughput metrics — those were
+     already healthy and are guardrails, not the target.
 
 Reuse its frozen mixed-load scenario and perf fixtures for B4, but implement
 the complete comparator and fail-closed gates required by §15.3.

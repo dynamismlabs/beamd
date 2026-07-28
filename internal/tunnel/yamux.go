@@ -16,7 +16,11 @@ const (
 	DefaultStreamWindow = 4 << 20
 	yamuxStreamLimit    = 64
 	streamOpenTimeout   = 5 * time.Second
-	streamCloseTimeout  = 5 * time.Second
+	// yamux applies this fallback to graceful FINs as well as abandoned
+	// streams. A short value can turn a healthy close into an RST and make the
+	// peer discard response bytes already accepted into its receive buffer.
+	streamCloseTimeout      = 5 * time.Minute
+	streamCompletionTimeout = streamCloseTimeout + time.Second
 )
 
 // YamuxConfig is the single Part B yamux configuration used by both roles.
@@ -281,7 +285,7 @@ func normalizeYamuxSessionError(err error) error {
 }
 
 type yamuxStream struct {
-	raw    *yamux.Stream
+	raw    net.Conn
 	parent *YamuxSession
 
 	readMu sync.Mutex
@@ -289,6 +293,7 @@ type yamuxStream struct {
 	mu          sync.Mutex
 	localClosed bool
 	remoteDone  bool
+	completed   bool
 	closeTimer  *time.Timer
 
 	done      chan struct{}
@@ -333,9 +338,17 @@ func (s *yamuxStream) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *yamuxStream) CloseWrite() error {
+// closeSend lets yamux arm (or finish) its raw-stream cleanup before the
+// adapter starts its longer completion fallback. In yamux v0.1.2, Close
+// installs StreamCloseTimeout before it can block while sending the FIN.
+func (s *yamuxStream) closeSend() error {
+	err := s.raw.Close()
 	s.markLocalClosed()
-	return s.raw.Close()
+	return err
+}
+
+func (s *yamuxStream) CloseWrite() error {
+	return s.closeSend()
 }
 
 func (s *yamuxStream) Close() error {
@@ -345,8 +358,7 @@ func (s *yamuxStream) Close() error {
 }
 
 func (s *yamuxStream) Abort(ErrorCode) {
-	s.markLocalClosed()
-	_ = s.raw.Close()
+	_ = s.closeSend()
 	s.drainReceive()
 }
 
@@ -371,8 +383,11 @@ func (s *yamuxStream) markLocalClosed() {
 	s.mu.Lock()
 	if !s.localClosed {
 		s.localClosed = true
-		if !s.remoteDone && s.closeTimer == nil {
-			s.closeTimer = time.AfterFunc(streamCloseTimeout, s.complete)
+		if !s.completed && !s.remoteDone && s.closeTimer == nil {
+			// Keep Stream.Done (and its admission lease) alive beyond yamux's
+			// raw cleanup timer so hidden receive-window exposure cannot outlive
+			// the accounting guard.
+			s.closeTimer = time.AfterFunc(streamCompletionTimeout, s.complete)
 		}
 	}
 	complete := s.localClosed && s.remoteDone
@@ -412,8 +427,10 @@ func (s *yamuxStream) drainReceive() {
 func (s *yamuxStream) complete() {
 	s.doneOnce.Do(func() {
 		s.mu.Lock()
+		s.completed = true
 		if s.closeTimer != nil {
 			s.closeTimer.Stop()
+			s.closeTimer = nil
 		}
 		s.mu.Unlock()
 		if s.holdsOpenSlot {

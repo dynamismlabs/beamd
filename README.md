@@ -26,8 +26,8 @@ Launched and generally available. See [`prd.md`](prd.md) for the spec and
      │ public HTTPS :443/tcp
      ▼
 [ beamd ]  ─── ACME DNS-01 ──▶  [ DNS provider (e.g. Cloudflare) ]
-     ▲  preferred tunnel: QUIC :443/udp
-     │  fallback tunnel: TLS + tuned yamux :443/tcp
+     ▲  hosted/opt-in tunnel: QUIC :443/udp
+     │  self-host default + fallback: TLS + tuned yamux :443/tcp
 [ beamd client (+ background agent) ]
      │
      │  loopback
@@ -113,7 +113,7 @@ base_domain: beam.example.com
 edge_ipv4: 203.0.113.10         # this server's public IPv4
 listen_https: ":443"
 listen_quic: ":443"
-disable_quic: true             # keep true until qualification + pilot pass
+disable_quic: true             # permanent self-hosted default
 acme_email: ops@example.com
 dns_provider: cloudflare
 dns_provider_creds: ""          # better: leave blank, set via env var
@@ -154,8 +154,8 @@ sudo beamd serve --config /etc/beamd/beamd.yaml
 Publish and permit both `443/tcp` and `443/udp` before enabling QUIC. On Linux,
 persist `net.core.rmem_max=7340032` and `net.core.wmem_max=7340032` on the host
 (not only in a container). The documented 2 GiB edge uses
-`GOMEMLIMIT=1400MiB`. QUIC initially ships disabled; use
-`BEAMD_DISABLE_QUIC=false` only for explicit qualification/pilot work.
+`GOMEMLIMIT=1400MiB`. QUIC is disabled by default for self-hosted edges; use
+`BEAMD_DISABLE_QUIC=false` only when explicitly opting that edge into QUIC.
 
 ### 5. Onboard a developer
 
@@ -197,10 +197,16 @@ return immediately — then `beamd list`, `beamd close <name>`, and `beamd
 status` manage the detached tunnels. Either way the tunnel survives
 network blips: the client reconnects and replays your registrations.
 
-The agent transport is `tcp` until QUIC qualification and the production pilot
-pass. `BEAMD_TRANSPORT=auto` tries QUIC and falls back to tuned TCP;
-`BEAMD_TRANSPORT=quic` and `tcp` force one path for diagnosis. After changing
-the value, run `beamd reload`. Preflight each path with:
+A self-hosted/pasted-token account defaults to `tcp`. A hosted device-login
+account defaults to `auto`, which tries QUIC and falls back to tuned TCP; the
+hosted edge enables QUIC only after its qualification and production pilot.
+Legacy accounts with no kind and standalone client configs also default to
+`tcp`. An explicit account/profile transport overrides that product default,
+and `BEAMD_TRANSPORT=auto|quic|tcp` overrides both. Forced `quic` and `tcp` are
+primarily diagnostic modes. After changing an override, run `beamd reload`.
+Managed paid API-key/automation configs should persist `transport: auto`
+explicitly because they are otherwise indistinguishable from OSS token configs.
+Preflight each path with:
 
 ```text
 beamd check --transport tcp
@@ -347,7 +353,7 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `edge_ipv6` | no | Optional IPv6 target |
 | `listen_https` | yes | Public ingress + ALPN-demuxed client control. `:443` in prod, `:8443` in dev |
 | `listen_quic` | defaults to the HTTPS host/port | QUIC tunnel UDP listener; ignored completely while QUIC is disabled |
-| `disable_quic` | defaults to true during rollout | Edge-wide QUIC kill switch. Disabled mode does not bind UDP or read QUIC keys |
+| `disable_quic` | defaults to true | Permanent compiled/self-hosted default and edge-wide QUIC kill switch. The hosted deployment explicitly sets false after its rollout gates pass. Disabled mode does not bind UDP or read QUIC keys |
 | `max_streams_per_session` | defaults to 64 | Concurrent data-stream ceiling per authenticated session |
 | `max_streams_total` | defaults to 128 | Edge-wide concurrent data-stream ceiling |
 | `max_pre_auth_sessions` | defaults to 32 | Tunnel sessions allowed to authenticate concurrently |

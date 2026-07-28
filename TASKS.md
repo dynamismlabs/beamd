@@ -28,11 +28,16 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 
 ### Still deferred (non-blocking for OSS v1)
 
-- [ ] **Tunnel performance hardening (A1 shipped; QUIC implementation
-  approved).** A1 and the G1 measurement/decision gate are complete. Implement
-  Part B default-off, then complete B4 qualification and the production-link
-  pilot before changing the default. The single canonical specification and
-  executable checklist is
+- [ ] **Tunnel performance hardening (A1 shipped; Part B implemented
+  default-off).** A1 and the G1 measurement/decision gate are complete. The
+  first full B4 run stopped after locally reproducible TCP/yamux response-tail
+  truncation; its five-minute close correction now passes local normal/race
+  verification. Pass the targeted staging recheck, then restart B4. Permanent
+  product-aware defaults keep
+  self-hosted/token on TCP with edge QUIC disabled, while hosted/session
+  resolves to `auto` and the hosted edge enables QUIC only after B4
+  qualification and the production-link pilot. The single canonical
+  specification and executable checklist is
   [`docs/transport-performance-spec.md`](docs/transport-performance-spec.md).
   Work its Section 16 top to bottom; do not duplicate or independently track
   the subtasks here.

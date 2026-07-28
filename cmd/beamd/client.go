@@ -156,9 +156,15 @@ func loginCmd(args []string) {
 	if defaultScope == "" && len(scopes) > 0 {
 		defaultScope = scopes[0].Slug // personal/first as the standing default
 	}
+	transport, err := transportForAccountRefresh(acctServer)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load existing account:", err)
+		os.Exit(1)
+	}
 	acct := &config.Account{
 		Server:             acctServer,
 		Token:              *token,
+		Transport:          transport,
 		Kind:               kind,
 		InsecureSkipVerify: *insecure,
 		Scopes:             scopes,
@@ -188,6 +194,20 @@ func loginCmd(args []string) {
 	if g.Current != acctServer {
 		fmt.Printf("current account is still %s — pass `--server %s` to target this one\n", g.Current, acctServer)
 	}
+}
+
+// transportForAccountRefresh keeps an operator/user's explicit transport pin
+// when login refreshes the credential for the same edge. An omitted transport
+// remains omitted so the account kind continues to select the product default.
+func transportForAccountRefresh(server string) (string, error) {
+	if !config.AccountExists(server) {
+		return "", nil
+	}
+	existing, err := config.LoadAccount(server)
+	if err != nil {
+		return "", err
+	}
+	return existing.Transport, nil
 }
 
 // deviceCodeLogin runs the no-token login flow: ask the control plane for its
@@ -380,9 +400,11 @@ func mustYamuxWindow() int64 {
 }
 
 // mustTransport resolves the process-level BEAMD_TRANSPORT override over the
-// selected account/explicit config and exits on an invalid value.
-func mustTransport(configured string) string {
-	mode, err := config.ResolveTransport(configured)
+// selected account/explicit config and exits on an invalid value. The same
+// resolver supplies the hosted session versus self-hosted token default for
+// foreground, detached-agent, and check paths.
+func mustTransport(cfg *config.Client) string {
+	mode, err := config.ResolveClientTransport(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config:", err)
 		os.Exit(1)
@@ -399,7 +421,7 @@ func dialAndRegister(cfg *config.Client, port int, name, scope string, insecure 
 		InsecureSkipVerify:     insecure,
 		Scope:                  scope,
 		YamuxStreamWindowBytes: mustYamuxWindow(),
-		Transport:              mustTransport(cfg.Transport),
+		Transport:              mustTransport(cfg),
 	})
 	cancel()
 	if err != nil {
@@ -495,7 +517,7 @@ func runCmd(args []string) {
 		InsecureSkipVerify:     *insecure || cfg.InsecureSkipVerify,
 		Scope:                  ctx.Scope,
 		YamuxStreamWindowBytes: mustYamuxWindow(),
-		Transport:              mustTransport(cfg.Transport),
+		Transport:              mustTransport(cfg),
 	})
 	cancelDial()
 	if err != nil {
@@ -995,7 +1017,7 @@ func agentCmd(args []string) {
 		slog.Error("yamux stream window exposure", "err", err.Error())
 		os.Exit(1)
 	}
-	transportMode := mustTransport(cfg.Transport)
+	transportMode := mustTransport(cfg)
 	slog.Info("agent starting",
 		"socket", *socket,
 		"transport", transportMode,

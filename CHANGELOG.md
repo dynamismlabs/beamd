@@ -11,10 +11,20 @@ All notable changes to beamd are documented here. The format is based on
   The edge can listen on `443/udp`, the agent supports `auto|quic|tcp`,
   diagnostics report the selected transport/fallback reason, and either
   `BEAMD_DISABLE_QUIC=true` or `BEAMD_TRANSPORT=tcp` restores the old path.
-  QUIC remains opt-in until the B4 synthetic gates and production pilot pass.
+  Self-hosted/token clients and edges remain TCP/QUIC-disabled by default;
+  hosted/session clients use `auto`, with hosted edge activation gated on the
+  B4 synthetic suite and production pilot.
 
 ### Changed
 
+- **TCP fallback correctness:** restore yamux's five-minute graceful-close
+  fallback. The former five-second timer could reset a healthy lossy transfer
+  and discard an unread buffered response tail, producing `unexpected EOF`.
+- **Shutdown close classification:** the edge no longer sends a competing
+  control-stream FIN after claiming a session close, and a parsed shutdown
+  notice remains authoritative on the client. This prevents intentional QUIC
+  shutdowns from intermittently appearing as local protocol failures during
+  automatic TCP rollback.
 - **Tunnel liveness diagnostics:** application heartbeat expiry is now
   classified as `idle` instead of `protocol`, and suspend/resume recovery is
   covered over both TCP and QUIC.

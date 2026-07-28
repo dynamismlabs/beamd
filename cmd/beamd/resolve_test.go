@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -79,6 +80,50 @@ func TestSelectAccount_Ladder(t *testing.T) {
 	}
 	if srv, src := selectAccount(mk(""), nil, &config.Global{Current: "cur.test:443"}); srv != "cur.test:443" || src != "current" {
 		t.Errorf("current: got %q/%q", srv, src)
+	}
+}
+
+func TestResolveContextCarriesKindForAccountAndExplicitConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("BEAMD_SERVER", "")
+	t.Setenv(config.TransportEnvVar, "placeholder")
+	if err := os.Unsetenv(config.TransportEnvVar); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	if err := config.SaveAccount(&config.Account{
+		Server: "hosted.example.com:443",
+		Token:  "session-token",
+		Kind:   "session",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	empty := ""
+	accountFlags := &clientFlags{server: &empty, scope: &empty, config: &empty}
+	accountCtx := resolveContext(accountFlags)
+	if accountCtx.Client == nil || accountCtx.Client.Kind != "session" {
+		t.Fatalf("account client = %+v, want session kind", accountCtx.Client)
+	}
+	if got := mustTransport(accountCtx.Client); got != config.TransportAuto {
+		t.Errorf("session account transport = %q, want auto", got)
+	}
+
+	explicitPath := filepath.Join(home, "standalone.yaml")
+	if err := config.SaveClient(&config.Client{
+		Server: "self-hosted.example.com:443",
+		Token:  "api-key",
+	}, explicitPath); err != nil {
+		t.Fatal(err)
+	}
+	explicitFlags := &clientFlags{server: &empty, scope: &empty, config: &explicitPath}
+	explicitCtx := resolveContext(explicitFlags)
+	if explicitCtx.Client == nil || explicitCtx.Client.Kind != "" {
+		t.Fatalf("explicit client = %+v, want missing kind", explicitCtx.Client)
+	}
+	if got := mustTransport(explicitCtx.Client); got != config.TransportTCP {
+		t.Errorf("standalone config transport = %q, want tcp", got)
 	}
 }
 

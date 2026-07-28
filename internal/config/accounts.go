@@ -64,6 +64,7 @@ func (a *Account) Client() *Client {
 	return &Client{
 		Server:             a.Server,
 		Token:              a.Token,
+		Kind:               a.Kind,
 		Transport:          a.Transport,
 		InsecureSkipVerify: a.InsecureSkipVerify,
 	}

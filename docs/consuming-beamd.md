@@ -42,8 +42,14 @@ interactive `beamd` accounts. The `token` here is a **workspace API key**
 server: tunnel.example.com:443
 token: <the developer token your operator issued>
 agent_socket: /path/to/your-app/beamd-agent.sock  # pin a dedicated socket
+# transport: auto  # set explicitly for a managed paid/hosted config
 # insecure_skip_verify: true   # ONLY for a self-signed dev edge
 ```
+
+An ordinary standalone config defaults to `tcp`, which keeps OSS and ambiguous
+API-key configurations conservative. A paid service that generates this file
+should explicitly include `transport: auto`; the client cannot safely infer a
+paid tier from a bearer token or server hostname.
 
 **Pin a dedicated `agent_socket`.** The detached agent is keyed by its socket
 path; without one your app shares the default socket with the user's own

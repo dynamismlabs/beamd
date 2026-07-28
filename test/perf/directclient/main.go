@@ -360,6 +360,18 @@ func runOne(
 	return out
 }
 
+func runSampleBatch(count int, stopOnFailure bool, run func(int) sample) []sample {
+	samples := make([]sample, 0, count)
+	for index := range count {
+		result := run(index)
+		samples = append(samples, result)
+		if stopOnFailure && !result.OK {
+			break
+		}
+	}
+	return samples
+}
+
 func stats(values []float64) map[string]float64 {
 	if len(values) == 0 {
 		return map[string]float64{}
@@ -393,6 +405,11 @@ func main() {
 	warmups := flag.Int("warmup", 5, "unmeasured warmups")
 	profile := flag.String("profile", "", "impairment profile label")
 	timeout := flag.Duration("timeout", 10*time.Minute, "per-operation timeout")
+	failFast := flag.Bool(
+		"fail-fast",
+		false,
+		"stop after the first failed warmup or measurement and emit partial JSON",
+	)
 	flag.Parse()
 
 	if (*transport != "tcp" && *transport != "quic") ||
@@ -430,35 +447,71 @@ func main() {
 	}
 	configureCancel()
 
-	for i := 0; i < *warmups; i++ {
-		if result := runOne(ctx, *timeout, conn, i, *direction, *size); !result.OK {
-			fmt.Fprintf(os.Stderr, "warmup %d failed: %s\n", i, result.Error)
-			os.Exit(2)
+	var (
+		warmupSamples []sample
+		failurePhase  string
+	)
+	if *failFast {
+		warmupSamples = runSampleBatch(*warmups, true, func(index int) sample {
+			return runOne(ctx, *timeout, conn, index, *direction, *size)
+		})
+		if len(warmupSamples) > 0 && !warmupSamples[len(warmupSamples)-1].OK {
+			failurePhase = "warmup"
+		}
+	} else {
+		for i := 0; i < *warmups; i++ {
+			if result := runOne(ctx, *timeout, conn, i, *direction, *size); !result.OK {
+				fmt.Fprintf(os.Stderr, "warmup %d failed: %s\n", i, result.Error)
+				os.Exit(2)
+			}
 		}
 	}
 
-	samples := make([]sample, *iterations)
+	samples := make([]sample, 0, *iterations)
 	elapsed := make([]float64, 0, *iterations)
 	ttfb := make([]float64, 0, *iterations)
 	errorsCount, corrupt := 0, 0
 	start := time.Now()
-	for i := range samples {
-		samples[i] = runOne(ctx, *timeout, conn, i, *direction, *size)
-		if samples[i].OK {
-			elapsed = append(elapsed, samples[i].ElapsedMs)
-			ttfb = append(ttfb, samples[i].TTFBMs)
-		} else if samples[i].Corrupt {
+	if failurePhase == "" {
+		samples = runSampleBatch(*iterations, *failFast, func(index int) sample {
+			return runOne(ctx, *timeout, conn, index, *direction, *size)
+		})
+		if *failFast && len(samples) > 0 && !samples[len(samples)-1].OK {
+			failurePhase = "measurement"
+		}
+	}
+	wall := time.Since(start).Seconds()
+	classifyFailure := func(result sample) {
+		if result.OK {
+			return
+		}
+		if result.Corrupt {
 			corrupt++
 		} else {
 			errorsCount++
 		}
 	}
-	wall := time.Since(start).Seconds()
+	if *failFast {
+		for _, result := range warmupSamples {
+			classifyFailure(result)
+		}
+	}
+	for _, result := range samples {
+		classifyFailure(result)
+		if result.OK {
+			elapsed = append(elapsed, result.ElapsedMs)
+			ttfb = append(ttfb, result.TTFBMs)
+		}
+	}
 	medianThroughput := 0.0
 	if p50 := stats(elapsed)["p50"]; p50 > 0 {
 		medianThroughput = float64(*size) / (p50 / 1000)
 	}
 	successes := len(elapsed)
+	aggregateThroughput := 0.0
+	if wall > 0 {
+		aggregateThroughput = float64(successes) * float64(*size) / wall
+	}
 	wireDirection := "edge-to-agent"
 	if *direction == "download" {
 		wireDirection = "agent-to-edge"
@@ -478,14 +531,33 @@ func main() {
 		"elapsed_ms":               stats(elapsed),
 		"ttfb_ms":                  stats(ttfb),
 		"median_throughput_bps":    medianThroughput,
-		"aggregate_throughput_bps": float64(successes) * float64(*size) / wall,
+		"aggregate_throughput_bps": aggregateThroughput,
 		"wall_s":                   wall,
 		"handshake_ms":             handshakeMs,
 		"handshake_included":       false,
 		"samples":                  samples,
 	}
+	if *failFast {
+		record["fail_fast"] = true
+		record["requested_warmups"] = *warmups
+		record["attempted_warmups"] = len(warmupSamples)
+		record["attempted_iterations"] = len(samples)
+		record["warmup_samples"] = warmupSamples
+		record["stopped_on_failure"] = failurePhase != ""
+		if failurePhase != "" {
+			record["failure_phase"] = failurePhase
+			failedSamples := samples
+			if failurePhase == "warmup" {
+				failedSamples = warmupSamples
+			}
+			record["failure"] = failedSamples[len(failedSamples)-1]
+		}
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(record); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+	if *failFast && failurePhase != "" {
+		os.Exit(1)
 	}
 }

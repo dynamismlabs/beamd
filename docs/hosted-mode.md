@@ -65,6 +65,20 @@ per edge domain, each pointing back at the control plane for verify-token +
 request events. See [`identity-and-accounts.md`](identity-and-accounts.md) and the build
 brief in [`web-app-handoff.md`](web-app-handoff.md).
 
+**Transport policy.** Hosted and self-hosted use the same binary. The compiled
+edge default remains `disable_quic: true`; after the transport qualification
+and production-link pilot pass, every hosted edge deployment explicitly sets
+`BEAMD_DISABLE_QUIC=false`. A hosted device-code login is persisted locally as
+`kind: session`, so its omitted client transport resolves to `auto` (QUIC
+preferred with tuned-TCP fallback). Pasted-token/API-key, legacy missing-kind,
+and standalone configs default to `tcp` unless explicitly configured
+otherwise. `BEAMD_TRANSPORT=tcp` remains the agent-local rollback, and
+`BEAMD_DISABLE_QUIC=true` remains the hosted edge-wide rollback.
+Managed paid API-key/automation configs must write `transport: auto`
+explicitly: their bearer token is intentionally indistinguishable from an OSS
+token at client startup, so product tier must not be inferred from the token or
+hostname.
+
 ---
 
 ## Open design decisions (revisit before launch)

@@ -62,7 +62,8 @@ echo <a GitHub PAT with 'write:packages'> | docker login ghcr.io -u <you> --pass
 
 ## Release — local path (recommended)
 
-For any release that enables QUIC or changes transport defaults, also require:
+For any release that activates hosted QUIC or changes the product-aware
+transport resolution policy, also require:
 
 - the complete dual-transport functional matrix;
 - a passing, immutable B4 netem result from `scripts/perf-netem.sh run`;
