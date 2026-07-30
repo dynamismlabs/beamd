@@ -40,6 +40,9 @@ Environment:
   TARGET_DIRECTION=download          (targeted only)
   TARGET_SIZE_BYTES=104857600         (targeted only)
   TARGET_TRANSPORTS="tcp quic"        (targeted only)
+  TARGET_BEAMD_CONCURRENCY=1          (targeted only; 1..64)
+  TARGET_WARMUPS=5                    (targeted only)
+  TARGET_ITERATIONS=                  (targeted only; matrix default when empty)
   GOMEMLIMIT=1400MiB
 
 Qualification prerequisites: Linux, root for `run`, iproute2 (ip/tc) with
@@ -518,6 +521,9 @@ if [ -z "$ready" ]; then
   exit 2
 fi
 
+TARGET_BEAMD_CONCURRENCY_VALUE=1
+TARGET_WARMUPS_VALUE=5
+TARGET_ITERATIONS_VALUE=
 if [ "$MODE" = qualification ]; then
   PROFILES=(clean lossy high-rtt-clean high-rtt-lossy)
   read -r -a SEEDS <<< "${NETEM_SEEDS:-101 202 303}"
@@ -536,6 +542,9 @@ elif [ "$MODE" = targeted ]; then
   SEEDS=("${TARGET_SEED:-101}")
   DIRECTIONS=("${TARGET_DIRECTION:-download}")
   PROTOCOL_SIZES=("${TARGET_SIZE_BYTES:-104857600}")
+  TARGET_BEAMD_CONCURRENCY_VALUE=${TARGET_BEAMD_CONCURRENCY:-1}
+  TARGET_WARMUPS_VALUE=${TARGET_WARMUPS:-5}
+  TARGET_ITERATIONS_VALUE=${TARGET_ITERATIONS:-}
   read -r -a TARGET_ORDERED_TRANSPORTS <<< "${TARGET_TRANSPORTS:-tcp quic}"
   [ "${#TARGET_ORDERED_TRANSPORTS[@]}" -eq 2 ] ||
     { echo "targeted mode requires exactly two TARGET_TRANSPORTS" >&2; exit 2; }
@@ -557,9 +566,18 @@ elif [ "$MODE" = targeted ]; then
   esac
   [[ "${PROTOCOL_SIZES[0]}" =~ ^[1-9][0-9]*$ ]] ||
     { echo "TARGET_SIZE_BYTES must be a positive integer" >&2; exit 2; }
+  [[ "$TARGET_BEAMD_CONCURRENCY_VALUE" =~ ^[1-9][0-9]*$ ]] &&
+    [ "$TARGET_BEAMD_CONCURRENCY_VALUE" -le 64 ] ||
+    { echo "TARGET_BEAMD_CONCURRENCY must be an integer from 1 through 64" >&2; exit 2; }
+  [[ "$TARGET_WARMUPS_VALUE" =~ ^[0-9]+$ ]] ||
+    { echo "TARGET_WARMUPS must be a non-negative integer" >&2; exit 2; }
+  if [ -n "$TARGET_ITERATIONS_VALUE" ]; then
+    [[ "$TARGET_ITERATIONS_VALUE" =~ ^[1-9][0-9]*$ ]] ||
+      { echo "TARGET_ITERATIONS must be a positive integer when set" >&2; exit 2; }
+  fi
   MIX_N=0
   MIX_WARMUP=0
-  PROTOCOL_WARMUP=5
+  PROTOCOL_WARMUP=$TARGET_WARMUPS_VALUE
   PROTOCOL_MULTI_SIZE=0
   BULK_SIZE=0
   BULK_N=0
@@ -779,6 +797,10 @@ PY
 iterations_for() {
   local profile=$1 size=$2
   if [ "$MODE" = smoke ]; then echo 2; return; fi
+  if [ "$MODE" = targeted ] && [ -n "$TARGET_ITERATIONS_VALUE" ]; then
+    echo "$TARGET_ITERATIONS_VALUE"
+    return
+  fi
   if [ "$profile" = high-rtt-lossy ] && [ "$size" -eq 36 ]; then echo 100; return; fi
   if [ "$size" -le 1048576 ]; then echo 50
   elif [ "$size" -eq 16777216 ]; then echo 20
@@ -919,17 +941,18 @@ stop_agent() {
 
 run_beamd_protocol() {
   local profile=$1 seed=$2 direction=$3 transport=$4 order=$5 order_index=$6
-  local size n status
+  local size n status concurrency=1
   local -a fail_fast_args=()
   if [ "$MODE" = targeted ]; then
     fail_fast_args=(--fail-fast)
+    concurrency=$TARGET_BEAMD_CONCURRENCY_VALUE
   fi
   for size in "${PROTOCOL_SIZES[@]}"; do
     n=$(iterations_for "$profile" "$size")
     if ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
         --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
         --size "$size" --dir "$direction" --n "$n" --warmup "$PROTOCOL_WARMUP" \
-        --concurrency 1 --profile "$profile" --transport "$transport" \
+        --concurrency "$concurrency" --profile "$profile" --transport "$transport" \
         --timeout 20m --raw "${fail_fast_args[@]}" |
         tag_record beamd protocol "$seed" "$order" "$order_index" "$PROTOCOL_WARMUP" \
         >> "$OUTDIR/raw-protocol.jsonl"; then
@@ -1394,6 +1417,9 @@ metadata = {
             "direction": "${DIRECTIONS[0]}",
             "size_bytes": int("${PROTOCOL_SIZES[0]}"),
             "transport_order": "$TARGET_TRANSPORT_ORDER",
+            "beamd_concurrency": int("$TARGET_BEAMD_CONCURRENCY_VALUE"),
+            "warmups": int("$PROTOCOL_WARMUP"),
+            "iterations": int("$(iterations_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")"),
         }
         if $TARGETED
         else None
@@ -1452,6 +1478,7 @@ PY
   target_iterations=$(iterations_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")
   if python3 - "$OUTDIR" "${PROFILES[0]}" "${SEEDS[0]}" "${DIRECTIONS[0]}" \
       "${PROTOCOL_SIZES[0]}" "$TARGET_TRANSPORT_ORDER" "$target_iterations" \
+      "$PROTOCOL_WARMUP" "$TARGET_BEAMD_CONCURRENCY_VALUE" \
       "$TARGETED_RUN_STATUS" <<'PY'
 import base64
 import datetime
@@ -1469,8 +1496,9 @@ direction = sys.argv[4]
 size = int(sys.argv[5])
 transports = sys.argv[6].split(",")
 iterations = int(sys.argv[7])
-collection_status = int(sys.argv[8])
-warmups = 5
+warmups = int(sys.argv[8])
+beamd_concurrency = int(sys.argv[9])
+collection_status = int(sys.argv[10])
 issues = []
 
 def check(condition, message):
@@ -1611,6 +1639,9 @@ expected_target_case = {
     "direction": direction,
     "size_bytes": size,
     "transport_order": order_text,
+    "beamd_concurrency": beamd_concurrency,
+    "warmups": warmups,
+    "iterations": iterations,
 }
 metadata_expected = {
     "schema_version": 1,
@@ -2370,6 +2401,7 @@ for name, fixture in (
             continue
         record = matches[0]
         samples = record.get("samples")
+        expected_concurrency = beamd_concurrency if fixture == "beamd" else 1
         expected = {
             "fixture": fixture,
             "workload": "protocol",
@@ -2382,7 +2414,7 @@ for name, fixture in (
             "order_index": index,
             "iterations": iterations,
             "warmups": warmups,
-            "concurrency": 1,
+            "concurrency": expected_concurrency,
             "handshake_included": False,
             "fail_fast": True,
             "requested_warmups": warmups,
@@ -2488,19 +2520,23 @@ for failure_index, record in enumerate(raw_failures):
     )
     failed_samples = warmup_samples if failure_phase == "warmup" else samples
     if isinstance(failed_samples, list) and failed_samples:
-        terminal = failed_samples[-1]
-        check(
-            isinstance(terminal, dict)
+        failed_candidates = [
+            sample
+            for sample in failed_samples
+            if isinstance(sample, dict)
             and (
-                terminal.get("ok") is not True
-                or bool(terminal.get("err"))
-                or terminal.get("corrupt") is True
-            ),
-            f"{label}: terminal fail-fast sample did not fail",
+                sample.get("ok") is not True
+                or bool(sample.get("err"))
+                or sample.get("corrupt") is True
+            )
+        ]
+        check(
+            bool(failed_candidates),
+            f"{label}: fail-fast phase retained no failed sample",
         )
         check(
-            record.get("failure") == terminal,
-            f"{label}: failure does not match terminal sample",
+            record.get("failure") in failed_candidates,
+            f"{label}: failure does not match a failed phase sample",
         )
     if failure_phase == "warmup":
         check(attempted_iterations == 0, f"{label}: warmup failure attempted measurements")
@@ -2553,6 +2589,7 @@ passed = not issues
             "direction": direction,
             "size_bytes": size,
             "transport_order": transports,
+            "beamd_concurrency": beamd_concurrency,
             "warmups_per_fixture_transport": warmups,
             "iterations_per_fixture_transport": iterations,
             "collection_status": collection_status,

@@ -37,3 +37,15 @@ func TestRunSampleBatchDefaultKeepsGoingAfterFailure(t *testing.T) {
 		t.Fatalf("calls/samples = %d/%d, want 4/4", calls, len(samples))
 	}
 }
+
+func TestFirstFailedSampleFindsRetainedWarmupFailure(t *testing.T) {
+	samples := []sample{
+		{Index: 0, OK: true},
+		{Index: 1, Error: "unexpected EOF"},
+		{Index: 2, OK: true},
+	}
+	index, ok := firstFailedSample(samples)
+	if !ok || index != 1 {
+		t.Fatalf("firstFailedSample = %d/%t, want 1/true", index, ok)
+	}
+}

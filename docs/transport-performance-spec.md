@@ -1,16 +1,18 @@
 # Beamd Transport Performance — Specification and Task Checklist
 
-**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. B4
-qualification is paused after a TCP/yamux graceful-close regression discovered
-by the first full matrix run. Its narrow correction is implemented and fully
-verified locally; a targeted staging recheck precedes a fresh full run.
-Qualification and a production-link pilot still gate enabling QUIC for the
-hosted service. The compiled and self-hosted defaults permanently remain TCP
-with the edge QUIC listener disabled.
+**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. The
+first B4 TCP/yamux graceful-close correction is confirmed on staging. A second
+full matrix attempt exposed a distinct concurrency-eight stream-establishment
+timeout plus a discarded-warm-up evidence gap; its narrow correction is
+verified locally and the exact targeted recheck precedes another fresh full
+run. Qualification and a production-link pilot still gate enabling QUIC for
+the hosted service. The
+compiled and self-hosted defaults permanently remain TCP with the edge QUIC
+listener disabled.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-07-30
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -685,7 +687,7 @@ When Part B begins, the yamux adapter must additionally use:
 cfg.AcceptBacklog = 64
 cfg.EnableKeepAlive = false
 cfg.KeepAliveInterval = 20 * time.Second // yamux validates it even when disabled
-cfg.StreamOpenTimeout = 5 * time.Second
+cfg.StreamOpenTimeout = 75 * time.Second
 cfg.StreamCloseTimeout = 5 * time.Minute
 ```
 
@@ -693,20 +695,32 @@ The application control heartbeat then becomes the single liveness mechanism.
 Running both yamux keepalives and application heartbeats is redundant and can
 leave a session transport-alive while its control stream is unusable.
 
+The 75-second stream-establishment value is the upstream yamux default and is
+distinct from the adapter's caller-visible five-second `OpenStream` bound.
+yamux starts this timer after sending a stream SYN, waits for the peer's ACK,
+and closes the entire session on expiry. The ACK shares one TCP ordering domain
+with bulk stream data. A five-second library timer therefore tears down a
+healthy session when loss and concurrent bulk data delay the ACK through
+head-of-line blocking; this reproduced in the second staging qualification at
+concurrency eight. Retain the 75-second library timer, keep the independent
+five-second adapter call bound below, capture expiry as `ErrOpenTimeout` before
+session teardown wins the terminal-cause race, and emit a fixed-cardinality
+structured warning with `event=yamux_stream_open_timeout transport=tcp`.
+
 The five-minute close value is a correctness boundary, not a liveness
 interval. `yamux.Stream.Close` starts this timer after an ordinary FIN; expiry
 discards the peer's unread buffered tail through RST. A five-second value
 reproduced `connection reset` locally, matching the mechanism that can surface
-as the `unexpected EOF` seen on a 100 MiB lossy staging download. B4.4b confirms
-that causal link on staging. Normal cooperative FIN exchange still completes
-`Done` immediately; only an abandoned stream retains resources for the
-fallback interval.
+as the `unexpected EOF` seen on a 100 MiB lossy staging download. B4.4b
+confirmed that causal link on staging. Normal cooperative FIN exchange still
+completes `Done` immediately; only an abandoned stream retains resources for
+the fallback interval.
 
 In yamux v0.1.2, `AcceptBacklog` sizes both the incoming accept queue and the
 local in-flight-SYN semaphore. It is not an active-stream or memory limit.
 Keep `max_streams_per_session <= AcceptBacklog`; both ship as 64.
 
-yamux does not offer a context-aware open operation.
+yamux does not offer a context-aware open operation. Its 75-second
 `StreamOpenTimeout` starts only after a local SYN slot is acquired and closes
 the entire session asynchronously if the peer never acknowledges; it does not
 bound the `OpenStream` call itself. The adapter must therefore:
@@ -1532,10 +1546,13 @@ snapshot must retain the exact requested seeds.
 | `high-rtt-lossy` | 250 ms | 1% random | 20 Mbit/s |
 
 For each profile and transport, record JSON containing size, direction,
-concurrency, TTFB, elapsed time, throughput, checksum result, and selected
-transport. Run five unmeasured warm-ups per case. Then run at least 50 measured
-iterations for 36-byte, 253 KiB, 257 KiB, and 1 MiB cases; 20 for 16 MiB; and
-five for 100 MiB.
+concurrency, TTFB, elapsed time, throughput, checksum result, selected
+transport, and every warm-up sample. Run five unmeasured warm-ups per case.
+They remain excluded from statistics but are not discarded from evidence. If
+any warm-up fails, retain the full attempted warm-up batch, skip measured
+iterations, classify the failure, and exit the case nonzero. Then run at least
+50 measured iterations for 36-byte, 253 KiB, 257 KiB, and 1 MiB cases; 20 for
+16 MiB; and five for 100 MiB.
 
 For every gated case, establish a same-direction, same-payload,
 concurrency-one direct baseline over the same shaped veth: one raw QUIC stream
@@ -1628,10 +1645,10 @@ handshake time was included (it must be `false` for transfer gates). Persist
 the actual beamd, fixture, analyzer, harness, and `tc` binaries or their
 manifest-verified hashes.
 
-Before a fail-closed exit caused by a tagged serial request error, corruption,
-or unsuccessful raw sample, persist the fully tagged offending record to
-`raw-failures.jsonl`. This file is diagnostic evidence only and must never be
-fed into or used to relax the passing analyzer matrix. Error samples retain
+Before a fail-closed exit caused by a tagged warm-up or measured request error,
+corruption, or unsuccessful raw sample, persist the fully tagged offending
+record to `raw-failures.jsonl`. This file is diagnostic evidence only and must
+never be fed into or used to relax the passing analyzer matrix. Error samples retain
 elapsed time and partial payload bytes; for downloads, bytes means response-body
 bytes read, while for uploads it is an atomic snapshot of request-body bytes
 consumed by `net/http` when `Client.Do` returned and is not a wire-delivery
@@ -1647,9 +1664,10 @@ invoking the full B4 analyzer; targeted evidence can establish a cause/fix but
 can never substitute for the complete qualification. Reusing a seed reproduces
 the same impairment parameters, not the same packet-loss trace: transport
 order and preceding traffic advance netem's seeded PRNG state. Targeted serial
-clients are fail-fast: the first failed warm-up or measurement is retained with
-elapsed/partial-byte diagnostics and stops that case. When the test
-infrastructure remains viable, case failures are accumulated through both
+clients are fail-fast at request granularity. A targeted concurrent beamd case
+is fail-fast at phase granularity: it retains the complete concurrent warm-up
+or measurement batch containing the first failure, then stops that case. When
+the test infrastructure remains viable, case failures are accumulated through both
 transports before final qdisc, process-memory, configuration, manifest,
 integrity, stage-status, and summary artifacts are written; the final exit
 remains nonzero. Its inputs are:
@@ -1660,7 +1678,15 @@ TARGET_SEED=101
 TARGET_DIRECTION=download
 TARGET_SIZE_BYTES=104857600
 TARGET_TRANSPORTS="tcp quic"
+TARGET_BEAMD_CONCURRENCY=1
+TARGET_WARMUPS=5
+TARGET_ITERATIONS=5
 ```
+
+The direct fixture remains concurrency one. `TARGET_BEAMD_CONCURRENCY` accepts
+1 through 64; omitting `TARGET_ITERATIONS` retains the normal size/profile
+matrix count. Targeted metadata and verification must bind all three values so
+a serial causal recheck cannot be mistaken for a concurrent regression test.
 
 The netem suite is a manual or scheduled privileged job, not a required
 unprivileged pull-request job. Passing it is necessary but not sufficient for
@@ -1849,22 +1875,22 @@ decision task, not part of A1 completion.
   real-link soak. The final soak completed 60/60 HTTP/2 probes plus ten
   WebSocket probes with zero failures, session closes, heartbeat timeouts,
   stream-open errors, or capacity rejections; edge RSS ended at about 19 MiB.
-  This is staging evidence only: the host has 1 vCPU, 961 MiB RAM, and no swap,
-  so it does not satisfy Section 17 or close B4.4/B4.5.
+  This is staging evidence only. The host used for that rehearsal was later
+  resized; the current qualification host has two online CPUs and Linux
+  `MemTotal=2063216640`, satisfying the Section 17 synthetic-run floor. More
+  CPU or RAM is not expected to correct transport-semantic failures.
 - [ ] **B4.4 — Pass synthetic protocol and head-to-head performance gates.**
   In the deterministic Section 15.3 harness, QUIC must pass its direct baseline
   gates, stay within the clean-path regression budget, materially beat tuned
   yamux on every qualifying A2 profile/direction, and introduce no recurring
-  timer-backoff ladder. The 2026-07-27/28 full run stopped fail-closed in the
-  first lossy seed's 100 MiB TCP download case after two of five measured
-  samples returned `unexpected EOF`; the corresponding QUIC case completed
-  successfully. In matrix-block terms, 13 of 48 blocks completed error-free,
-  block 14 failed partway through, and 34 never started. That partial run is
-  not a B4 verdict. Local adapter A/B testing reproduced the failure mechanism:
-  yamux's former five-second graceful-close timer sent RST and made the peer
-  discard an unread buffered response tail; the same test passes after
-  restoring the upstream five-minute timeout. Targeted staging confirmation is
-  still required before treating that mechanism as the run's proven cause.
+  timer-backoff ladder. Two full attempts are partial evidence, not B4 verdicts:
+  the 2026-07-27/28 run stopped after 13 of 48 completed blocks when two of five
+  measured lossy/TCP/100 MiB downloads returned `unexpected EOF`; the
+  2026-07-29/30 restart also stopped after 13 completed blocks, this time in
+  lossy/seed-101/download/TCP at 16 MiB and concurrency eight. The second
+  failure's warm-up batch killed the route, but the harness discarded warm-up
+  results, so all eight measured requests surfaced only the downstream
+  `status 404` symptom. The matching QUIC concurrent case passed.
 - [x] **B4.4a — Correct the qualification-discovered TCP truncation locally.**
   Restore yamux's raw close fallback to five minutes, keep the wrapper/lease
   fallback strictly after raw cleanup, add the byte-exact delayed-drain
@@ -1874,17 +1900,36 @@ decision task, not part of A1 completion.
   `connection reset`, the unchanged delayed-drain test passes at five minutes,
   parent-close/timer ordering passes 100 race-detector repetitions, and the
   complete Go/race/vet/package checks pass.
-- [ ] **B4.4b — Confirm the correction on staging.** Deploy matching candidate
+- [x] **B4.4b — Confirm the first correction on staging.** Deploy matching candidate
   edge and agent binaries, first repeat the same-seed direct-TCP 100 MiB
   baseline, then rerun the same-parameter lossy/seed-101/download/TCP/100 MiB
   beamd case with five successful checksum-verified samples, followed by its
   matching direct-QUIC and beamd-QUIC controls. Record versions, effective
   configuration, partial-byte diagnostics, logs, and memory through the
-  non-qualifying `MODE=targeted` evidence path. This is not claimed to replay
-  the original packet-loss sequence.
-- [ ] **B4.4c — Restart and pass the full qualification.** Discard the partial
-  13-of-48 result as a verdict, start a fresh counterbalanced 48-block run only
-  after B4.4b passes, and retain complete analyzer-accepted evidence.
+  non-qualifying `MODE=targeted` evidence path. Completed before the
+  2026-07-29 restart with candidate
+  `6aac41a49ad2691b34d6c1b310b50b7ded80c2a9`: all five measured beamd TCP
+  100 MiB samples passed under the requested lossy seed-101 profile, as did the
+  controls. This is not claimed to replay the original packet-loss sequence.
+- [x] **B4.4c — Correct the concurrent TCP timeout and evidence gap locally.**
+  Keep the adapter-owned five-second open bound but restore yamux's internal
+  stream-ACK establishment timeout to 75 seconds; retain a structured terminal
+  cause if that library timer ever expires. Prove the session survives an ACK
+  delayed beyond five seconds. Record all direct and beamd warm-ups, fail closed
+  before measurement after any warm-up failure, and allow targeted mode to bind
+  beamd concurrency, warm-up count, and iteration count. Completed 2026-07-30:
+  the delayed-ACK regression survives beyond the former five-second library
+  timer; modified packages pass under the race detector; the complete Go suite,
+  serial broad race suite, vet, shell/Python syntax, and diff checks pass.
+- [ ] **B4.4d — Confirm the concurrent correction on staging.** Deploy one
+  immutable matching candidate and run
+  lossy/seed-101/download/16 MiB with eight warm-ups, eight measured requests,
+  and beamd concurrency eight over TCP followed by QUIC. Require zero warm-up
+  or measured failures, retained raw samples, exact target metadata, viable
+  qdisc/integrity/process evidence, and no route loss.
+- [ ] **B4.4e — Restart and pass the full qualification.** Discard both partial
+  13-of-48 results as verdicts, start a fresh counterbalanced 48-block run only
+  after B4.4d passes, and retain complete analyzer-accepted evidence.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   compiled/self-hosted defaults unchanged, run the hosted production session
   in `auto`, validate both directions/WebSockets/reconnect over the real

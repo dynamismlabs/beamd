@@ -78,6 +78,15 @@ func failed(result result) bool {
 	return result.errMsg != ""
 }
 
+func firstFailure(results []result) (int, bool) {
+	for index, result := range results {
+		if failed(result) {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
 func runUntilFailure(count int, run func() result) []result {
 	results := make([]result, 0, count)
 	for range count {
@@ -103,6 +112,28 @@ func executeFailFastPlan(warmups, measurements int, run func() result) failFastP
 	plan.measurements = runUntilFailure(measurements, run)
 	plan.measurementWall = time.Since(start)
 	if len(plan.measurements) > 0 && failed(plan.measurements[len(plan.measurements)-1]) {
+		plan.failurePhase = "measurement"
+	}
+	return plan
+}
+
+func executeBatchFailClosedPlan(
+	warmups,
+	measurements int,
+	runBatch func(int) []result,
+) failFastPlan {
+	plan := failFastPlan{
+		warmups: runBatch(warmups),
+	}
+	if _, failed := firstFailure(plan.warmups); failed {
+		plan.failurePhase = "warmup"
+		return plan
+	}
+
+	start := time.Now()
+	plan.measurements = runBatch(measurements)
+	plan.measurementWall = time.Since(start)
+	if _, failed := firstFailure(plan.measurements); failed {
 		plan.failurePhase = "measurement"
 	}
 	return plan
@@ -236,16 +267,15 @@ func main() {
 		failFast    = flag.Bool(
 			"fail-fast",
 			false,
-			"run serially, stop after the first failed warmup or measurement, and emit partial JSON",
+			"stop after the first failed request (serial) or failed phase (concurrent), and emit partial JSON",
 		)
 	)
 	flag.Parse()
-	if *urlBase == "" {
-		fmt.Fprintln(os.Stderr, "--url required")
-		os.Exit(2)
-	}
-	if *failFast && *concurrency != 1 {
-		fmt.Fprintln(os.Stderr, "--fail-fast requires --concurrency=1")
+	if *urlBase == "" || *n < 1 || *warmup < 0 || *concurrency < 1 {
+		fmt.Fprintln(
+			os.Stderr,
+			"--url, positive --n/--concurrency, and non-negative --warmup required",
+		)
 		os.Exit(2)
 	}
 
@@ -386,20 +416,27 @@ func main() {
 		wall          time.Duration
 	)
 	if *failFast {
-		progressActive.Add(1)
-		plan := executeFailFastPlan(*warmup, *n, doTrackedOne)
-		progressActive.Add(-1)
+		if *concurrency == 1 {
+			progressActive.Add(1)
+			plan := executeFailFastPlan(*warmup, *n, doTrackedOne)
+			progressActive.Add(-1)
+			warmupResults = plan.warmups
+			results = plan.measurements
+			failurePhase = plan.failurePhase
+			wall = plan.measurementWall
+		} else {
+			plan := executeBatchFailClosedPlan(*warmup, *n, runBatch)
+			warmupResults = plan.warmups
+			results = plan.measurements
+			failurePhase = plan.failurePhase
+			wall = plan.measurementWall
+		}
+	} else {
+		plan := executeBatchFailClosedPlan(*warmup, *n, runBatch)
 		warmupResults = plan.warmups
 		results = plan.measurements
 		failurePhase = plan.failurePhase
 		wall = plan.measurementWall
-	} else {
-		if *warmup > 0 {
-			_ = runBatch(*warmup)
-		}
-		wallStart := time.Now()
-		results = runBatch(*n)
-		wall = time.Since(wallStart)
 	}
 	if *progress != "" {
 		close(progressStop)
@@ -424,10 +461,8 @@ func main() {
 			errors++
 		}
 	}
-	if *failFast {
-		for _, r := range warmupResults {
-			classify(r)
-		}
+	for _, r := range warmupResults {
+		classify(r)
 	}
 	for _, r := range results {
 		classify(r)
@@ -461,23 +496,25 @@ func main() {
 			"download": "response body bytes read",
 			"upload":   "request body bytes consumed when Client.Do returned",
 		}[*dir],
+		"requested_warmups":    *warmup,
+		"attempted_warmups":    len(warmupResults),
+		"attempted_iterations": len(results),
+		"warmup_samples":       sampleRecords(warmupResults),
+		"stopped_on_failure":   failurePhase != "",
 	}
 	if *failFast {
 		out["fail_fast"] = true
-		out["requested_warmups"] = *warmup
-		out["attempted_warmups"] = len(warmupResults)
-		out["attempted_iterations"] = len(results)
-		out["warmup_samples"] = sampleRecords(warmupResults)
-		out["stopped_on_failure"] = failurePhase != ""
-		if failurePhase != "" {
-			out["failure_phase"] = failurePhase
-			failedResults := results
-			if failurePhase == "warmup" {
-				failedResults = warmupResults
-			}
+	}
+	if failurePhase != "" {
+		out["failure_phase"] = failurePhase
+		failedResults := results
+		if failurePhase == "warmup" {
+			failedResults = warmupResults
+		}
+		if failedIndex, ok := firstFailure(failedResults); ok {
 			out["failure"] = sampleRecord(
-				len(failedResults)-1,
-				failedResults[len(failedResults)-1],
+				failedIndex,
+				failedResults[failedIndex],
 			)
 		}
 	}
@@ -490,7 +527,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "encode result:", err)
 		os.Exit(2)
 	}
-	if *failFast && failurePhase != "" {
+	if failurePhase != "" {
 		os.Exit(1)
 	}
 }

@@ -54,6 +54,75 @@ func TestExecuteFailFastPlanStopsAfterMeasuredFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteBatchFailClosedPlanRetainsWarmupBatchAndSkipsMeasurements(t *testing.T) {
+	calls := []int{}
+	plan := executeBatchFailClosedPlan(3, 4, func(count int) []result {
+		calls = append(calls, count)
+		return []result{
+			{ok: true},
+			{errMsg: "status 404"},
+			{ok: true},
+		}
+	})
+
+	if len(calls) != 1 || calls[0] != 3 {
+		t.Fatalf("batch calls = %v, want only warmup count 3", calls)
+	}
+	if plan.failurePhase != "warmup" {
+		t.Fatalf("failure phase = %q, want warmup", plan.failurePhase)
+	}
+	if len(plan.warmups) != 3 || len(plan.measurements) != 0 {
+		t.Fatalf(
+			"warmups/measurements = %d/%d, want 3/0",
+			len(plan.warmups),
+			len(plan.measurements),
+		)
+	}
+}
+
+func TestExecuteBatchFailClosedPlanRetainsMeasuredFailureBatch(t *testing.T) {
+	calls := 0
+	plan := executeBatchFailClosedPlan(2, 3, func(count int) []result {
+		calls++
+		if calls == 1 {
+			return []result{{ok: true}, {ok: true}}
+		}
+		return []result{{ok: true}, {errMsg: "unexpected EOF"}, {ok: true}}
+	})
+
+	if calls != 2 {
+		t.Fatalf("batch calls = %d, want 2", calls)
+	}
+	if plan.failurePhase != "measurement" {
+		t.Fatalf("failure phase = %q, want measurement", plan.failurePhase)
+	}
+	if len(plan.warmups) != 2 || len(plan.measurements) != 3 {
+		t.Fatalf(
+			"warmups/measurements = %d/%d, want 2/3",
+			len(plan.warmups),
+			len(plan.measurements),
+		)
+	}
+}
+
+func TestFirstFailureFindsConcurrentBatchFailure(t *testing.T) {
+	results := []result{
+		{ok: true},
+		{errMsg: "status 404"},
+		{ok: true},
+	}
+	index, ok := firstFailure(results)
+	if !ok || index != 1 {
+		t.Fatalf("firstFailure = %d/%t, want 1/true", index, ok)
+	}
+}
+
+func TestFirstFailureAcceptsSuccessfulWarmupBatch(t *testing.T) {
+	if index, ok := firstFailure([]result{{ok: true}, {ok: true}}); ok {
+		t.Fatalf("firstFailure = %d/true, want no failure", index)
+	}
+}
+
 func TestMeasureOneRetainsTruncatedDownloadDiagnostics(t *testing.T) {
 	const (
 		size    = int64(1 << 20)

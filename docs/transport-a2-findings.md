@@ -3,12 +3,13 @@
 **Date:** 2026-07-24 → 25
 **Status:** **APPROVED / GO** — the operator approved implementing Part B
 (QUIC) behind a default-off flag. A1 shipped and Part B is implemented. The
-first full B4 run exposed a separate TCP/yamux graceful-close regression. Its
-narrow correction is implemented and verified locally; qualification is
-paused for the targeted staging recheck. Hosted activation remains gated on a
-fresh complete B4 qualification
-and the production-link pilot; the self-hosted defaults permanently remain TCP
-with edge QUIC disabled.
+first full B4 run exposed a separate TCP/yamux graceful-close regression; its
+correction is confirmed on staging. The next full attempt exposed a distinct
+concurrency-eight stream-ACK timeout and a discarded-warm-up evidence gap.
+Their narrow correction is verified locally; qualification is paused for the
+exact targeted staging recheck. Hosted activation remains gated on a fresh
+complete B4 qualification and the production-link pilot; the self-hosted
+defaults permanently remain TCP with edge QUIC disabled.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
 
@@ -37,12 +38,20 @@ with edge QUIC disabled.
 - **Prior art confirms the direction:** OpenZiti (which powers zrok) hit the same
   wall and built its own UDP transport (westworld3 / dilithium / "Transwarp").
   beamd uses off-the-shelf `quic-go` instead of rolling its own.
-- **B4 found and locally reproduced a distinct TCP correctness regression.**
+- **B4 found and confirmed a distinct TCP graceful-close regression.**
   The new five-second yamux `StreamCloseTimeout` can reset an ordinarily closed
   stream before the peer drains its buffered response tail. Restore yamux's
-  five-minute default and recheck the failed staging case with the same
-  profile, seed, direction, payload, and sample count before
-  restarting B4; this does not change the A2/QUIC decision.
+  five-minute default; the same-parameter targeted staging recheck passed all
+  five measured 100 MiB TCP downloads and both protocol controls.
+- **The restart found a second, concurrency-only yamux timer defect.** yamux's
+  `StreamOpenTimeout` waits for the peer's stream ACK and closes the entire
+  shared TCP session. Five seconds is unsafe when eight bulk streams and loss
+  delay that ACK through head-of-line blocking. The failure began during the
+  discarded warm-up batch, then appeared only as eight measured edge 404s
+  after the route vanished. Keep beamd's independent five-second caller bound,
+  restore the internal ACK timer to 75 seconds, retain warm-up evidence, and
+  pass the exact concurrent targeted recheck before another full run. This
+  also does not change the A2/QUIC decision.
 
 ---
 
@@ -201,11 +210,12 @@ Caveats (carry these into B4):
   hosted activation.
 
 **Pending / optional:**
-- Confirm the five-minute yamux close correction on the same-parameter
-  lossy/seed-101/download/TCP/100 MiB staging case, rerun its QUIC control,
-  then restart the full B4 matrix from block one. This is a causal recheck,
-  not an identical packet-loss trace: the targeted path intentionally omits
-  preceding matrix traffic and runs TCP before QUIC.
+- Confirm the 75-second yamux stream-ACK correction on the exact
+  lossy/seed-101/download/TCP-and-QUIC/16 MiB/concurrency-eight staging case
+  with eight retained warm-ups and eight measured requests, then restart the
+  full B4 matrix from block one. This is a causal recheck, not an identical
+  packet-loss trace: the targeted path intentionally omits preceding matrix
+  traffic and runs TCP before QUIC.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation

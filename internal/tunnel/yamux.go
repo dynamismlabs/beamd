@@ -1,10 +1,12 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -16,6 +18,11 @@ const (
 	DefaultStreamWindow = 4 << 20
 	yamuxStreamLimit    = 64
 	streamOpenTimeout   = 5 * time.Second
+	// yamux's StreamOpenTimeout is not the caller-visible OpenStream bound.
+	// It waits for the peer's stream ACK and closes the entire session when it
+	// expires. The ACK shares the TCP connection with bulk stream data, so it
+	// must tolerate legitimate head-of-line delay under concurrent loss.
+	streamEstablishmentTimeout = 75 * time.Second
 	// yamux applies this fallback to graceful FINs as well as abandoned
 	// streams. A short value can turn a healthy close into an RST and make the
 	// peer discard response bytes already accepted into its receive buffer.
@@ -33,7 +40,7 @@ func YamuxConfig(windowBytes uint32) *yamux.Config {
 	cfg.EnableKeepAlive = false
 	cfg.KeepAliveInterval = 20 * time.Second
 	cfg.ConnectionWriteTimeout = 30 * time.Second
-	cfg.StreamOpenTimeout = streamOpenTimeout
+	cfg.StreamOpenTimeout = streamEstablishmentTimeout
 	cfg.StreamCloseTimeout = streamCloseTimeout
 	cfg.MaxStreamWindowSize = windowBytes
 	cfg.LogOutput = io.Discard
@@ -43,6 +50,25 @@ func YamuxConfig(windowBytes uint32) *yamux.Config {
 type observedConn struct {
 	net.Conn
 	onError func(error)
+}
+
+type yamuxDiagnosticWriter struct {
+	state *sessionState
+}
+
+func (w yamuxDiagnosticWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("yamux: aborted stream open (")) {
+		w.state.claim(CloseInfo{
+			Reason: "other",
+			Cause:  ErrOpenTimeout,
+		})
+		slog.Warn("yamux stream establishment timed out",
+			"event", "yamux_stream_open_timeout",
+			"transport", KindYamux,
+			"timeout", streamEstablishmentTimeout,
+		)
+	}
+	return len(p), nil
 }
 
 func (c *observedConn) Read(p []byte) (int, error) {
@@ -83,14 +109,16 @@ func newYamuxSession(conn net.Conn, windowBytes uint32, server bool) (*YamuxSess
 		openTimeout: streamOpenTimeout,
 	}
 	observed := &observedConn{Conn: conn, onError: s.observeConnError}
+	cfg := YamuxConfig(windowBytes)
+	cfg.LogOutput = yamuxDiagnosticWriter{state: s.state}
 	var (
 		raw *yamux.Session
 		err error
 	)
 	if server {
-		raw, err = yamux.Server(observed, YamuxConfig(windowBytes))
+		raw, err = yamux.Server(observed, cfg)
 	} else {
-		raw, err = yamux.Client(observed, YamuxConfig(windowBytes))
+		raw, err = yamux.Client(observed, cfg)
 	}
 	if err != nil {
 		return nil, err

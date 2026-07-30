@@ -70,8 +70,8 @@ func TestYamuxConfigPartBHardening(t *testing.T) {
 	if cfg.KeepAliveInterval != 20*time.Second {
 		t.Errorf("KeepAliveInterval = %v, want 20s", cfg.KeepAliveInterval)
 	}
-	if cfg.StreamOpenTimeout != 5*time.Second {
-		t.Errorf("StreamOpenTimeout = %v, want 5s", cfg.StreamOpenTimeout)
+	if cfg.StreamOpenTimeout != 75*time.Second {
+		t.Errorf("StreamOpenTimeout = %v, want 75s", cfg.StreamOpenTimeout)
 	}
 	if cfg.StreamCloseTimeout != 5*time.Minute {
 		t.Errorf("StreamCloseTimeout = %v, want 5m", cfg.StreamCloseTimeout)
@@ -83,6 +83,109 @@ func TestYamuxConfigPartBHardening(t *testing.T) {
 			cfg.StreamCloseTimeout,
 		)
 	}
+}
+
+func TestYamuxDiagnosticWriterCapturesStreamEstablishmentTimeout(t *testing.T) {
+	state := newSessionState()
+	writer := yamuxDiagnosticWriter{state: state}
+	message := []byte(
+		"2026/07/30 12:00:00 [ERR] yamux: aborted stream open (destination=pipe): i/o deadline reached\n",
+	)
+	n, err := writer.Write(message)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != len(message) {
+		t.Fatalf("Write count = %d, want %d", n, len(message))
+	}
+	info := state.closeInfo()
+	if info.Reason != "other" || !errors.Is(info.Cause, ErrOpenTimeout) {
+		t.Fatalf("CloseInfo = %+v, want retained stream-establishment timeout", info)
+	}
+}
+
+type gatedWriteYamuxConn struct {
+	net.Conn
+	writeStarted chan struct{}
+	writeRelease chan struct{}
+	startOnce    sync.Once
+	releaseOnce  sync.Once
+}
+
+func newGatedWriteYamuxConn(conn net.Conn) *gatedWriteYamuxConn {
+	return &gatedWriteYamuxConn{
+		Conn:         conn,
+		writeStarted: make(chan struct{}),
+		writeRelease: make(chan struct{}),
+	}
+}
+
+func (c *gatedWriteYamuxConn) Write(p []byte) (int, error) {
+	c.startOnce.Do(func() { close(c.writeStarted) })
+	select {
+	case <-c.writeRelease:
+		return c.Conn.Write(p)
+	case <-time.After(10 * time.Second):
+		return 0, context.DeadlineExceeded
+	}
+}
+
+func (c *gatedWriteYamuxConn) releaseWrites() {
+	c.releaseOnce.Do(func() { close(c.writeRelease) })
+}
+
+func TestYamuxStreamACKMayArriveAfterAdapterOpenBound(t *testing.T) {
+	left, right := net.Pipe()
+	gatedServerConn := newGatedWriteYamuxConn(right)
+	client, err := NewYamuxClient(left, 0)
+	if err != nil {
+		t.Fatalf("NewYamuxClient: %v", err)
+	}
+	server, err := NewYamuxServer(gatedServerConn, 0)
+	if err != nil {
+		t.Fatalf("NewYamuxServer: %v", err)
+	}
+	t.Cleanup(func() {
+		gatedServerConn.releaseWrites()
+		_ = client.CloseWithError(CloseNormal, "test cleanup")
+		_ = server.CloseWithError(CloseNormal, "test cleanup")
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	clientStream, err := client.OpenStream(ctx)
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	accepted := make(chan struct {
+		stream Stream
+		err    error
+	}, 1)
+	go func() {
+		stream, err := server.AcceptStream(ctx)
+		accepted <- struct {
+			stream Stream
+			err    error
+		}{stream, err}
+	}()
+
+	awaitClosed(t, gatedServerConn.writeStarted, "server stream ACK")
+	select {
+	case <-client.Done():
+		t.Fatal("yamux session closed before the former stream-ACK timeout")
+	case <-time.After(streamOpenTimeout + 250*time.Millisecond):
+	}
+	if client.IsClosed() || server.IsClosed() {
+		t.Fatal("yamux session did not survive a delayed stream ACK")
+	}
+
+	gatedServerConn.releaseWrites()
+	result := <-accepted
+	if result.err != nil {
+		t.Fatalf("AcceptStream after releasing ACK: %v", result.err)
+	}
+	clientStream.Abort(StreamCanceled)
+	result.stream.Abort(StreamCanceled)
 }
 
 func newTestYamuxCompletionStream() *yamuxStream {
