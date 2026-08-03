@@ -183,7 +183,8 @@ func (s *trafficStore) Flush() error {
 // upgraded session, so streamed/HMR bytes are included.
 type countingConn struct {
 	net.Conn
-	onClose func(bytesIn, bytesOut int64)
+	onClose    func(bytesIn, bytesOut int64)
+	onActivity func()
 
 	in   atomic.Int64
 	out  atomic.Int64
@@ -194,6 +195,9 @@ func (c *countingConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		c.out.Add(int64(n))
+		if c.onActivity != nil {
+			c.onActivity()
+		}
 	}
 	return n, err
 }
@@ -202,6 +206,9 @@ func (c *countingConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if n > 0 {
 		c.in.Add(int64(n))
+		if c.onActivity != nil {
+			c.onActivity()
+		}
 	}
 	return n, err
 }
@@ -233,10 +240,11 @@ func newLeasedConn(
 	ctx context.Context,
 	stream tunnel.Stream,
 	onTraffic func(bytesIn, bytesOut int64),
+	onActivity func(),
 	onDone func(),
 ) *leasedConn {
 	c := &leasedConn{
-		countingConn: &countingConn{Conn: stream, onClose: onTraffic},
+		countingConn: &countingConn{Conn: stream, onClose: onTraffic, onActivity: onActivity},
 		stream:       stream,
 		ctx:          ctx,
 		normalClose:  make(chan struct{}),

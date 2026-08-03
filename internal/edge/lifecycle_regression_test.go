@@ -172,6 +172,59 @@ func (s *lifecycleSession) CloseWithError(code tunnel.ErrorCode, reason string) 
 func (s *lifecycleSession) LocalAddr() net.Addr  { return admissionAddr("local") }
 func (s *lifecycleSession) RemoteAddr() net.Addr { return admissionAddr("remote") }
 
+func TestHeartbeatWatchTreatsSuccessfulStreamIOAsLiveness(t *testing.T) {
+	const heartbeatTimeout = 150 * time.Millisecond
+	transport := newLifecycleSession(tunnel.KindYamux, nil)
+	sess := &Session{
+		transport:    transport,
+		lastActivity: time.Now(),
+	}
+	e := &Edge{heartbeatTimeout: heartbeatTimeout}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		e.heartbeatWatch(ctx, sess)
+	}()
+
+	// Keep the session active for more than twice the idle bound. This models
+	// the callback made after successful data-stream reads and writes while a
+	// control heartbeat is head-of-line blocked behind bulk TCP traffic.
+	activeUntil := time.Now().Add(2*heartbeatTimeout + 50*time.Millisecond)
+	for time.Now().Before(activeUntil) {
+		sess.markActivity()
+		select {
+		case <-transport.Done():
+			t.Fatal("active session was closed by the heartbeat watchdog")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	select {
+	case <-transport.Done():
+		t.Fatal("active session was closed by the heartbeat watchdog")
+	default:
+	}
+
+	// Activity alone does not weaken the idle bound: once progress stops, the
+	// same watchdog must still close the session with the established reason.
+	select {
+	case <-transport.Done():
+	case <-time.After(4 * heartbeatTimeout):
+		t.Fatal("idle session was not closed after stream activity stopped")
+	}
+	if info := transport.CloseInfo(); !info.CodeValid || info.Code != tunnel.CloseIdle {
+		t.Fatalf("close info = %+v, want CloseIdle", info)
+	}
+	select {
+	case <-watchDone:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat watchdog did not exit after closing the idle session")
+	}
+}
+
 type channelTunnelListener struct {
 	sessions  chan tunnel.Session
 	closed    chan struct{}

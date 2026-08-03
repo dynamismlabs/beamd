@@ -10,10 +10,15 @@ Its narrow correction passed the exact targeted staging recheck. The following
 fresh matrix cleared both product defects and completed 36 of 48 blocks with
 725 error-free records before a healthy 100 MiB direct-QUIC transfer reached
 the harness's undersized 20-minute deadline under 500 ms RTT and 1% loss. The
-profile-aware deadline correction is verified locally; qualification is paused
-for its exact targeted staging recheck. Hosted activation remains gated on a
-fresh complete B4 qualification and the production-link pilot; the self-hosted
-defaults permanently remain TCP with edge QUIC disabled.
+profile-aware deadline recheck completed direct and beamd QUIC plus direct TCP,
+then exposed a distinct edge liveness bug: TCP head-of-line blocking delayed
+the control heartbeat while a data stream was actively transferring, and the
+edge closed it at 60 seconds. Successful authenticated stream I/O now refreshes
+session activity without allowing a merely open stalled stream to mask an idle
+session; that correction is verified locally and awaits the exact targeted
+staging recheck. Hosted activation remains gated on a fresh complete B4
+qualification and the production-link pilot; the self-hosted defaults
+permanently remain TCP with edge QUIC disabled.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
 
@@ -65,6 +70,15 @@ defaults permanently remain TCP with edge QUIC disabled.
   expected. Keep the 20-minute default but use a recorded 60-minute bound for
   16 MiB and 100 MiB `high-rtt-lossy` protocol cases; this changes only the hang
   guard and preserves every performance and zero-error gate.
+- **The exact deadline recheck then found an application-liveness defect.** Its
+  direct-QUIC, beamd-QUIC, and direct-TCP stages completed, but the first
+  beamd-TCP 100 MiB warm-up ended with `unexpected EOF` after 9,745,280 bytes
+  and 58.6 seconds. The edge closed the session at 60.0007 seconds without a
+  control heartbeat even though stream bytes were continuously arriving. On
+  TCP/yamux the heartbeat shares the bulk stream's ordering domain, so
+  successful authenticated stream I/O must also refresh the session activity
+  timer. An open stream by itself remains insufficient, preserving the idle
+  close for dead or stalled sessions.
 
 ---
 
@@ -223,11 +237,13 @@ Caveats (carry these into B4):
   hosted activation.
 
 **Pending / optional:**
-- Confirm the profile-aware deadline on the exact failed
+- Deploy one immutable candidate carrying the profile-aware deadline and
+  data-activity liveness corrections, rerun the exact
   high-rtt-lossy/seed-101/download/100 MiB direct-and-beamd TCP/QUIC staging
-  case, then restart the full B4 matrix from block one. The prior 36-block
-  evidence cannot be resumed into a verdict because its manifest binds the old
-  harness and the analyzer requires one complete immutable matrix.
+  case, then restart the full B4 matrix from block one only if it passes. The
+  prior 36-block evidence cannot be resumed into a verdict because its manifest
+  binds the old harness and the analyzer requires one complete immutable
+  matrix.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation

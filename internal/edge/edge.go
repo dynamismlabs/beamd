@@ -148,13 +148,15 @@ type Session struct {
 	writeGate chan struct{} // one token serializes control-stream writes
 	writeOnce sync.Once
 
+	activityMu   sync.Mutex
+	lastActivity time.Time
+
 	mu    sync.Mutex
 	names map[string]struct{}
 	// hosts maps a tunnel name → every hostname it's registered under (the
 	// default-shape host(s) for the scope's slug(s) plus any custom-domain hosts).
 	// Used to remove them all on unregister.
-	hosts         map[string][]string
-	lastHeartbeat time.Time
+	hosts map[string][]string
 }
 
 type Route struct {
@@ -1052,18 +1054,18 @@ func (e *Edge) handleTunnelSession(transport tunnel.Session) {
 		return
 	}
 	sess := &Session{
-		transport:     transport,
-		kind:          transport.Kind(),
-		slug:          slug,
-		control:       control,
-		id:            reqlog.NewID(),
-		remote:        transport.RemoteAddr().String(),
-		handshake:     time.Since(handshakeStarted),
-		streamSlots:   make(chan struct{}, e.cfg.MaxStreamsPerSession),
-		writeGate:     make(chan struct{}, 1),
-		names:         make(map[string]struct{}),
-		hosts:         make(map[string][]string),
-		lastHeartbeat: time.Now(),
+		transport:    transport,
+		kind:         transport.Kind(),
+		slug:         slug,
+		control:      control,
+		id:           reqlog.NewID(),
+		remote:       transport.RemoteAddr().String(),
+		handshake:    time.Since(handshakeStarted),
+		streamSlots:  make(chan struct{}, e.cfg.MaxStreamsPerSession),
+		writeGate:    make(chan struct{}, 1),
+		names:        make(map[string]struct{}),
+		hosts:        make(map[string][]string),
+		lastActivity: time.Now(),
 	}
 	if !e.promoteAuthenticated(transport, sess) {
 		<-e.authSlots
@@ -1182,9 +1184,7 @@ func (e *Edge) handleControlMsg(sess *Session, typ string, line []byte) {
 		e.unregister(sess, msg.Name)
 
 	case proto.TypeHeartbeat:
-		sess.mu.Lock()
-		sess.lastHeartbeat = time.Now()
-		sess.mu.Unlock()
+		sess.markActivity()
 
 	default:
 		sess.send(&proto.Error{Type: proto.TypeError, Code: proto.CodeUnknownMsg, Message: "unknown type: " + typ})
@@ -1193,6 +1193,22 @@ func (e *Edge) handleControlMsg(sess *Session, typ string, line []byte) {
 
 func (sess *Session) send(msg any) error {
 	return sess.sendContext(context.Background(), msg)
+}
+
+// markActivity records authenticated application-level progress. Control
+// heartbeats normally provide this signal, but successful data-stream I/O must
+// also count: on TCP/yamux, a heartbeat can be head-of-line blocked behind a
+// large transfer even while that same session is continuously moving bytes.
+func (sess *Session) markActivity() {
+	sess.activityMu.Lock()
+	sess.lastActivity = time.Now()
+	sess.activityMu.Unlock()
+}
+
+func (sess *Session) timeSinceActivity() time.Duration {
+	sess.activityMu.Lock()
+	defer sess.activityMu.Unlock()
+	return time.Since(sess.lastActivity)
 }
 
 func (sess *Session) sendContext(ctx context.Context, msg any) error {
@@ -1450,9 +1466,7 @@ func (e *Edge) heartbeatWatch(ctx context.Context, sess *Session) {
 		case <-sess.transport.Done():
 			return
 		case <-tick.C:
-			sess.mu.Lock()
-			since := time.Since(sess.lastHeartbeat)
-			sess.mu.Unlock()
+			since := sess.timeSinceActivity()
 			if since > e.heartbeatTimeout {
 				slog.Warn("session: heartbeat timeout", "slug", sess.slug, "since", since)
 				_ = sess.transport.CloseWithError(tunnel.CloseIdle, "heartbeat timeout")
@@ -1924,6 +1938,7 @@ func (e *Edge) openRouteStreamForRoute(
 		ctx,
 		stream,
 		func(in, out int64) { e.recordTraffic(slug, name, in, out) },
+		route.session.markActivity,
 		func() {
 			lease.release()
 			e.releaseStreamWatcher(route.session)

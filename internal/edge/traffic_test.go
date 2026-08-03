@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,12 +69,13 @@ func TestCountingConn_TalliesBothDirections(t *testing.T) {
 	defer c2.Close()
 
 	var gotIn, gotOut int64
+	var activity atomic.Int32
 	var wg sync.WaitGroup
 	wg.Add(1)
 	cc := &countingConn{Conn: c1, onClose: func(in, out int64) {
 		gotIn, gotOut = in, out
 		wg.Done()
-	}}
+	}, onActivity: func() { activity.Add(1) }}
 
 	// Peer drains the request (counted as `in`) then sends a response
 	// (counted as `out` when we read it).
@@ -98,6 +100,9 @@ func TestCountingConn_TalliesBothDirections(t *testing.T) {
 	}
 	if gotOut != 14 {
 		t.Errorf("bytesOut = %d, want 14 (response)", gotOut)
+	}
+	if got := activity.Load(); got != 2 {
+		t.Errorf("activity callbacks = %d, want 2 successful I/O operations", got)
 	}
 }
 

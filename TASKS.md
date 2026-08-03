@@ -33,11 +33,14 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
   two qualification-discovered TCP/yamux corrections passed their targeted
   staging rechecks. The following matrix cleared both defects and completed 36
   of 48 blocks before exposing an undersized high-RTT/loss harness deadline;
-  its profile-aware correction awaits the exact targeted recheck and another
-  fresh full run. Permanent product-aware defaults keep
-  self-hosted/token on TCP with edge QUIC disabled, while hosted/session
-  resolves to `auto` and the hosted edge enables QUIC only after B4
-  qualification and the production-link pilot. The single canonical
+  its profile-aware correction let the exact targeted recheck advance through
+  direct and beamd QUIC plus direct TCP, where the beamd-TCP stage exposed a
+  60-second heartbeat timeout despite active data transfer. The narrow
+  data-activity liveness correction is locally verified and awaits the same
+  targeted recheck before another fresh full run. Permanent product-aware
+  defaults keep self-hosted/token on TCP with edge QUIC disabled, while
+  hosted/session resolves to `auto` and the hosted edge enables QUIC only after
+  B4 qualification and the production-link pilot. The single canonical
   specification and executable checklist is
   [`docs/transport-performance-spec.md`](docs/transport-performance-spec.md).
   Work its Section 16 top to bottom; do not duplicate or independently track
@@ -183,7 +186,7 @@ Goal: control protocol on stream 0, dynamic registration, RFC 1123 naming, colli
 - [x] Send `hello_ok` with slug + base_domain
 - [x] Handle `register`: validate (or derive from port), check collisions, add to routing table, send `registered`
 - [x] Handle `unregister`: remove from routing table; idempotent
-- [x] Handle `heartbeat`: reset session timer; watchdog drops session after configurable timeout (default 60s, test override via `SetHeartbeatTimeout`)
+- [x] Handle session liveness: heartbeats and successful data-stream I/O reset the activity timer; the watchdog drops an inactive session after the configurable timeout (default 60s, test override via `SetHeartbeatTimeout`)
 - [x] Collision: same (slug, name) different session → `name_taken`; same session → idempotent OK
 - [x] Drop-on-disconnect: `dropSession` removes routes when yamux session ends
 

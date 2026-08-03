@@ -5,8 +5,12 @@ qualification-discovered TCP/yamux corrections are confirmed on staging. The
 next fresh matrix cleared those failure points and completed 36 of 48 blocks
 with 725 error-free records, then exposed a qualification-harness deadline that
 was too short for a 100 MiB direct-QUIC transfer under the 500 ms RTT / 1% loss
-profile. The profile-aware deadline correction is verified locally; its exact
-targeted staging recheck precedes another fresh full run. Qualification and a
+profile. Its exact targeted recheck confirmed the longer deadline on direct and
+beamd QUIC plus direct TCP, then exposed a separate edge liveness bug: the
+60-second control-heartbeat watchdog killed an actively transferring TCP/yamux
+session because its heartbeat was head-of-line blocked behind bulk data. The
+data-activity liveness correction is verified locally; its exact targeted
+staging recheck precedes another fresh full run. Qualification and a
 production-link pilot still gate enabling QUIC for the hosted service. The
 compiled and self-hosted defaults permanently remain TCP with the edge QUIC
 listener disabled.
@@ -614,12 +618,16 @@ The protocol is unchanged:
    `<tunnel-name>\n`, and proxies the existing HTTP bytes.
 
 The control stream must remain bidirectionally open for the full session
-lifetime. Any control EOF, reset, read/write error, or heartbeat failure is
-session-terminal: record the cause and close the transport session. Session
-teardown owns control-stream cleanup; do not send a separate stream FIN after
-claiming the connection close. Over QUIC that FIN can arrive before the
-authoritative application close and make an intentional shutdown appear to
-the peer as a local protocol failure.
+lifetime. Any control EOF, reset, read/write error, or liveness failure is
+session-terminal: record the cause and close the transport session. A valid
+control heartbeat or any successful read or write on an authenticated data
+stream refreshes session activity; the existence of an open stream alone does
+not. This distinction is required on TCP/yamux because control heartbeats share
+the data stream's ordering domain and may be head-of-line blocked behind an
+active bulk transfer. Session teardown owns control-stream cleanup; do not send
+a separate stream FIN after claiming the connection close. Over QUIC that FIN
+can arrive before the authoritative application close and make an intentional
+shutdown appear to the peer as a local protocol failure.
 
 Run the unexpected-agent-stream guard on the edge for **both** adapters after
 accepting the control stream. Any second agent-opened stream is aborted and the
@@ -692,9 +700,10 @@ cfg.StreamOpenTimeout = 75 * time.Second
 cfg.StreamCloseTimeout = 5 * time.Minute
 ```
 
-The application control heartbeat then becomes the single liveness mechanism.
-Running both yamux keepalives and application heartbeats is redundant and can
-leave a session transport-alive while its control stream is unusable.
+The application-level activity watchdog then becomes the single liveness
+mechanism. It is fed by control heartbeats and successful authenticated
+data-stream I/O. Running yamux keepalives as well is redundant and can leave a
+session transport-alive while its control stream is unusable.
 
 The 75-second stream-establishment value is the upstream yamux default and is
 distinct from the adapter's caller-visible five-second `OpenStream` bound.
@@ -1451,6 +1460,9 @@ Part B must implement:
 - protocol version mismatch is rejected on both sides;
 - control EOF/error is session-terminal, and a second agent-opened stream is
   rejected over both adapters even when raced immediately after control close;
+- successful authenticated data-stream reads and writes keep the session live
+  while control heartbeats are TCP head-of-line blocked, but an open stalled
+  stream does not prevent the 60-second idle close;
 - fallback reason classification uses only the fixed metric labels;
 - QUIC key files are created atomically, mode 0600, reused, and rejected when
   malformed;
@@ -1953,12 +1965,23 @@ decision task, not part of A1 completion.
   and retain every existing fail-closed gate. Completed 2026-08-03 after the
   third full attempt stopped at exactly the former 20-minute deadline with 36
   completed blocks and 725 prior records carrying zero errors or corruption.
-- [ ] **B4.4f — Restart and pass the full qualification.** Treat all three
-  partial results as diagnostics rather than verdicts. First recheck the exact
-  failed high-RTT/loss direct and beamd case on the immutable corrected harness,
-  then start a fresh counterbalanced 48-block run and retain complete
-  analyzer-accepted evidence. Do not splice or resume the prior evidence: its
-  manifest binds the old harness and its matrix is incomplete.
+- [x] **B4.4f — Correct active-session liveness under TCP head-of-line
+  blocking locally.** The exact high-RTT/loss deadline recheck completed direct
+  QUIC, beamd QUIC, and direct TCP, then the first beamd-TCP warm-up ended after
+  9,745,280 of 104,857,600 bytes. Edge evidence shows the 60-second control
+  heartbeat expired while that stream was continuously transferring data; TCP
+  ordering had delayed the heartbeat behind the bulk stream. Count successful
+  authenticated data-stream reads and writes as session activity while keeping
+  stream existence insufficient to suppress the idle timeout. Completed
+  2026-08-03 with repeated focused and race regressions, the edge suite, the
+  complete Go suite, serial broad race suite, vet, analyzer tests, syntax, and
+  diff checks passing.
+- [ ] **B4.4g — Restart and pass the full qualification.** Treat all prior
+  partial results as diagnostics rather than verdicts. First rerun the exact
+  failed high-RTT/loss direct and beamd case on one immutable candidate carrying
+  both corrections, then start a fresh counterbalanced 48-block run and retain
+  complete analyzer-accepted evidence. Do not splice or resume prior evidence:
+  its manifest binds an older candidate and its matrix is incomplete.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   compiled/self-hosted defaults unchanged, run the hosted production session
   in `auto`, validate both directions/WebSockets/reconnect over the real
