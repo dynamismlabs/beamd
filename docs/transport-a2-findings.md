@@ -6,9 +6,13 @@
 first full B4 run exposed a separate TCP/yamux graceful-close regression; its
 correction is confirmed on staging. The next full attempt exposed a distinct
 concurrency-eight stream-ACK timeout and a discarded-warm-up evidence gap.
-Their narrow correction is verified locally; qualification is paused for the
-exact targeted staging recheck. Hosted activation remains gated on a fresh
-complete B4 qualification and the production-link pilot; the self-hosted
+Its narrow correction passed the exact targeted staging recheck. The following
+fresh matrix cleared both product defects and completed 36 of 48 blocks with
+725 error-free records before a healthy 100 MiB direct-QUIC transfer reached
+the harness's undersized 20-minute deadline under 500 ms RTT and 1% loss. The
+profile-aware deadline correction is verified locally; qualification is paused
+for its exact targeted staging recheck. Hosted activation remains gated on a
+fresh complete B4 qualification and the production-link pilot; the self-hosted
 defaults permanently remain TCP with edge QUIC disabled.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
@@ -52,6 +56,15 @@ defaults permanently remain TCP with edge QUIC disabled.
   restore the internal ACK timer to 75 seconds, retain warm-up evidence, and
   pass the exact concurrent targeted recheck before another full run. This
   also does not change the A2/QUIC decision.
+- **That correction passed, and the next full run found a harness limit rather
+  than another product defect.** The run cleared both former failure points and
+  retained 725 records with zero errors or corruption through 36 completed
+  blocks. In block 37, the first 100 MiB direct-QUIC `high-rtt-lossy` warm-up
+  reached the uniform 20-minute deadline. Its preceding 16 MiB samples took
+  approximately 3.6–4.5 minutes, making a 100 MiB completion beyond 20 minutes
+  expected. Keep the 20-minute default but use a recorded 60-minute bound for
+  16 MiB and 100 MiB `high-rtt-lossy` protocol cases; this changes only the hang
+  guard and preserves every performance and zero-error gate.
 
 ---
 
@@ -210,12 +223,11 @@ Caveats (carry these into B4):
   hosted activation.
 
 **Pending / optional:**
-- Confirm the 75-second yamux stream-ACK correction on the exact
-  lossy/seed-101/download/TCP-and-QUIC/16 MiB/concurrency-eight staging case
-  with eight retained warm-ups and eight measured requests, then restart the
-  full B4 matrix from block one. This is a causal recheck, not an identical
-  packet-loss trace: the targeted path intentionally omits preceding matrix
-  traffic and runs TCP before QUIC.
+- Confirm the profile-aware deadline on the exact failed
+  high-rtt-lossy/seed-101/download/100 MiB direct-and-beamd TCP/QUIC staging
+  case, then restart the full B4 matrix from block one. The prior 36-block
+  evidence cannot be resumed into a verdict because its manifest binds the old
+  harness and the analyzer requires one complete immutable matrix.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation

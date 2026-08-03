@@ -1,18 +1,19 @@
 # Beamd Transport Performance — Specification and Task Checklist
 
-**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. The
-first B4 TCP/yamux graceful-close correction is confirmed on staging. A second
-full matrix attempt exposed a distinct concurrency-eight stream-establishment
-timeout plus a discarded-warm-up evidence gap; its narrow correction is
-verified locally and the exact targeted recheck precedes another fresh full
-run. Qualification and a production-link pilot still gate enabling QUIC for
-the hosted service. The
+**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. Both
+qualification-discovered TCP/yamux corrections are confirmed on staging. The
+next fresh matrix cleared those failure points and completed 36 of 48 blocks
+with 725 error-free records, then exposed a qualification-harness deadline that
+was too short for a 100 MiB direct-QUIC transfer under the 500 ms RTT / 1% loss
+profile. The profile-aware deadline correction is verified locally; its exact
+targeted staging recheck precedes another fresh full run. Qualification and a
+production-link pilot still gate enabling QUIC for the hosted service. The
 compiled and self-hosted defaults permanently remain TCP with the edge QUIC
 listener disabled.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-03
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -1554,6 +1555,15 @@ iterations, classify the failure, and exit the case nonzero. Then run at least
 50 measured iterations for 36-byte, 253 KiB, 257 KiB, and 1 MiB cases; 20 for
 16 MiB; and five for 100 MiB.
 
+The per-operation deadline is part of the frozen workload and must be recorded
+in metadata. Use 20 minutes by default. Use 60 minutes for 16 MiB and 100 MiB
+protocol cases in `high-rtt-lossy`; this remains a hang guard, not a performance
+gate. The former uniform 20-minute deadline was below the expected completion
+time of a healthy 100 MiB direct-QUIC transfer on that profile: the preceding
+16 MiB samples took approximately 3.6–4.5 minutes each, and the first 100 MiB
+warm-up reached the deadline. The longer bound must not relax the zero-error,
+zero-corruption, checksum, sample-count, throughput, or tail-latency gates.
+
 For every gated case, establish a same-direction, same-payload,
 concurrency-one direct baseline over the same shaped veth: one raw QUIC stream
 for the QUIC case and one TLS/TCP connection for the yamux/TCP case. Each
@@ -1883,14 +1893,21 @@ decision task, not part of A1 completion.
   In the deterministic Section 15.3 harness, QUIC must pass its direct baseline
   gates, stay within the clean-path regression budget, materially beat tuned
   yamux on every qualifying A2 profile/direction, and introduce no recurring
-  timer-backoff ladder. Two full attempts are partial evidence, not B4 verdicts:
+  timer-backoff ladder. Three full attempts are partial evidence, not B4 verdicts:
   the 2026-07-27/28 run stopped after 13 of 48 completed blocks when two of five
   measured lossy/TCP/100 MiB downloads returned `unexpected EOF`; the
   2026-07-29/30 restart also stopped after 13 completed blocks, this time in
   lossy/seed-101/download/TCP at 16 MiB and concurrency eight. The second
   failure's warm-up batch killed the route, but the harness discarded warm-up
   results, so all eight measured requests surfaced only the downstream
-  `status 404` symptom. The matching QUIC concurrent case passed.
+  `status 404` symptom. The matching QUIC concurrent case passed. The
+  2026-07-30 through 2026-08-02 restart cleared both defects and retained 725
+  error-free records through 36 completed blocks. Block 37 stopped on the first
+  direct-QUIC 100 MiB `high-rtt-lossy` warm-up at the harness's uniform
+  20-minute per-operation deadline; the preceding 16 MiB direct samples took
+  approximately 3.6–4.5 minutes. The remaining attempts saw the fixture's
+  resulting normal connection close. No yamux stream-open timeout, route loss,
+  corruption, resource pressure, or product-process failure occurred.
 - [x] **B4.4a — Correct the qualification-discovered TCP truncation locally.**
   Restore yamux's raw close fallback to five minutes, keep the wrapper/lease
   fallback strictly after raw cleanup, add the byte-exact delayed-drain
@@ -1921,15 +1938,27 @@ decision task, not part of A1 completion.
   the delayed-ACK regression survives beyond the former five-second library
   timer; modified packages pass under the race detector; the complete Go suite,
   serial broad race suite, vet, shell/Python syntax, and diff checks pass.
-- [ ] **B4.4d — Confirm the concurrent correction on staging.** Deploy one
+- [x] **B4.4d — Confirm the concurrent correction on staging.** Deploy one
   immutable matching candidate and run
   lossy/seed-101/download/16 MiB with eight warm-ups, eight measured requests,
   and beamd concurrency eight over TCP followed by QUIC. Require zero warm-up
   or measured failures, retained raw samples, exact target metadata, viable
-  qdisc/integrity/process evidence, and no route loss.
-- [ ] **B4.4e — Restart and pass the full qualification.** Discard both partial
-  13-of-48 results as verdicts, start a fresh counterbalanced 48-block run only
-  after B4.4d passes, and retain complete analyzer-accepted evidence.
+  qdisc/integrity/process evidence, and no route loss. Completed 2026-07-30 on
+  candidate `92b9306a41d553e400dcc133f1ba37b78cfcc59f`: all four direct/beamd
+  TCP/QUIC stages passed with the exact 16 MiB, concurrency-eight, eight-warm-up,
+  eight-iteration inputs and no raw failures.
+- [x] **B4.4e — Correct the high-RTT/loss harness deadline locally.** Preserve
+  the 20-minute default, use a recorded and analyzer-enforced 60-minute
+  per-operation bound for 16 MiB and 100 MiB `high-rtt-lossy` protocol cases,
+  and retain every existing fail-closed gate. Completed 2026-08-03 after the
+  third full attempt stopped at exactly the former 20-minute deadline with 36
+  completed blocks and 725 prior records carrying zero errors or corruption.
+- [ ] **B4.4f — Restart and pass the full qualification.** Treat all three
+  partial results as diagnostics rather than verdicts. First recheck the exact
+  failed high-RTT/loss direct and beamd case on the immutable corrected harness,
+  then start a fresh counterbalanced 48-block run and retain complete
+  analyzer-accepted evidence. Do not splice or resume the prior evidence: its
+  manifest binds the old harness and its matrix is incomplete.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   compiled/self-hosted defaults unchanged, run the hosted production session
   in `auto`, validate both directions/WebSockets/reconnect over the real

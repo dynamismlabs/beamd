@@ -52,7 +52,8 @@ directory and never overwrites evidence. It records:
   continuous bulk workers remained live with zero errors or corruption;
 - `metadata.json`: commit, binary hashes (including the recorded `tc`),
   versions, limits, offloads, isolated beamd HOME policy, exact
-  fixture/workload configuration, seeds, order, and handshake policy;
+  fixture/workload configuration, protocol timeout policy, seeds, order, and
+  handshake policy;
 - `traffic-control/tc`: the exact `tc` binary used for every shaped qdisc;
 - `qdisc/`, `effective-config/`, `check-*.json`, and `logs/`: audit inputs;
 - `perf-netem.sh` and `b4_analyze.py`: manifest-hashed copies used for the run
@@ -66,3 +67,9 @@ marked non-qualification and cannot pass the analyzer. The harness supplies
 an empty temporary HOME to every beamd fixture process; do not inject `/root`
 or a developer HOME when running it from systemd or another unattended
 runner.
+
+Protocol operations use a 20-minute deadline by default. The 16 MiB and
+100 MiB `high-rtt-lossy` cases use 60 minutes because a healthy 100 MiB QUIC
+transfer under 500 ms RTT and 1% loss can exceed 20 minutes. This is only a
+hang bound; the analyzer still enforces the same sample counts, performance
+gates, and zero errors/corruption.

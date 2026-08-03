@@ -30,10 +30,11 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
 
 - [ ] **Tunnel performance hardening (A1 shipped; Part B implemented
   default-off).** A1 and the G1 measurement/decision gate are complete. The
-  first full B4 run stopped after locally reproducible TCP/yamux response-tail
-  truncation; its five-minute close correction now passes local normal/race
-  verification. Pass the targeted staging recheck, then restart B4. Permanent
-  product-aware defaults keep
+  two qualification-discovered TCP/yamux corrections passed their targeted
+  staging rechecks. The following matrix cleared both defects and completed 36
+  of 48 blocks before exposing an undersized high-RTT/loss harness deadline;
+  its profile-aware correction awaits the exact targeted recheck and another
+  fresh full run. Permanent product-aware defaults keep
   self-hosted/token on TCP with edge QUIC disabled, while hosted/session
   resolves to `auto` and the hosted edge enables QUIC only after B4
   qualification and the production-link pilot. The single canonical

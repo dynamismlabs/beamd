@@ -19,6 +19,9 @@ MODE=${MODE:-qualification}
 IMAGE_TAG=${IMAGE_TAG:-local}
 MIN_QUALIFICATION_CPUS=2
 MIN_QUALIFICATION_RAM_BYTES=2000000000
+PROTOCOL_TIMEOUT_DEFAULT=20m
+PROTOCOL_TIMEOUT_HIGH_RTT_LOSSY_LARGE=60m
+PROTOCOL_TIMEOUT_HIGH_RTT_LOSSY_LARGE_MIN_BYTES=16777216
 
 usage() {
   cat <<'EOF'
@@ -808,24 +811,35 @@ iterations_for() {
   fi
 }
 
+protocol_timeout_for() {
+  local profile=$1 size=$2
+  if [ "$profile" = high-rtt-lossy ] &&
+    [ "$size" -ge "$PROTOCOL_TIMEOUT_HIGH_RTT_LOSSY_LARGE_MIN_BYTES" ]; then
+    echo "$PROTOCOL_TIMEOUT_HIGH_RTT_LOSSY_LARGE"
+  else
+    echo "$PROTOCOL_TIMEOUT_DEFAULT"
+  fi
+}
+
 direct_addr() {
   if [ "$1" = tcp ]; then echo "$DIRECT_TCP_ADDR"; else echo "$DIRECT_QUIC_ADDR"; fi
 }
 
 run_direct_matrix() {
   local profile=$1 seed=$2 direction=$3 transport=$4 order=$5 order_index=$6
-  local size n status
+  local size n status timeout
   local -a fail_fast_args=()
   if [ "$MODE" = targeted ]; then
     fail_fast_args=(--fail-fast)
   fi
   for size in "${PROTOCOL_SIZES[@]}"; do
     n=$(iterations_for "$profile" "$size")
+    timeout=$(protocol_timeout_for "$profile" "$size")
     if ip netns exec "$AGENT_NS" "$BINDIR/directclient" \
         --transport "$transport" --addr "$(direct_addr "$transport")" \
         --server-name direct.perf.local --ca "$WORK/direct.crt" --insecure \
         --dir "$direction" --size "$size" --n "$n" --warmup "$PROTOCOL_WARMUP" \
-        --profile "$profile" --timeout 20m "${fail_fast_args[@]}" |
+        --profile "$profile" --timeout "$timeout" "${fail_fast_args[@]}" |
         tag_record direct protocol "$seed" "$order" "$order_index" "$PROTOCOL_WARMUP" \
         >> "$OUTDIR/raw-direct.jsonl"; then
       :
@@ -941,7 +955,7 @@ stop_agent() {
 
 run_beamd_protocol() {
   local profile=$1 seed=$2 direction=$3 transport=$4 order=$5 order_index=$6
-  local size n status concurrency=1
+  local size n status timeout concurrency=1
   local -a fail_fast_args=()
   if [ "$MODE" = targeted ]; then
     fail_fast_args=(--fail-fast)
@@ -949,11 +963,12 @@ run_beamd_protocol() {
   fi
   for size in "${PROTOCOL_SIZES[@]}"; do
     n=$(iterations_for "$profile" "$size")
+    timeout=$(protocol_timeout_for "$profile" "$size")
     if ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
         --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
         --size "$size" --dir "$direction" --n "$n" --warmup "$PROTOCOL_WARMUP" \
         --concurrency "$concurrency" --profile "$profile" --transport "$transport" \
-        --timeout 20m --raw "${fail_fast_args[@]}" |
+        --timeout "$timeout" --raw "${fail_fast_args[@]}" |
         tag_record beamd protocol "$seed" "$order" "$order_index" "$PROTOCOL_WARMUP" \
         >> "$OUTDIR/raw-protocol.jsonl"; then
       :
@@ -969,13 +984,15 @@ run_beamd_protocol() {
 
   local eight_n=8
   local eight_warmup=8
+  local eight_timeout
   [ "$MODE" = smoke ] && eight_n=2
   [ "$MODE" = smoke ] && eight_warmup=2
+  eight_timeout=$(protocol_timeout_for "$profile" "$PROTOCOL_MULTI_SIZE")
   ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
     --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
     --size "$PROTOCOL_MULTI_SIZE" --dir "$direction" --n "$eight_n" \
     --warmup "$eight_warmup" --concurrency 8 --profile "$profile" \
-    --transport "$transport" --timeout 20m --raw |
+    --transport "$transport" --timeout "$eight_timeout" --raw |
     tag_record beamd protocol "$seed" "$order" "$order_index" "$eight_warmup" \
     >> "$OUTDIR/raw-protocol.jsonl"
 }
@@ -1384,6 +1401,9 @@ metadata = {
         "interactive_bytes": [4096, 66560],
         "interactive_warmups": int("$MIX_WARMUP"),
         "interactive_samples": int("$MIX_N"),
+        "protocol_timeout_default": "$PROTOCOL_TIMEOUT_DEFAULT",
+        "protocol_timeout_high_rtt_lossy_large": "$PROTOCOL_TIMEOUT_HIGH_RTT_LOSSY_LARGE",
+        "protocol_timeout_high_rtt_lossy_large_min_bytes": int("$PROTOCOL_TIMEOUT_HIGH_RTT_LOSSY_LARGE_MIN_BYTES"),
     },
     "topology": "edge namespace/public client <-> shaped veth <-> agent namespace/backend",
     "public_leg_shaped": False,
@@ -1420,6 +1440,7 @@ metadata = {
             "beamd_concurrency": int("$TARGET_BEAMD_CONCURRENCY_VALUE"),
             "warmups": int("$PROTOCOL_WARMUP"),
             "iterations": int("$(iterations_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")"),
+            "protocol_timeout": "$(protocol_timeout_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")",
         }
         if $TARGETED
         else None
@@ -1476,10 +1497,11 @@ path.write_text(
 )
 PY
   target_iterations=$(iterations_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")
+  target_protocol_timeout=$(protocol_timeout_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")
   if python3 - "$OUTDIR" "${PROFILES[0]}" "${SEEDS[0]}" "${DIRECTIONS[0]}" \
       "${PROTOCOL_SIZES[0]}" "$TARGET_TRANSPORT_ORDER" "$target_iterations" \
       "$PROTOCOL_WARMUP" "$TARGET_BEAMD_CONCURRENCY_VALUE" \
-      "$TARGETED_RUN_STATUS" <<'PY'
+      "$TARGETED_RUN_STATUS" "$target_protocol_timeout" <<'PY'
 import base64
 import datetime
 import hashlib
@@ -1499,6 +1521,7 @@ iterations = int(sys.argv[7])
 warmups = int(sys.argv[8])
 beamd_concurrency = int(sys.argv[9])
 collection_status = int(sys.argv[10])
+protocol_timeout = sys.argv[11]
 issues = []
 
 def check(condition, message):
@@ -1642,6 +1665,7 @@ expected_target_case = {
     "beamd_concurrency": beamd_concurrency,
     "warmups": warmups,
     "iterations": iterations,
+    "protocol_timeout": protocol_timeout,
 }
 metadata_expected = {
     "schema_version": 1,
@@ -1671,6 +1695,19 @@ for field, expected in metadata_expected.items():
     if metadata.get(field) != expected:
         issues.append(
             f"metadata.json: {field}={metadata.get(field)!r}, want {expected!r}"
+        )
+workload = metadata.get("workload")
+expected_timeout_policy = {
+    "protocol_timeout_default": "20m",
+    "protocol_timeout_high_rtt_lossy_large": "60m",
+    "protocol_timeout_high_rtt_lossy_large_min_bytes": 16_777_216,
+}
+check(isinstance(workload, dict), "metadata.json: workload must be an object")
+if isinstance(workload, dict):
+    for field, expected in expected_timeout_policy.items():
+        check(
+            workload.get(field) == expected,
+            f"metadata.json: workload.{field}={workload.get(field)!r}, want {expected!r}",
         )
 check(
     metadata.get("topology")

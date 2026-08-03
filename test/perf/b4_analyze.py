@@ -464,6 +464,9 @@ def load_metadata(root: pathlib.Path) -> dict[str, Any]:
         "interactive_bytes": [4 << 10, 65 << 10],
         "interactive_warmups": 8,
         "interactive_samples": 50,
+        "protocol_timeout_default": "20m",
+        "protocol_timeout_high_rtt_lossy_large": "60m",
+        "protocol_timeout_high_rtt_lossy_large_min_bytes": 16 << 20,
     }
     if not isinstance(workload, dict):
         raise EvidenceError("metadata workload must be an object")
