@@ -5,8 +5,21 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
+
+func TestPrefixSetupTimeoutIsTransportSpecific(t *testing.T) {
+	if got := PrefixSetupTimeout(KindQUIC); got != 5*time.Second {
+		t.Fatalf("QUIC prefix setup timeout = %s, want 5s", got)
+	}
+	if got := PrefixSetupTimeout(KindYamux); got != 60*time.Second {
+		t.Fatalf("yamux prefix setup timeout = %s, want 60s", got)
+	}
+	if got := PrefixSetupTimeout(Kind("unknown")); got != 5*time.Second {
+		t.Fatalf("unknown transport prefix setup timeout = %s, want conservative 5s", got)
+	}
+}
 
 func TestStableErrorCodes(t *testing.T) {
 	tests := map[ErrorCode]uint64{

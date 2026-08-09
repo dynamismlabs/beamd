@@ -41,8 +41,13 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
   high-RTT/loss upload/TCP mixed case exposed the shared five-second
   caller-visible yamux open bound. TCP now has a distinct 60-second bound below
   yamux's 75-second internal timer, and the harness has an exact mixed-target
-  path. Local verification is complete; that targeted staging gate and a fresh
-  matrix are next. Permanent product-aware
+  path. Its first targeted staging recheck completed all eight interactive
+  records cleanly but found three background TCP streams still reaching the
+  agent's five-second name-prefix deadline while the session stayed live.
+  Prefix setup now remains five seconds on QUIC and is 60 seconds on yamux at
+  both peers; backend dial remains five seconds. Local verification is
+  complete; the exact targeted staging gate and a fresh matrix are next.
+  Permanent product-aware
   defaults keep self-hosted/token on TCP with edge QUIC disabled, while
   hosted/session resolves to `auto` and the hosted edge enables QUIC only after
   B4 qualification and the production-link pilot. The single canonical

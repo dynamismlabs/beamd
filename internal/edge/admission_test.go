@@ -123,6 +123,7 @@ func (s *admissionStream) SetWriteDeadline(deadline time.Time) error {
 }
 
 type admissionSession struct {
+	kind        tunnel.Kind
 	stream      tunnel.Stream
 	err         error
 	acceptDelay time.Duration
@@ -135,7 +136,12 @@ type admissionSession struct {
 	closeOnce   sync.Once
 }
 
-func (s *admissionSession) Kind() tunnel.Kind { return tunnel.KindQUIC }
+func (s *admissionSession) Kind() tunnel.Kind {
+	if s.kind == "" {
+		return tunnel.KindQUIC
+	}
+	return s.kind
+}
 func (s *admissionSession) OpenStream(ctx context.Context) (tunnel.Stream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -267,7 +273,7 @@ func newAdmissionEdge(session *admissionSession, streamCapacity, globalCapacity 
 	}
 	sess := &Session{
 		transport:   session,
-		kind:        tunnel.KindQUIC,
+		kind:        session.Kind(),
 		slug:        "slug",
 		streamSlots: make(chan struct{}, streamCapacity),
 	}
@@ -327,34 +333,46 @@ func TestOpenRouteStreamLeaseHeldUntilStreamDone(t *testing.T) {
 }
 
 func TestOpenRouteStreamBoundsAndClearsPrefixWriteDeadline(t *testing.T) {
-	stream := newAdmissionStream()
-	transport := &admissionSession{stream: stream}
-	e, sess := newAdmissionEdge(transport, 1, 1)
-	started := time.Now()
+	tests := []struct {
+		name    string
+		kind    tunnel.Kind
+		timeout time.Duration
+	}{
+		{name: "quic", kind: tunnel.KindQUIC, timeout: 5 * time.Second},
+		{name: "tcp", kind: tunnel.KindYamux, timeout: 60 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := newAdmissionStream()
+			transport := &admissionSession{kind: tc.kind, stream: stream}
+			e, sess := newAdmissionEdge(transport, 1, 1)
+			started := time.Now()
 
-	conn, err := e.openRouteStream(context.Background(), "app.test")
-	if err != nil {
-		t.Fatalf("openRouteStream: %v", err)
-	}
-	stream.mu.Lock()
-	deadlines := append([]time.Time(nil), stream.writeDeadline...)
-	stream.mu.Unlock()
-	if len(deadlines) != 2 {
-		t.Fatalf("prefix write deadline calls = %d, want set then clear", len(deadlines))
-	}
-	if deadlines[0].IsZero() {
-		t.Fatal("prefix write deadline was not bounded")
-	}
-	if elapsed := deadlines[0].Sub(started); elapsed < 4*time.Second || elapsed > 6*time.Second {
-		t.Fatalf("prefix write deadline after %s, want approximately 5s", elapsed)
-	}
-	if !deadlines[1].IsZero() {
-		t.Fatalf("prefix write deadline was not cleared: %v", deadlines[1])
-	}
+			conn, err := e.openRouteStream(context.Background(), "app.test")
+			if err != nil {
+				t.Fatalf("openRouteStream: %v", err)
+			}
+			stream.mu.Lock()
+			deadlines := append([]time.Time(nil), stream.writeDeadline...)
+			stream.mu.Unlock()
+			if len(deadlines) != 2 {
+				t.Fatalf("prefix write deadline calls = %d, want set then clear", len(deadlines))
+			}
+			if deadlines[0].IsZero() {
+				t.Fatal("prefix write deadline was not bounded")
+			}
+			if elapsed := deadlines[0].Sub(started); elapsed < tc.timeout-time.Second || elapsed > tc.timeout+time.Second {
+				t.Fatalf("prefix write deadline after %s, want approximately %s", elapsed, tc.timeout)
+			}
+			if !deadlines[1].IsZero() {
+				t.Fatalf("prefix write deadline was not cleared: %v", deadlines[1])
+			}
 
-	_ = conn.Close()
-	stream.finish()
-	waitAdmissionReleased(t, e, sess)
+			_ = conn.Close()
+			stream.finish()
+			waitAdmissionReleased(t, e, sess)
+		})
+	}
 }
 
 func TestProxyPreservesVisitorCancellation(t *testing.T) {

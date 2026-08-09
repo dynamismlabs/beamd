@@ -3,20 +3,22 @@
 **Status:** A1 shipped. G1 is GO and Part B is implemented default-off. The
 active-data liveness correction passed its exact staging recheck, and the next
 fresh matrix completed 39 of 48 blocks with 796 clean records before block 40
-exposed a distinct TCP/yamux caller-open timeout. Six concurrent 8 MiB uploads
-under 500 ms RTT / 1% loss delayed a new stream SYN beyond the shared
-five-second adapter bound; the adapter then closed the healthy shared session,
-producing one 502 and seven downstream route-loss errors. TCP now has a
-separate 60-second caller bound below yamux's 75-second establishment timer,
-and targeted mode can reproduce the exact frozen mixed workload. Local
-verification is complete; its exact staging recheck and then a fresh complete
-matrix are the remaining B4.4 sequence. Qualification and a production-link pilot still
-gate enabling QUIC for the hosted service. The compiled and self-hosted
-defaults permanently remain TCP with the edge QUIC listener disabled.
+exposed a distinct TCP/yamux caller-open timeout. Candidate `f973b83` corrected
+that bound, and its exact mixed-target staging run completed all eight
+interactive records over QUIC and TCP with zero request errors or corruption.
+The run still failed closed because three background TCP bulk streams reached
+the residual five-second tunnel-name prefix-read deadline; the shared session
+remained healthy. Prefix exchange now keeps QUIC at five seconds, uses 60
+seconds for TCP/yamux on both edge and agent, and leaves the backend dial at
+five seconds. Local verification is complete; the exact mixed-target recheck
+and then a fresh complete matrix are the remaining B4.4 sequence.
+Qualification and a production-link pilot still gate enabling QUIC for the
+hosted service. The compiled and self-hosted defaults permanently remain TCP
+with the edge QUIC listener disabled.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-08-08
+**Last updated:** 2026-08-09
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -855,9 +857,13 @@ counter. Under the shipped configuration this should never happen.
 Bound stream setup:
 
 - the tunnel-name prefix is at most 63 bytes plus `\n`;
-- the edge has five seconds to write the prefix, then clears the deadline;
-- the agent has five seconds to read the complete prefix with a capped
-  64-byte reader, then clears the deadline;
+- on QUIC, the edge has five seconds to write the prefix and the agent has five
+  seconds to read it;
+- on TCP/yamux, both prefix deadlines are 60 seconds because the stream and its
+  prefix share one ordered connection with concurrent bulk data;
+- the edge still honors an earlier public-request deadline, and both sides
+  clear the prefix deadline immediately after success;
+- the agent reads the complete prefix with a capped 64-byte reader;
 - a missing newline, oversized prefix, invalid RFC 1123 label, or unknown name
   aborts the stream;
 - the backend connection uses `net.Dialer.DialContext` with a five-second
@@ -920,7 +926,9 @@ Before `ReverseProxy.Transport.DialContext` opens a stream:
 5. Re-check that the session is still open.
 6. Pass the public request context to `OpenStream`; the adapter applies its
    transport-specific open timeout.
-7. Write the name prefix under its five-second deadline.
+7. Write the name prefix under the transport-specific setup deadline: five
+   seconds for QUIC and 60 seconds for TCP/yamux, shortened by an earlier
+   public-request deadline.
 8. Return a connection whose close starts transport cleanup and whose
    `Done` releases both leases exactly once.
 
@@ -938,6 +946,9 @@ Defaults:
 | Active data streams across edge | 128 |
 | QUIC stream-open timeout | 5 seconds |
 | TCP/yamux stream-open timeout | 60 seconds |
+| QUIC name-prefix setup timeout | 5 seconds |
+| TCP/yamux name-prefix setup timeout | 60 seconds |
+| Local backend dial timeout | 5 seconds |
 
 WebSockets and other upgraded connections hold one lease for their full
 lifetime.
@@ -1463,7 +1474,9 @@ Part B must implement:
   while QUIC key files are missing or malformed, without touching those files;
 - an accept result queued during shutdown is closed rather than dispatched;
 - stale route identity is rejected after lease acquisition;
-- prefix length/read/write deadlines and backend-dial timeout are enforced;
+- prefix length and transport-specific read/write deadlines are enforced,
+  including a yamux prefix delayed beyond the former five-second boundary;
+- the backend-dial timeout remains independently fixed at five seconds;
 - selected transport appears in daemon health and CLI JSON;
 - protocol version mismatch is rejected on both sides;
 - control EOF/error is session-terminal, and a second agent-opened stream is
@@ -2033,7 +2046,25 @@ decision task, not part of A1 completion.
   no raw failures, and complete manifest/qdisc/config/log/memory evidence. Only
   after it passes, start a fresh counterbalanced 48-block run from block one.
   Do not splice or resume prior evidence: its manifest binds an older candidate
-  and its matrix is incomplete.
+  and its matrix is incomplete. The 2026-08-09 attempt on immutable candidate
+  `f973b83fb473ef1dfc6637a3c8a83d5e6968f9da` proved the caller-open correction:
+  all eight QUIC/TCP baseline and under-load interactive records completed with
+  zero request errors or corruption, including the former TCP 4 KiB failure.
+  It did not pass this gate because the final TCP bulk snapshot contained three
+  errors. Agent evidence contained exactly three `invalid name prefix` warnings
+  with `i/o deadline reached`; the edge session remained live throughout, and
+  there were no raw interactive failures, route loss, OOMs, or integrity
+  failures. The exact target must therefore be rerun after B4.4j before starting
+  the full matrix.
+- [x] **B4.4j — Correct the residual TCP prefix-setup deadline locally.** Keep
+  QUIC prefix write/read setup at five seconds, use 60 seconds for TCP/yamux on
+  both the edge and agent, retain an earlier public-request deadline, and keep
+  the local-backend dial independently bounded at five seconds. Prove the edge
+  installs and clears the transport-specific write deadline, the agent accepts
+  a yamux prefix delayed beyond the former five-second boundary and clears its
+  read deadline, and cancellation remains prompt. Completed 2026-08-09: the
+  focused package suites, complete Go suite, internal and end-to-end race
+  suites, vet, analyzer tests, shell syntax, and diff checks pass.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   compiled/self-hosted defaults unchanged, run the hosted production session
   in `auto`, validate both directions/WebSockets/reconnect over the real

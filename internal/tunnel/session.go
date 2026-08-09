@@ -6,6 +6,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -16,6 +17,21 @@ const (
 	KindQUIC  Kind = "quic"
 	KindYamux Kind = "tcp"
 )
+
+const (
+	quicPrefixSetupTimeout  = 5 * time.Second
+	yamuxPrefixSetupTimeout = 60 * time.Second
+)
+
+// PrefixSetupTimeout returns the bounded deadline for exchanging a data
+// stream's tunnel-name prefix. TCP/yamux shares one ordered connection, so a
+// prefix can legitimately sit behind bulk traffic much longer than on QUIC.
+func PrefixSetupTimeout(kind Kind) time.Duration {
+	if kind == KindYamux {
+		return yamuxPrefixSetupTimeout
+	}
+	return quicPrefixSetupTimeout
+}
 
 const (
 	CloseNormal     ErrorCode = 0x00

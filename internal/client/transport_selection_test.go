@@ -1477,9 +1477,77 @@ func runRejectedPrefix(t *testing.T, payload string) {
 	transport.finish()
 }
 
+func TestHandleStreamYamuxPrefixSurvivesFormerFiveSecondDeadline(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	stream := newTrackedPipeStream(local)
+	transport := newSelectionTestSession(tunnel.KindYamux, nil)
+	defer transport.finish()
+	c := newSelectionTestClient("unused", Options{Transport: "tcp"})
+	sess := &session{transport: transport}
+
+	handled := make(chan struct{})
+	started := time.Now()
+	go func() {
+		c.handleStream(sess, stream)
+		close(handled)
+	}()
+
+	deadlineSeen := time.Now().Add(time.Second)
+	var deadlines []time.Time
+	for time.Now().Before(deadlineSeen) {
+		deadlines = stream.readDeadlines()
+		if len(deadlines) > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(deadlines) == 0 {
+		t.Fatal("prefix read did not install a setup deadline")
+	}
+	if elapsed := deadlines[0].Sub(started); elapsed < 59*time.Second || elapsed > 61*time.Second {
+		t.Fatalf("yamux prefix read deadline after %s, want approximately 60s", elapsed)
+	}
+
+	formerDeadline := time.NewTimer(5250 * time.Millisecond)
+	defer formerDeadline.Stop()
+	select {
+	case <-stream.aborted:
+		t.Fatal("yamux prefix read expired at the former five-second deadline")
+	case <-handled:
+		t.Fatal("yamux prefix handler returned before the delayed prefix arrived")
+	case <-formerDeadline.C:
+	}
+
+	writeDone := make(chan struct{})
+	go func() {
+		_, _ = io.WriteString(peer, "missing\n")
+		close(writeDone)
+	}()
+	select {
+	case <-stream.aborted:
+	case <-time.After(time.Second):
+		t.Fatal("unknown delayed prefix did not abort stream after it was read")
+	}
+	select {
+	case <-handled:
+	case <-time.After(time.Second):
+		t.Fatal("handleStream did not return after reading delayed prefix")
+	}
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("delayed prefix writer did not exit")
+	}
+	deadlines = stream.readDeadlines()
+	if len(deadlines) < 2 || !deadlines[len(deadlines)-1].IsZero() {
+		t.Fatal("delayed prefix read did not clear its setup deadline")
+	}
+}
+
 func TestDialLocalBackendUsesBoundedContext(t *testing.T) {
-	if streamSetupTimeout != 5*time.Second {
-		t.Fatalf("stream setup timeout = %s, want 5s", streamSetupTimeout)
+	if backendDialTimeout != 5*time.Second {
+		t.Fatalf("backend dial timeout = %s, want 5s", backendDialTimeout)
 	}
 	const testTimeout = 20 * time.Millisecond
 	started := time.Now()

@@ -1947,7 +1947,7 @@ func (e *Edge) openRouteStreamForRoute(
 	releaseBeforeStream = false
 	watcherReserved = false
 
-	prefixDeadline := time.Now().Add(5 * time.Second)
+	prefixDeadline := time.Now().Add(tunnel.PrefixSetupTimeout(route.session.kind))
 	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(prefixDeadline) {
 		prefixDeadline = callerDeadline
 	}

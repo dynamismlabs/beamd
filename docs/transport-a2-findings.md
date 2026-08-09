@@ -1,6 +1,6 @@
 # Transport A2 — findings, research, and Part B handoff
 
-**Date:** 2026-07-24 → 25
+**Date:** 2026-07-24 → 2026-08-09
 **Status:** **APPROVED / GO** — the operator approved implementing Part B
 (QUIC) behind a default-off flag. A1 shipped and Part B is implemented. The
 first full B4 run exposed a separate TCP/yamux graceful-close regression; its
@@ -20,8 +20,13 @@ fresh matrix completed 39 of 48 blocks with 796 clean records before a new
 mixed-load TCP stream SYN remained blocked beyond the shared five-second caller
 bound and the adapter closed the healthy session. TCP/yamux now uses a separate
 60-second caller-visible open bound below its 75-second internal establishment
-timer, and the harness can target the exact frozen mixed workload. Hosted
-activation remains gated on the exact recheck, a fresh complete B4
+timer, and the harness can target the exact frozen mixed workload. Its exact
+recheck completed all eight interactive records cleanly but exposed one more
+downstream bound: three background TCP streams reached the agent's five-second
+tunnel-name prefix-read deadline while the shared session remained alive.
+Prefix exchange now keeps QUIC at five seconds and uses 60 seconds for yamux on
+both edge and agent; backend dial remains five seconds. Hosted activation
+remains gated on the exact recheck, a fresh complete B4
 qualification and the production-link pilot; the self-hosted defaults
 permanently remain TCP with edge QUIC disabled.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
@@ -95,6 +100,17 @@ permanently remain TCP with edge QUIC disabled.
   route removal. Keep QUIC at five seconds; use 60 seconds for yamux so
   legitimate TCP head-of-line delay fits while the adapter still expires before
   yamux's 75-second internal timer.
+- **The exact caller-open recheck passed every interactive case and exposed a
+  residual prefix bound.** Immutable candidate `f973b83` completed the four
+  baseline/under-load records per transport, including all TCP 4 KiB and 65 KiB
+  warm-ups and 50 measured iterations, with zero request errors or corruption.
+  The final TCP bulk snapshot nevertheless failed with exactly three background
+  errors, matching three agent `invalid name prefix: i/o deadline reached`
+  warnings. The session stayed live through the entire TCP stage, so this was
+  the name-prefix read deadline after successful stream open, not another open,
+  heartbeat, route, kernel, or capacity failure. Keep QUIC prefix setup at five
+  seconds, use 60 seconds for yamux prefix write/read on both peers, and retain
+  the independent five-second local-backend dial bound.
 
 ---
 
@@ -254,11 +270,12 @@ Caveats (carry these into B4):
 
 **Pending / optional:**
 - Deploy one immutable candidate with the locally verified transport-specific
-  yamux caller bound and mixed-target harness, then rerun the exact
-  high-rtt-lossy/seed-101/upload frozen mixed workload over QUIC then TCP. Only
-  if it passes, restart the full B4 matrix from block one. The prior 39-block
-  evidence cannot be resumed into a verdict because its manifest binds the old
-  candidate and the analyzer requires one complete immutable matrix.
+  yamux caller and prefix-setup bounds plus the mixed-target harness, then
+  rerun the exact high-rtt-lossy/seed-101/upload frozen mixed workload over QUIC
+  then TCP. Only if it passes, restart the full B4 matrix from block one. The
+  prior 39-block evidence cannot be resumed into a verdict because its manifest
+  binds the old candidate and the analyzer requires one complete immutable
+  matrix.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation

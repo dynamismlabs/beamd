@@ -47,7 +47,7 @@ const (
 	candidateTimeout         = 5 * time.Second
 	candidateCleanupTimeout  = time.Second
 	quicReprobeInterval      = 10 * time.Minute
-	streamSetupTimeout       = 5 * time.Second
+	backendDialTimeout       = 5 * time.Second
 	maxStreamHandlers        = 64
 )
 
@@ -1211,7 +1211,7 @@ func (c *Client) acceptStreamsLoop(s *session) {
 }
 
 func (c *Client) handleStream(s *session, stream tunnel.Stream) {
-	_ = stream.SetReadDeadline(time.Now().Add(streamSetupTimeout))
+	_ = stream.SetReadDeadline(time.Now().Add(tunnel.PrefixSetupTimeout(s.transport.Kind())))
 	br := bufio.NewReaderSize(stream, 64)
 	line, err := br.ReadSlice('\n')
 	if err != nil || len(line) == 0 || len(line) > 64 {
@@ -1237,7 +1237,7 @@ func (c *Client) handleStream(s *session, stream tunnel.Stream) {
 	}
 
 	var dialer net.Dialer
-	backend, err := dialLocalBackend(streamSetupTimeout, port, dialer.DialContext)
+	backend, err := dialLocalBackend(backendDialTimeout, port, dialer.DialContext)
 	if err != nil {
 		slog.Warn("stream: dial backend", "name", name, "err", err.Error())
 		stream.Abort(tunnel.StreamCanceled)
