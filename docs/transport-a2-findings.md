@@ -15,8 +15,13 @@ then exposed a distinct edge liveness bug: TCP head-of-line blocking delayed
 the control heartbeat while a data stream was actively transferring, and the
 edge closed it at 60 seconds. Successful authenticated stream I/O now refreshes
 session activity without allowing a merely open stalled stream to mask an idle
-session; that correction is verified locally and awaits the exact targeted
-staging recheck. Hosted activation remains gated on a fresh complete B4
+session; that correction passed its exact targeted staging recheck. The next
+fresh matrix completed 39 of 48 blocks with 796 clean records before a new
+mixed-load TCP stream SYN remained blocked beyond the shared five-second caller
+bound and the adapter closed the healthy session. TCP/yamux now uses a separate
+60-second caller-visible open bound below its 75-second internal establishment
+timer, and the harness can target the exact frozen mixed workload. Hosted
+activation remains gated on the exact recheck, a fresh complete B4
 qualification and the production-link pilot; the self-hosted defaults
 permanently remain TCP with edge QUIC disabled.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
@@ -57,9 +62,10 @@ permanently remain TCP with edge QUIC disabled.
   shared TCP session. Five seconds is unsafe when eight bulk streams and loss
   delay that ACK through head-of-line blocking. The failure began during the
   discarded warm-up batch, then appeared only as eight measured edge 404s
-  after the route vanished. Keep beamd's independent five-second caller bound,
-  restore the internal ACK timer to 75 seconds, retain warm-up evidence, and
-  pass the exact concurrent targeted recheck before another full run. This
+  after the route vanished. At that stage, beamd kept its independent
+  five-second caller bound, restored the internal ACK timer to 75 seconds,
+  retained warm-up evidence, and passed the exact concurrent targeted recheck
+  before another full run. This
   also does not change the A2/QUIC decision.
 - **That correction passed, and the next full run found a harness limit rather
   than another product defect.** The run cleared both former failure points and
@@ -79,6 +85,16 @@ permanently remain TCP with edge QUIC disabled.
   successful authenticated stream I/O must also refresh the session activity
   timer. An open stream by itself remains insufficient, preserving the idle
   close for dead or stalled sessions.
+- **The liveness correction passed, and the next full run found a distinct
+  caller-visible yamux open bound.** Candidate `372a88f` passed the exact
+  100 MiB high-RTT/loss target over direct and beamd QUIC/TCP. The fresh run
+  then completed 39 blocks and 796 clean records. In block 40, six concurrent
+  8 MiB TCP uploads delayed a new 4 KiB mixed-load stream SYN beyond the shared
+  five-second adapter timeout. The adapter deliberately closed yamux to join
+  the otherwise uncancelable open, yielding one 502 and seven later 404s after
+  route removal. Keep QUIC at five seconds; use 60 seconds for yamux so
+  legitimate TCP head-of-line delay fits while the adapter still expires before
+  yamux's 75-second internal timer.
 
 ---
 
@@ -237,13 +253,12 @@ Caveats (carry these into B4):
   hosted activation.
 
 **Pending / optional:**
-- Deploy one immutable candidate carrying the profile-aware deadline and
-  data-activity liveness corrections, rerun the exact
-  high-rtt-lossy/seed-101/download/100 MiB direct-and-beamd TCP/QUIC staging
-  case, then restart the full B4 matrix from block one only if it passes. The
-  prior 36-block evidence cannot be resumed into a verdict because its manifest
-  binds the old harness and the analyzer requires one complete immutable
-  matrix.
+- Deploy one immutable candidate with the locally verified transport-specific
+  yamux caller bound and mixed-target harness, then rerun the exact
+  high-rtt-lossy/seed-101/upload frozen mixed workload over QUIC then TCP. Only
+  if it passes, restart the full B4 matrix from block one. The prior 39-block
+  evidence cannot be resumed into a verdict because its manifest binds the old
+  candidate and the analyzer requires one complete immutable matrix.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation

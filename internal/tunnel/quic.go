@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	ALPNQUIC = "beamd-quic/1"
-	QUICALPN = ALPNQUIC // compatibility alias for early transport callers
+	ALPNQUIC              = "beamd-quic/1"
+	QUICALPN              = ALPNQUIC // compatibility alias for early transport callers
+	quicStreamOpenTimeout = 5 * time.Second
 )
 
 var errNoResolvedAddresses = errors.New("resolver returned no addresses")
@@ -112,7 +113,7 @@ func newQUICSession(conn quicSessionConn) *QUICSession {
 	s := &QUICSession{
 		raw:         conn,
 		state:       newSessionState(),
-		openTimeout: streamOpenTimeout,
+		openTimeout: quicStreamOpenTimeout,
 	}
 	go s.watch()
 	return s
@@ -123,7 +124,7 @@ func (s *QUICSession) Kind() Kind { return KindQUIC }
 func (s *QUICSession) OpenStream(ctx context.Context) (Stream, error) {
 	timeout := s.openTimeout
 	if timeout <= 0 {
-		timeout = streamOpenTimeout
+		timeout = quicStreamOpenTimeout
 	}
 	openCtx, cancel := context.WithTimeoutCause(ctx, timeout, ErrOpenTimeout)
 	defer cancel()

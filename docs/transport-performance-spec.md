@@ -1,23 +1,22 @@
 # Beamd Transport Performance — Specification and Task Checklist
 
-**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. Both
-qualification-discovered TCP/yamux corrections are confirmed on staging. The
-next fresh matrix cleared those failure points and completed 36 of 48 blocks
-with 725 error-free records, then exposed a qualification-harness deadline that
-was too short for a 100 MiB direct-QUIC transfer under the 500 ms RTT / 1% loss
-profile. Its exact targeted recheck confirmed the longer deadline on direct and
-beamd QUIC plus direct TCP, then exposed a separate edge liveness bug: the
-60-second control-heartbeat watchdog killed an actively transferring TCP/yamux
-session because its heartbeat was head-of-line blocked behind bulk data. The
-data-activity liveness correction is verified locally; its exact targeted
-staging recheck precedes another fresh full run. Qualification and a
-production-link pilot still gate enabling QUIC for the hosted service. The
-compiled and self-hosted defaults permanently remain TCP with the edge QUIC
-listener disabled.
+**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. The
+active-data liveness correction passed its exact staging recheck, and the next
+fresh matrix completed 39 of 48 blocks with 796 clean records before block 40
+exposed a distinct TCP/yamux caller-open timeout. Six concurrent 8 MiB uploads
+under 500 ms RTT / 1% loss delayed a new stream SYN beyond the shared
+five-second adapter bound; the adapter then closed the healthy shared session,
+producing one 502 and seven downstream route-loss errors. TCP now has a
+separate 60-second caller bound below yamux's 75-second establishment timer,
+and targeted mode can reproduce the exact frozen mixed workload. Local
+verification is complete; its exact staging recheck and then a fresh complete
+matrix are the remaining B4.4 sequence. Qualification and a production-link pilot still
+gate enabling QUIC for the hosted service. The compiled and self-hosted
+defaults permanently remain TCP with the edge QUIC listener disabled.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-08
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -706,16 +705,20 @@ data-stream I/O. Running yamux keepalives as well is redundant and can leave a
 session transport-alive while its control stream is unusable.
 
 The 75-second stream-establishment value is the upstream yamux default and is
-distinct from the adapter's caller-visible five-second `OpenStream` bound.
+distinct from the adapter's caller-visible 60-second `OpenStream` bound.
 yamux starts this timer after sending a stream SYN, waits for the peer's ACK,
 and closes the entire session on expiry. The ACK shares one TCP ordering domain
 with bulk stream data. A five-second library timer therefore tears down a
 healthy session when loss and concurrent bulk data delay the ACK through
 head-of-line blocking; this reproduced in the second staging qualification at
-concurrency eight. Retain the 75-second library timer, keep the independent
-five-second adapter call bound below, capture expiry as `ErrOpenTimeout` before
-session teardown wins the terminal-cause race, and emit a fixed-cardinality
-structured warning with `event=yamux_stream_open_timeout transport=tcp`.
+concurrency eight. A later qualification proved that the caller-visible open
+can also remain blocked beyond five seconds while six bulk streams occupy the
+same lossy high-RTT TCP connection. Retain the 75-second library timer and use
+a separate 60-second adapter call bound: it is above the legitimate observed
+delay but remains below the library timer, so the adapter still captures
+`ErrOpenTimeout`, closes the session, and joins the stuck open before yamux's
+asynchronous teardown wins. Emit a fixed-cardinality structured warning with
+`event=yamux_stream_open_timeout transport=tcp` for the library expiry.
 
 The five-minute close value is a correctness boundary, not a liveness
 interval. `yamux.Stream.Close` starts this timer after an ordinary FIN; expiry
@@ -735,7 +738,9 @@ yamux does not offer a context-aware open operation. Its 75-second
 the entire session asynchronously if the peer never acknowledges; it does not
 bound the `OpenStream` call itself. The adapter must therefore:
 
-1. Derive the same adapter-owned five-second timeout described in Section 7.2.
+1. Derive an adapter-owned 60-second timeout. This is intentionally distinct
+   from QUIC's five-second bound in Section 7.2 and below yamux's 75-second
+   stream-establishment timer.
 2. Acquire an adapter-local 64-slot gate using that context. If acquisition is
    canceled, return the correct caller or adapter timeout without touching the
    session.
@@ -914,7 +919,7 @@ Before `ReverseProxy.Transport.DialContext` opens a stream:
    session, and name captured in step 1; reject a stale route.
 5. Re-check that the session is still open.
 6. Pass the public request context to `OpenStream`; the adapter applies its
-   own five-second open timeout.
+   transport-specific open timeout.
 7. Write the name prefix under its five-second deadline.
 8. Return a connection whose close starts transport cleanup and whose
    `Done` releases both leases exactly once.
@@ -931,7 +936,8 @@ Defaults:
 | --- | ---: |
 | Active data streams per session | 64 |
 | Active data streams across edge | 128 |
-| Stream-open timeout | 5 seconds |
+| QUIC stream-open timeout | 5 seconds |
+| TCP/yamux stream-open timeout | 60 seconds |
 
 WebSockets and other upgraded connections hold one lease for their full
 lifetime.
@@ -1426,6 +1432,8 @@ Part B must implement:
 - an early backend response with a deliberately blocked request-body writer
   proves QUIC `Close` unblocks and never races an in-flight `Write`;
 - QUIC stream-open timeout normalization;
+- yamux stream open survives a locally blocked SYN beyond the former
+  five-second caller bound, then completes without closing the shared session;
 - a blocking DNS resolver is bounded by the one full candidate context,
   numeric dialing retains the original SNI, multiple resolved addresses share
   one budget, and failed address attempts leak no UDP sockets;
@@ -1680,8 +1688,11 @@ console log instead of being represented as serial request records.
 `MODE=targeted` is the reusable incident-recheck path. It retains the clean
 manifest, deterministic `tc`, isolated HOME, host-resource, topology, qdisc,
 configuration, log, and checksum requirements, but runs exactly one profile,
-seed, direction, and payload through the direct fixture and beamd for both
-ordered transports. It writes `targeted-summary.json` and exits without
+seed, direction, and workload for both ordered transports. Protocol targets
+run one payload through the direct fixture and beamd. Mixed targets run the
+frozen beamd baseline and under-load cases at both interactive sizes with the
+same six-stream bulk load used by qualification; a direct mixed fixture does
+not exist. It writes `targeted-summary.json` and exits without
 invoking the full B4 analyzer; targeted evidence can establish a cause/fix but
 can never substitute for the complete qualification. Reusing a seed reproduces
 the same impairment parameters, not the same packet-loss trace: transport
@@ -1698,6 +1709,7 @@ remains nonzero. Its inputs are:
 TARGET_PROFILE=lossy
 TARGET_SEED=101
 TARGET_DIRECTION=download
+TARGET_WORKLOAD=protocol
 TARGET_SIZE_BYTES=104857600
 TARGET_TRANSPORTS="tcp quic"
 TARGET_BEAMD_CONCURRENCY=1
@@ -1706,9 +1718,26 @@ TARGET_ITERATIONS=5
 ```
 
 The direct fixture remains concurrency one. `TARGET_BEAMD_CONCURRENCY` accepts
-1 through 64; omitting `TARGET_ITERATIONS` retains the normal size/profile
-matrix count. Targeted metadata and verification must bind all three values so
-a serial causal recheck cannot be mistaken for a concurrent regression test.
+1 through 64 for protocol targets; omitting `TARGET_ITERATIONS` retains the
+normal size/profile matrix count. With `TARGET_WORKLOAD=mixed`, payload size and
+beamd protocol concurrency do not apply; the harness binds the frozen 4 KiB and
+65 KiB interactive sizes, concurrency-one probes, six 8 MiB bulk streams, and
+five-second ramp, while `TARGET_WARMUPS` and `TARGET_ITERATIONS` select the
+interactive batches. Targeted metadata and verification bind every applicable
+value so a serial protocol recheck cannot be mistaken for a mixed-load
+regression test.
+
+The block-40 incident recheck is:
+
+```text
+TARGET_WORKLOAD=mixed
+TARGET_PROFILE=high-rtt-lossy
+TARGET_SEED=101
+TARGET_DIRECTION=upload
+TARGET_TRANSPORTS="quic tcp"
+TARGET_WARMUPS=8
+TARGET_ITERATIONS=50
+```
 
 The netem suite is a manual or scheduled privileged job, not a required
 unprivileged pull-request job. Passing it is necessary but not sufficient for
@@ -1976,12 +2005,35 @@ decision task, not part of A1 completion.
   2026-08-03 with repeated focused and race regressions, the edge suite, the
   complete Go suite, serial broad race suite, vet, analyzer tests, syntax, and
   diff checks passing.
-- [ ] **B4.4g — Restart and pass the full qualification.** Treat all prior
-  partial results as diagnostics rather than verdicts. First rerun the exact
-  failed high-RTT/loss direct and beamd case on one immutable candidate carrying
-  both corrections, then start a fresh counterbalanced 48-block run and retain
-  complete analyzer-accepted evidence. Do not splice or resume prior evidence:
-  its manifest binds an older candidate and its matrix is incomplete.
+- [x] **B4.4g — Confirm active-data liveness and restart qualification.** On
+  immutable candidate `372a88f03f8247b0c45bac928ca21ae32a47de90`, the exact
+  high-rtt-lossy/seed-101/download/100 MiB target passed direct and beamd over
+  both QUIC and TCP. The fresh matrix then completed 39 blocks and retained 796
+  successful records with zero errors or corruption. Block 40's
+  high-rtt-lossy/seed-101/upload/TCP mixed case failed during the second 4 KiB
+  under-load warm-up: the first warm-up took 25.97 seconds, the next stream open
+  reached the shared five-second adapter bound and returned 502, and the closed
+  session made the remaining requests return 404. There was no OOM, resource
+  pressure, corruption, heartbeat expiry, or kernel fault.
+- [x] **B4.4h — Correct the TCP caller-open bound and mixed-target gap locally.**
+  Keep QUIC at five seconds. Give TCP/yamux a separate 60-second caller-visible
+  bound, still below yamux's 75-second internal establishment timer so stuck
+  opens retain adapter-owned terminal cause and join-safe teardown. Prove a
+  locally blocked yamux SYN survives beyond the former five-second bound and
+  the session remains usable. Extend `MODE=targeted` to bind and fail closed on
+  the frozen mixed workload over both ordered transports without claiming a B4
+  verdict. Completed 2026-08-08: the focused regression, complete Go suite,
+  focused and serial full race suites, vet, analyzer tests, embedded Python and
+  shell syntax, and diff checks pass.
+- [ ] **B4.4i — Confirm the mixed correction and restart the full
+  qualification.** On one immutable candidate, run the exact
+  high-rtt-lossy/seed-101/upload mixed workload with eight warm-ups and 50
+  measured requests per interactive case over QUIC then TCP. Require all four
+  baseline/under-load records per transport, live error-free bulk snapshots,
+  no raw failures, and complete manifest/qdisc/config/log/memory evidence. Only
+  after it passes, start a fresh counterbalanced 48-block run from block one.
+  Do not splice or resume prior evidence: its manifest binds an older candidate
+  and its matrix is incomplete.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   compiled/self-hosted defaults unchanged, run the hosted production session
   in `auto`, validate both directions/WebSockets/reconnect over the real

@@ -36,8 +36,13 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
   its profile-aware correction let the exact targeted recheck advance through
   direct and beamd QUIC plus direct TCP, where the beamd-TCP stage exposed a
   60-second heartbeat timeout despite active data transfer. The narrow
-  data-activity liveness correction is locally verified and awaits the same
-  targeted recheck before another fresh full run. Permanent product-aware
+  data-activity liveness correction passed that exact targeted recheck, and the
+  next matrix completed 39 of 48 blocks with 796 clean records before its
+  high-RTT/loss upload/TCP mixed case exposed the shared five-second
+  caller-visible yamux open bound. TCP now has a distinct 60-second bound below
+  yamux's 75-second internal timer, and the harness has an exact mixed-target
+  path. Local verification is complete; that targeted staging gate and a fresh
+  matrix are next. Permanent product-aware
   defaults keep self-hosted/token on TCP with edge QUIC disabled, while
   hosted/session resolves to `auto` and the hosted edge enables QUIC only after
   B4 qualification and the production-link pilot. The single canonical

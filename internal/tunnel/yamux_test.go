@@ -73,6 +73,19 @@ func TestYamuxConfigPartBHardening(t *testing.T) {
 	if cfg.StreamOpenTimeout != 75*time.Second {
 		t.Errorf("StreamOpenTimeout = %v, want 75s", cfg.StreamOpenTimeout)
 	}
+	if yamuxStreamOpenTimeout != 60*time.Second {
+		t.Errorf("yamuxStreamOpenTimeout = %v, want 60s", yamuxStreamOpenTimeout)
+	}
+	if quicStreamOpenTimeout != 5*time.Second {
+		t.Errorf("quicStreamOpenTimeout = %v, want 5s", quicStreamOpenTimeout)
+	}
+	if yamuxStreamOpenTimeout >= cfg.StreamOpenTimeout {
+		t.Errorf(
+			"yamuxStreamOpenTimeout = %v, must remain below raw establishment timeout %v",
+			yamuxStreamOpenTimeout,
+			cfg.StreamOpenTimeout,
+		)
+	}
 	if cfg.StreamCloseTimeout != 5*time.Minute {
 		t.Errorf("StreamCloseTimeout = %v, want 5m", cfg.StreamCloseTimeout)
 	}
@@ -173,7 +186,7 @@ func TestYamuxStreamACKMayArriveAfterAdapterOpenBound(t *testing.T) {
 	select {
 	case <-client.Done():
 		t.Fatal("yamux session closed before the former stream-ACK timeout")
-	case <-time.After(streamOpenTimeout + 250*time.Millisecond):
+	case <-time.After(quicStreamOpenTimeout + 250*time.Millisecond):
 	}
 	if client.IsClosed() || server.IsClosed() {
 		t.Fatal("yamux session did not survive a delayed stream ACK")
@@ -186,6 +199,63 @@ func TestYamuxStreamACKMayArriveAfterAdapterOpenBound(t *testing.T) {
 	}
 	clientStream.Abort(StreamCanceled)
 	result.stream.Abort(StreamCanceled)
+}
+
+func TestYamuxOpenSurvivesFormerFiveSecondCallerBound(t *testing.T) {
+	left, right := net.Pipe()
+	gatedClientConn := newGatedWriteYamuxConn(left)
+	client, err := NewYamuxClient(gatedClientConn, 0)
+	if err != nil {
+		t.Fatalf("NewYamuxClient: %v", err)
+	}
+	server, err := NewYamuxServer(right, 0)
+	if err != nil {
+		t.Fatalf("NewYamuxServer: %v", err)
+	}
+	t.Cleanup(func() {
+		gatedClientConn.releaseWrites()
+		_ = client.CloseWithError(CloseNormal, "test cleanup")
+		_ = server.CloseWithError(CloseNormal, "test cleanup")
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	type streamResult struct {
+		stream Stream
+		err    error
+	}
+	opened := make(chan streamResult, 1)
+	accepted := make(chan streamResult, 1)
+	go func() {
+		stream, err := client.OpenStream(ctx)
+		opened <- streamResult{stream: stream, err: err}
+	}()
+	go func() {
+		stream, err := server.AcceptStream(ctx)
+		accepted <- streamResult{stream: stream, err: err}
+	}()
+
+	awaitClosed(t, gatedClientConn.writeStarted, "client stream SYN")
+	select {
+	case result := <-opened:
+		t.Fatalf("OpenStream returned before the delayed SYN was released: %v", result.err)
+	case <-time.After(quicStreamOpenTimeout + 250*time.Millisecond):
+	}
+	if client.IsClosed() || server.IsClosed() {
+		t.Fatal("yamux session did not survive beyond the former caller-visible bound")
+	}
+
+	gatedClientConn.releaseWrites()
+	openResult := <-opened
+	if openResult.err != nil {
+		t.Fatalf("OpenStream after releasing SYN: %v", openResult.err)
+	}
+	acceptResult := <-accepted
+	if acceptResult.err != nil {
+		t.Fatalf("AcceptStream after releasing SYN: %v", acceptResult.err)
+	}
+	openResult.stream.Abort(StreamCanceled)
+	acceptResult.stream.Abort(StreamCanceled)
 }
 
 func newTestYamuxCompletionStream() *yamuxStream {

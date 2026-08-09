@@ -17,7 +17,11 @@ import (
 const (
 	DefaultStreamWindow = 4 << 20
 	yamuxStreamLimit    = 64
-	streamOpenTimeout   = 5 * time.Second
+	// A local yamux stream SYN shares the TCP ordering domain with all bulk
+	// data. Under the frozen high-RTT/loss mixed workload it can legitimately
+	// remain blocked beyond the QUIC open bound. Keep this below yamux's own
+	// establishment timer so the adapter still owns and joins a stuck open.
+	yamuxStreamOpenTimeout = 60 * time.Second
 	// yamux's StreamOpenTimeout is not the caller-visible OpenStream bound.
 	// It waits for the peer's stream ACK and closes the entire session when it
 	// expires. The ACK shares the TCP connection with bulk stream data, so it
@@ -106,7 +110,7 @@ func newYamuxSession(conn net.Conn, windowBytes uint32, server bool) (*YamuxSess
 	s := &YamuxSession{
 		state:       newSessionState(),
 		gate:        make(chan struct{}, yamuxStreamLimit),
-		openTimeout: streamOpenTimeout,
+		openTimeout: yamuxStreamOpenTimeout,
 	}
 	observed := &observedConn{Conn: conn, onError: s.observeConnError}
 	cfg := YamuxConfig(windowBytes)
@@ -133,7 +137,7 @@ func (s *YamuxSession) Kind() Kind { return KindYamux }
 func (s *YamuxSession) OpenStream(ctx context.Context) (Stream, error) {
 	timeout := s.openTimeout
 	if timeout <= 0 {
-		timeout = streamOpenTimeout
+		timeout = yamuxStreamOpenTimeout
 	}
 	openCtx, cancel := context.WithTimeoutCause(ctx, timeout, ErrOpenTimeout)
 	defer cancel()

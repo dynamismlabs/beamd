@@ -9,7 +9,8 @@
 #
 # Qualification is intentionally privileged and long-running. A smoke mode is
 # available for harness development, and a targeted mode rechecks one exact
-# protocol case without claiming a B4 verdict. Neither can pass the B4 analyzer.
+# protocol or mixed-load case without claiming a B4 verdict. Neither can pass
+# the B4 analyzer.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -35,15 +36,16 @@ Environment:
   OUTDIR=/path           new evidence directory (run only)
   MODE=qualification     full, fail-closed run (default)
   MODE=smoke             reduced harness check; never valid B4 evidence
-  MODE=targeted          one protocol case over direct + beamd TCP/QUIC
+  MODE=targeted          one protocol or mixed-load case over TCP/QUIC
   TC_BIN=/absolute/path  tc with deterministic netem seed support
   NETEM_SEEDS="101 202 303"
   TARGET_PROFILE=lossy               (targeted only)
   TARGET_SEED=101                     (targeted only)
   TARGET_DIRECTION=download          (targeted only)
-  TARGET_SIZE_BYTES=104857600         (targeted only)
+  TARGET_WORKLOAD=protocol            (targeted only; protocol|mixed)
+  TARGET_SIZE_BYTES=104857600         (targeted protocol only)
   TARGET_TRANSPORTS="tcp quic"        (targeted only)
-  TARGET_BEAMD_CONCURRENCY=1          (targeted only; 1..64)
+  TARGET_BEAMD_CONCURRENCY=1          (targeted protocol only; 1..64)
   TARGET_WARMUPS=5                    (targeted only)
   TARGET_ITERATIONS=                  (targeted only; matrix default when empty)
   GOMEMLIMIT=1400MiB
@@ -527,6 +529,9 @@ fi
 TARGET_BEAMD_CONCURRENCY_VALUE=1
 TARGET_WARMUPS_VALUE=5
 TARGET_ITERATIONS_VALUE=
+TARGET_WORKLOAD_VALUE=protocol
+TARGET_STAGE_SIZE_VALUE=none
+TARGET_CASE_WARMUPS=0
 if [ "$MODE" = qualification ]; then
   PROFILES=(clean lossy high-rtt-clean high-rtt-lossy)
   read -r -a SEEDS <<< "${NETEM_SEEDS:-101 202 303}"
@@ -544,7 +549,7 @@ elif [ "$MODE" = targeted ]; then
   PROFILES=("${TARGET_PROFILE:-lossy}")
   SEEDS=("${TARGET_SEED:-101}")
   DIRECTIONS=("${TARGET_DIRECTION:-download}")
-  PROTOCOL_SIZES=("${TARGET_SIZE_BYTES:-104857600}")
+  TARGET_WORKLOAD_VALUE=${TARGET_WORKLOAD:-protocol}
   TARGET_BEAMD_CONCURRENCY_VALUE=${TARGET_BEAMD_CONCURRENCY:-1}
   TARGET_WARMUPS_VALUE=${TARGET_WARMUPS:-5}
   TARGET_ITERATIONS_VALUE=${TARGET_ITERATIONS:-}
@@ -567,24 +572,43 @@ elif [ "$MODE" = targeted ]; then
     download|upload) ;;
     *) echo "invalid TARGET_DIRECTION: ${DIRECTIONS[0]}" >&2; exit 2 ;;
   esac
-  [[ "${PROTOCOL_SIZES[0]}" =~ ^[1-9][0-9]*$ ]] ||
-    { echo "TARGET_SIZE_BYTES must be a positive integer" >&2; exit 2; }
-  [[ "$TARGET_BEAMD_CONCURRENCY_VALUE" =~ ^[1-9][0-9]*$ ]] &&
-    [ "$TARGET_BEAMD_CONCURRENCY_VALUE" -le 64 ] ||
-    { echo "TARGET_BEAMD_CONCURRENCY must be an integer from 1 through 64" >&2; exit 2; }
+  case "$TARGET_WORKLOAD_VALUE" in
+    protocol|mixed) ;;
+    *) echo "TARGET_WORKLOAD must be protocol or mixed" >&2; exit 2 ;;
+  esac
   [[ "$TARGET_WARMUPS_VALUE" =~ ^[0-9]+$ ]] ||
     { echo "TARGET_WARMUPS must be a non-negative integer" >&2; exit 2; }
   if [ -n "$TARGET_ITERATIONS_VALUE" ]; then
     [[ "$TARGET_ITERATIONS_VALUE" =~ ^[1-9][0-9]*$ ]] ||
       { echo "TARGET_ITERATIONS must be a positive integer when set" >&2; exit 2; }
   fi
-  MIX_N=0
-  MIX_WARMUP=0
-  PROTOCOL_WARMUP=$TARGET_WARMUPS_VALUE
-  PROTOCOL_MULTI_SIZE=0
-  BULK_SIZE=0
-  BULK_N=0
-  BULK_RAMP=0
+  if [ "$TARGET_WORKLOAD_VALUE" = protocol ]; then
+    PROTOCOL_SIZES=("${TARGET_SIZE_BYTES:-104857600}")
+    [[ "${PROTOCOL_SIZES[0]}" =~ ^[1-9][0-9]*$ ]] ||
+      { echo "TARGET_SIZE_BYTES must be a positive integer" >&2; exit 2; }
+    [[ "$TARGET_BEAMD_CONCURRENCY_VALUE" =~ ^[1-9][0-9]*$ ]] &&
+      [ "$TARGET_BEAMD_CONCURRENCY_VALUE" -le 64 ] ||
+      { echo "TARGET_BEAMD_CONCURRENCY must be an integer from 1 through 64" >&2; exit 2; }
+    MIX_N=0
+    MIX_WARMUP=0
+    PROTOCOL_WARMUP=$TARGET_WARMUPS_VALUE
+    PROTOCOL_MULTI_SIZE=0
+    BULK_SIZE=0
+    BULK_N=0
+    BULK_RAMP=0
+    TARGET_STAGE_SIZE_VALUE=${PROTOCOL_SIZES[0]}
+    TARGET_CASE_WARMUPS=$PROTOCOL_WARMUP
+  else
+    PROTOCOL_SIZES=(4096)
+    MIX_N=${TARGET_ITERATIONS_VALUE:-50}
+    MIX_WARMUP=$TARGET_WARMUPS_VALUE
+    PROTOCOL_WARMUP=0
+    PROTOCOL_MULTI_SIZE=0
+    BULK_SIZE=8388608
+    BULK_N=100000
+    BULK_RAMP=5
+    TARGET_CASE_WARMUPS=$MIX_WARMUP
+  fi
 else
   PROFILES=(clean lossy)
   SEEDS=(101)
@@ -709,7 +733,8 @@ record_targeted_stage() {
   local detail=${6:-}
   python3 - "$OUTDIR/targeted-status.jsonl" "$fixture" "$transport" "$outcome" \
     "$exit_status" "$detail" "$profile" "$seed" "$direction" \
-    "${PROTOCOL_SIZES[0]}" "$order" "$order_index" "$PROTOCOL_WARMUP" <<'PY'
+    "$TARGET_STAGE_SIZE_VALUE" "$order" "$order_index" "$TARGET_CASE_WARMUPS" \
+    "$TARGET_WORKLOAD_VALUE" <<'PY'
 import json
 import sys
 
@@ -717,7 +742,7 @@ path = sys.argv[1]
 record = {
     "schema_version": 1,
     "fixture": sys.argv[2],
-    "workload": "protocol",
+    "workload": sys.argv[14],
     "transport": sys.argv[3],
     "outcome": sys.argv[4],
     "exit_status": int(sys.argv[5]),
@@ -725,7 +750,7 @@ record = {
     "profile": sys.argv[7],
     "seed": int(sys.argv[8]),
     "dir": sys.argv[9],
-    "size": int(sys.argv[10]),
+    "size": None if sys.argv[10] == "none" else int(sys.argv[10]),
     "order": sys.argv[11],
     "order_index": int(sys.argv[12]),
     "warmups": int(sys.argv[13]),
@@ -739,8 +764,8 @@ PY
 capture_targeted_memory() {
   local fixture=$1 transport=$2 role=$3 pid=$4 order_index=$5
   python3 - "$OUTDIR/process-memory.jsonl" "$fixture" "$transport" "$role" \
-    "$pid" "$profile" "$seed" "$direction" "${PROTOCOL_SIZES[0]}" \
-    "$order" "$order_index" <<'PY'
+    "$pid" "$profile" "$seed" "$direction" "$TARGET_STAGE_SIZE_VALUE" \
+    "$order" "$order_index" "$TARGET_WORKLOAD_VALUE" <<'PY'
 import datetime
 import hashlib
 import json
@@ -758,9 +783,10 @@ record = {
     "profile": sys.argv[6],
     "seed": int(sys.argv[7]),
     "dir": sys.argv[8],
-    "size": int(sys.argv[9]),
+    "size": None if sys.argv[9] == "none" else int(sys.argv[9]),
     "order": sys.argv[10],
     "order_index": int(sys.argv[11]),
+    "workload": sys.argv[12],
     "captured_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "available": False,
 }
@@ -1000,11 +1026,15 @@ run_beamd_protocol() {
 interactive_case() {
   local profile=$1 seed=$2 direction=$3 transport=$4 order=$5 order_index=$6
   local size=$7 condition=$8
+  local -a fail_fast_args=()
+  if [ "$MODE" = targeted ]; then
+    fail_fast_args=(--fail-fast)
+  fi
   ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
     --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
     --size "$size" --dir "$direction" --n "$MIX_N" --warmup "$MIX_WARMUP" \
     --concurrency 1 --profile "$profile" --transport "$transport" \
-    --timeout 10m --raw |
+    --timeout 10m --raw "${fail_fast_args[@]}" |
     tag_record beamd mixed "$seed" "$order" "$order_index" "$MIX_WARMUP" "$condition" \
     >> "$OUTDIR/raw-mixed.jsonl"
 }
@@ -1065,9 +1095,12 @@ PY
 
 run_mixed() {
   local profile=$1 seed=$2 direction=$3 transport=$4 order=$5 order_index=$6
+  local status
   local bulk_progress="$OUTDIR/bulk-live-$profile-$seed-$direction-$transport.json"
-  interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 4096 baseline
-  interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 66560 baseline
+  interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 4096 baseline ||
+    return $?
+  interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 66560 baseline ||
+    return $?
 
   ip netns exec "$EDGE_NS" "$BINDIR/perfclient" \
     --url "https://$HOST:443" --resolve "$HOST:$EDGE_IP" --insecure \
@@ -1081,29 +1114,69 @@ run_mixed() {
       echo "six-stream bulk load exited during ramp" >&2
       wait "$BULK_PID" 2>/dev/null || true
       BULK_PID=
-      exit 2
+      return 2
     fi
   done
-  snapshot_bulk ramp "$profile" "$seed" "$direction" "$transport" \
-    "$order" "$order_index" "$bulk_progress"
-  interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 4096 underload
-  if ! kill -0 "$BULK_PID" 2>/dev/null; then
-    echo "six-stream bulk load exited during 4 KiB under-load measurement" >&2
+  if snapshot_bulk ramp "$profile" "$seed" "$direction" "$transport" \
+    "$order" "$order_index" "$bulk_progress"; then
+    :
+  else
+    status=$?
+    kill "$BULK_PID" 2>/dev/null || true
     wait "$BULK_PID" 2>/dev/null || true
     BULK_PID=
-    exit 2
+    return "$status"
   fi
-  snapshot_bulk after-4k "$profile" "$seed" "$direction" "$transport" \
-    "$order" "$order_index" "$bulk_progress"
-  interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 66560 underload
-  if ! kill -0 "$BULK_PID" 2>/dev/null; then
-    echo "six-stream bulk load exited during 65 KiB under-load measurement" >&2
+  if interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 4096 underload; then
+    :
+  else
+    status=$?
+    kill "$BULK_PID" 2>/dev/null || true
     wait "$BULK_PID" 2>/dev/null || true
     BULK_PID=
-    exit 2
+    return "$status"
   fi
-  snapshot_bulk after-65k "$profile" "$seed" "$direction" "$transport" \
-    "$order" "$order_index" "$bulk_progress"
+  if ! kill -0 "$BULK_PID" 2>/dev/null; then
+      echo "six-stream bulk load exited during 4 KiB under-load measurement" >&2
+      wait "$BULK_PID" 2>/dev/null || true
+      BULK_PID=
+      return 2
+  fi
+  if snapshot_bulk after-4k "$profile" "$seed" "$direction" "$transport" \
+    "$order" "$order_index" "$bulk_progress"; then
+    :
+  else
+    status=$?
+    kill "$BULK_PID" 2>/dev/null || true
+    wait "$BULK_PID" 2>/dev/null || true
+    BULK_PID=
+    return "$status"
+  fi
+  if interactive_case "$profile" "$seed" "$direction" "$transport" "$order" "$order_index" 66560 underload; then
+    :
+  else
+    status=$?
+    kill "$BULK_PID" 2>/dev/null || true
+    wait "$BULK_PID" 2>/dev/null || true
+    BULK_PID=
+    return "$status"
+  fi
+  if ! kill -0 "$BULK_PID" 2>/dev/null; then
+      echo "six-stream bulk load exited during 65 KiB under-load measurement" >&2
+      wait "$BULK_PID" 2>/dev/null || true
+      BULK_PID=
+      return 2
+  fi
+  if snapshot_bulk after-65k "$profile" "$seed" "$direction" "$transport" \
+    "$order" "$order_index" "$bulk_progress"; then
+    :
+  else
+    status=$?
+    kill "$BULK_PID" 2>/dev/null || true
+    wait "$BULK_PID" 2>/dev/null || true
+    BULK_PID=
+    return "$status"
+  fi
   kill "$BULK_PID" 2>/dev/null || true
   wait "$BULK_PID" 2>/dev/null || true
   BULK_PID=
@@ -1147,25 +1220,37 @@ for profile in "${PROFILES[@]}"; do
         HOST="$NAME-$SLUG.$BASE"
         echo ">>> $profile seed=$seed direction=$direction transport=$transport order=$order"
         if [ "$MODE" = targeted ]; then
-          if run_direct_matrix \
-              "$profile" "$seed" "$direction" "$transport" "$order" "$order_index"; then
-            record_targeted_stage direct "$transport" passed 0 "$order_index"
-          else
-            case_status=$?
-            TARGETED_RUN_STATUS=1
-            record_targeted_stage direct "$transport" failed "$case_status" \
-              "$order_index" "direct measurement failed; see console and raw-failures.jsonl when present"
+          if [ "$TARGET_WORKLOAD_VALUE" = protocol ]; then
+            if run_direct_matrix \
+                "$profile" "$seed" "$direction" "$transport" "$order" "$order_index"; then
+              record_targeted_stage direct "$transport" passed 0 "$order_index"
+            else
+              case_status=$?
+              TARGETED_RUN_STATUS=1
+              record_targeted_stage direct "$transport" failed "$case_status" \
+                "$order_index" "direct measurement failed; see console and raw-failures.jsonl when present"
+            fi
+            direct_pid=$DIRECT_QUIC_PID
+            if [ "$transport" = tcp ]; then
+              direct_pid=$DIRECT_TCP_PID
+            fi
+            capture_targeted_memory direct "$transport" edge "$EDGE_PID" "$order_index"
+            capture_targeted_memory direct "$transport" direct-server \
+              "$direct_pid" "$order_index"
           fi
-          direct_pid=$DIRECT_QUIC_PID
-          if [ "$transport" = tcp ]; then
-            direct_pid=$DIRECT_TCP_PID
-          fi
-          capture_targeted_memory direct "$transport" edge "$EDGE_PID" "$order_index"
-          capture_targeted_memory direct "$transport" direct-server \
-            "$direct_pid" "$order_index"
 
           if start_agent "$profile" "$seed" "$direction" "$transport"; then
-            if run_beamd_protocol \
+            if [ "$TARGET_WORKLOAD_VALUE" = mixed ]; then
+              if run_mixed \
+                  "$profile" "$seed" "$direction" "$transport" "$order" "$order_index"; then
+                record_targeted_stage beamd "$transport" passed 0 "$order_index"
+              else
+                case_status=$?
+                TARGETED_RUN_STATUS=1
+                record_targeted_stage beamd "$transport" failed "$case_status" \
+                  "$order_index" "mixed-load measurement failed; see console, agent/edge logs, bulk progress, and raw-failures.jsonl"
+              fi
+            elif run_beamd_protocol \
                 "$profile" "$seed" "$direction" "$transport" "$order" "$order_index"; then
               record_targeted_stage beamd "$transport" passed 0 "$order_index"
             else
@@ -1430,26 +1515,41 @@ metadata = {
         }
     ),
     "transport_orders": ["quic,tcp", "tcp,quic"] if $QUALIFICATION else ["quic,tcp"],
-    "target_case": (
-        {
-            "profile": "${PROFILES[0]}",
-            "seed": int("${SEEDS[0]}"),
-            "direction": "${DIRECTIONS[0]}",
-            "size_bytes": int("${PROTOCOL_SIZES[0]}"),
-            "transport_order": "$TARGET_TRANSPORT_ORDER",
-            "beamd_concurrency": int("$TARGET_BEAMD_CONCURRENCY_VALUE"),
-            "warmups": int("$PROTOCOL_WARMUP"),
-            "iterations": int("$(iterations_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")"),
-            "protocol_timeout": "$(protocol_timeout_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")",
-        }
-        if $TARGETED
-        else None
-    ),
+    "target_case": None,
     "qdisc_artifacts": "$QDISC_ARTIFACTS".split(","),
     "handshake_included": False,
 }
 if $TARGETED:
     metadata["transport_orders"] = ["$TARGET_TRANSPORT_ORDER"]
+    target_case = {
+        "workload": "$TARGET_WORKLOAD_VALUE",
+        "profile": "${PROFILES[0]}",
+        "seed": int("${SEEDS[0]}"),
+        "direction": "${DIRECTIONS[0]}",
+        "transport_order": "$TARGET_TRANSPORT_ORDER",
+        "warmups": int("$TARGET_CASE_WARMUPS"),
+    }
+    if "$TARGET_WORKLOAD_VALUE" == "protocol":
+        target_case.update(
+            {
+                "size_bytes": int("${PROTOCOL_SIZES[0]}"),
+                "beamd_concurrency": int("$TARGET_BEAMD_CONCURRENCY_VALUE"),
+                "iterations": int("$(iterations_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")"),
+                "protocol_timeout": "$(protocol_timeout_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")",
+            }
+        )
+    else:
+        target_case.update(
+            {
+                "interactive_bytes": [4096, 66560],
+                "interactive_concurrency": 1,
+                "iterations": int("$MIX_N"),
+                "bulk_streams": 6,
+                "bulk_bytes": int("$BULK_SIZE"),
+                "bulk_ramp_seconds": int("$BULK_RAMP"),
+            }
+        )
+    metadata["target_case"] = target_case
 path.write_text(json.dumps(metadata, indent=2) + "\n")
 PY
 
@@ -1496,6 +1596,324 @@ path.write_text(
     encoding="utf-8",
 )
 PY
+  if [ "$TARGET_WORKLOAD_VALUE" = mixed ]; then
+    if python3 - "$OUTDIR" "${PROFILES[0]}" "${SEEDS[0]}" "${DIRECTIONS[0]}" \
+        "$TARGET_TRANSPORT_ORDER" "$MIX_N" "$MIX_WARMUP" "$BULK_SIZE" \
+        "$BULK_RAMP" "$TARGETED_RUN_STATUS" <<'PY'
+import hashlib
+import json
+import math
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+profile = sys.argv[2]
+seed = int(sys.argv[3])
+direction = sys.argv[4]
+transports = sys.argv[5].split(",")
+iterations = int(sys.argv[6])
+warmups = int(sys.argv[7])
+bulk_bytes = int(sys.argv[8])
+bulk_ramp = int(sys.argv[9])
+collection_status = int(sys.argv[10])
+order = ",".join(transports)
+issues = []
+
+def check(condition, message):
+    if not condition:
+        issues.append(message)
+
+def load(name, *, required=True):
+    path = root / name
+    if not path.is_file() or path.is_symlink():
+        if required:
+            issues.append(f"{name}: missing, non-regular, or symlink")
+        return []
+    records = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as error:
+            issues.append(f"{name}:{line_number}: invalid JSON: {error}")
+            continue
+        if not isinstance(value, dict):
+            issues.append(f"{name}:{line_number}: record is not an object")
+            continue
+        records.append(value)
+    return records
+
+def load_object(name):
+    path = root / name
+    if not path.is_file() or path.is_symlink():
+        issues.append(f"{name}: missing, non-regular, or symlink")
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        issues.append(f"{name}: invalid JSON: {error}")
+        return {}
+    if not isinstance(value, dict):
+        issues.append(f"{name}: value is not an object")
+        return {}
+    return value
+
+def digest(path):
+    value = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+def integer(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+def finite(value):
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+def validate_sample(sample, label, index, size):
+    if not isinstance(sample, dict):
+        issues.append(f"{label}/{index}: sample is not an object")
+        return
+    check(sample.get("i") == index, f"{label}/{index}: sample index mismatch")
+    check(sample.get("ok") is True, f"{label}/{index}: sample did not pass")
+    check(not sample.get("err"), f"{label}/{index}: sample retained an error")
+    check(sample.get("bytes") == size, f"{label}/{index}: bytes mismatch")
+    check(finite(sample.get("elapsed_ms")) and sample["elapsed_ms"] > 0,
+          f"{label}/{index}: invalid elapsed_ms")
+    check(finite(sample.get("ttfb_ms")) and sample["ttfb_ms"] >= 0,
+          f"{label}/{index}: invalid ttfb_ms")
+
+metadata = load_object("metadata.json")
+manifest = load_object("manifest.json")
+integrity = load_object("targeted-integrity.json")
+expected_target = {
+    "workload": "mixed",
+    "profile": profile,
+    "seed": seed,
+    "direction": direction,
+    "transport_order": order,
+    "warmups": warmups,
+    "interactive_bytes": [4096, 66560],
+    "interactive_concurrency": 1,
+    "iterations": iterations,
+    "bulk_streams": 6,
+    "bulk_bytes": bulk_bytes,
+    "bulk_ramp_seconds": bulk_ramp,
+}
+for field, expected in {
+    "schema_version": 1,
+    "mode": "targeted",
+    "qualification": False,
+    "targeted": True,
+    "git_dirty": False,
+    "beamd_commit": manifest.get("commit"),
+    "binary_manifest": manifest,
+    "netem_seeds": [seed],
+    "seed_orders": {str(seed): order},
+    "transport_orders": [order],
+    "target_case": expected_target,
+    "qdisc_artifacts": [f"{profile}-{seed}.txt"],
+}.items():
+    check(metadata.get(field) == expected,
+          f"metadata.json: {field}={metadata.get(field)!r}, want {expected!r}")
+workload = metadata.get("workload", {})
+for field, expected in {
+    "bulk_streams": 6,
+    "bulk_bytes": bulk_bytes,
+    "ramp_seconds": bulk_ramp,
+    "interactive_bytes": [4096, 66560],
+    "interactive_warmups": warmups,
+    "interactive_samples": iterations,
+}.items():
+    check(workload.get(field) == expected,
+          f"metadata.json: workload.{field} mismatch")
+for field in (
+    "immutable_inputs_status", "traffic_control_status", "recorded_assets_status"
+):
+    check(integrity.get(field) == 0,
+          f"targeted-integrity.json: {field}={integrity.get(field)!r}, want 0")
+assets = manifest.get("assets", {})
+for name, asset_key in (
+    ("perf-netem.sh", "scripts/perf-netem.sh"),
+    ("b4_analyze.py", "b4_analyze.py"),
+):
+    path = root / name
+    check(path.is_file() and not path.is_symlink(), f"{name}: missing recorded asset")
+    if path.is_file() and not path.is_symlink():
+        check(digest(path) == assets.get(asset_key), f"{name}: manifest digest mismatch")
+check(not load("raw-direct.jsonl"), "raw-direct.jsonl must be empty for mixed target")
+check(not load("raw-protocol.jsonl"), "raw-protocol.jsonl must be empty for mixed target")
+failures = load("raw-failures.jsonl", required=False)
+check(not failures, f"raw-failures.jsonl retained {len(failures)} failed record(s)")
+
+stages = load("targeted-status.jsonl")
+expected_stage_order = [("beamd", transport) for transport in transports]
+check([(r.get("fixture"), r.get("transport")) for r in stages] == expected_stage_order,
+      "targeted-status.jsonl: unexpected stage order/cardinality")
+for index, (record, transport) in enumerate(zip(stages, transports), 1):
+    expected = {
+        "schema_version": 1, "fixture": "beamd", "workload": "mixed",
+        "transport": transport, "outcome": "passed", "exit_status": 0,
+        "detail": "", "profile": profile, "seed": seed, "dir": direction,
+        "size": None, "order": order, "order_index": index, "warmups": warmups,
+    }
+    check(record == expected, f"targeted-status.jsonl: {transport} stage mismatch")
+
+memory = load("process-memory.jsonl")
+expected_memory = [
+    (transport, role) for transport in transports for role in ("edge", "agent")
+]
+check([(r.get("transport"), r.get("role")) for r in memory] == expected_memory,
+      "process-memory.jsonl: unexpected order/cardinality")
+for record in memory:
+    transport = record.get("transport")
+    expected_index = transports.index(transport) + 1 if transport in transports else 0
+    for field, expected in {
+        "schema_version": 1, "fixture": "beamd", "workload": "mixed",
+        "profile": profile, "seed": seed, "dir": direction, "size": None,
+        "order": order, "order_index": expected_index, "available": True,
+    }.items():
+        check(record.get(field) == expected,
+              f"process-memory.jsonl: {transport}/{record.get('role')} {field} mismatch")
+    check(integer(record.get("vmrss_bytes")) and record["vmrss_bytes"] > 0,
+          f"process-memory.jsonl: {transport}/{record.get('role')} invalid RSS")
+
+mixed = load("raw-mixed.jsonl")
+expected_cases = [
+    (transport, size, condition)
+    for transport in transports
+    for size, condition in (
+        (4096, "baseline"), (66560, "baseline"),
+        (4096, "underload"), (66560, "underload"),
+    )
+]
+check([(r.get("transport"), r.get("size"), r.get("condition")) for r in mixed]
+      == expected_cases, "raw-mixed.jsonl: unexpected case order/cardinality")
+expected_bytes_semantics = (
+    "response body bytes read" if direction == "download"
+    else "request body bytes consumed when Client.Do returned"
+)
+for record, (transport, size, condition) in zip(mixed, expected_cases):
+    index = transports.index(transport) + 1
+    expected = {
+        "fixture": "beamd", "workload": "mixed", "profile": profile,
+        "seed": seed, "dir": direction, "size": size, "transport": transport,
+        "order": order, "order_index": index, "condition": condition,
+        "iterations": iterations, "warmups": warmups, "concurrency": 1,
+        "handshake_included": False, "fail_fast": True,
+        "requested_warmups": warmups, "attempted_warmups": warmups,
+        "attempted_iterations": iterations, "stopped_on_failure": False,
+        "errors": 0, "corrupt": 0, "bytes_semantics": expected_bytes_semantics,
+    }
+    for field, value in expected.items():
+        check(record.get(field) == value,
+              f"raw-mixed.jsonl: {transport}/{size}/{condition} {field} mismatch")
+    check("failure" not in record and "failure_phase" not in record,
+          f"raw-mixed.jsonl: {transport}/{size}/{condition} retained failure fields")
+    warmup_samples = record.get("warmup_samples")
+    samples = record.get("samples")
+    check(isinstance(warmup_samples, list) and len(warmup_samples) == warmups,
+          f"raw-mixed.jsonl: {transport}/{size}/{condition} warmups incomplete")
+    check(isinstance(samples, list) and len(samples) == iterations,
+          f"raw-mixed.jsonl: {transport}/{size}/{condition} samples incomplete")
+    if isinstance(warmup_samples, list):
+        for sample_index, sample in enumerate(warmup_samples):
+            validate_sample(sample, f"{transport}/{size}/{condition}/warmup", sample_index, size)
+    if isinstance(samples, list):
+        for sample_index, sample in enumerate(samples):
+            validate_sample(sample, f"{transport}/{size}/{condition}/sample", sample_index, size)
+
+bulk = load("bulk-live.jsonl")
+expected_bulk = [
+    (transport, stage)
+    for transport in transports
+    for stage in ("ramp", "after-4k", "after-65k")
+]
+check([(r.get("transport"), r.get("stage")) for r in bulk] == expected_bulk,
+      "bulk-live.jsonl: unexpected stage order/cardinality")
+for record, (transport, stage) in zip(bulk, expected_bulk):
+    index = transports.index(transport) + 1
+    for field, expected in {
+        "profile": profile, "seed": seed, "dir": direction,
+        "transport": transport, "stage": stage, "order": order,
+        "order_index": index, "active": 6, "errors": 0, "corrupt": 0,
+    }.items():
+        check(record.get(field) == expected,
+              f"bulk-live.jsonl: {transport}/{stage} {field} mismatch")
+    check(integer(record.get("started")) and record["started"] >= 6,
+          f"bulk-live.jsonl: {transport}/{stage} invalid started")
+    check(integer(record.get("completed")) and 0 <= record["completed"] <= record["started"],
+          f"bulk-live.jsonl: {transport}/{stage} invalid completed")
+
+qdisc = root / "qdisc" / f"{profile}-{seed}.txt"
+check(qdisc.is_file() and not qdisc.is_symlink(), "targeted qdisc artifact missing")
+if qdisc.is_file() and not qdisc.is_symlink():
+    text = qdisc.read_text(encoding="utf-8")
+    check(text.startswith(f"profile={profile} seed={seed}\n"), "targeted qdisc header mismatch")
+    markers = [line for line in text.splitlines() if line.startswith("after direction=")]
+    check(markers == [f"after direction={direction} transport={t}" for t in transports],
+          "targeted qdisc post-case markers mismatch")
+check((root / "qdisc-final.txt").is_file(), "qdisc-final.txt missing")
+for transport in transports:
+    for name in (
+        f"effective-config/client-{transport}.yaml",
+        f"check-{profile}-{seed}-{direction}-{transport}.json",
+        f"health-{profile}-{seed}-{direction}-{transport}.json",
+        f"logs/agent-{profile}-{seed}-{direction}-{transport}.log",
+        f"bulk-live-{profile}-{seed}-{direction}-{transport}.json",
+    ):
+        path = root / name
+        check(path.is_file() and not path.is_symlink(), f"{name}: missing artifact")
+check(collection_status == 0, f"targeted collection status was {collection_status}")
+passed = not issues
+(root / "targeted-summary.json").write_text(
+    json.dumps(
+        {
+            "passed": passed,
+            "workload": "mixed",
+            "profile": profile,
+            "seed": seed,
+            "direction": direction,
+            "transport_order": transports,
+            "warmups_per_case": warmups,
+            "iterations_per_case": iterations,
+            "bulk_streams": 6,
+            "bulk_bytes": bulk_bytes,
+            "bulk_ramp_seconds": bulk_ramp,
+            "collection_status": collection_status,
+            "stage_results": stages,
+            "raw_failures": failures,
+            "records": mixed,
+            "bulk_live": bulk,
+            "issues": issues,
+        },
+        indent=2,
+    ) + "\n",
+    encoding="utf-8",
+)
+if not passed:
+    for issue in issues:
+        print(f"targeted mixed verification: {issue}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+    then
+      targeted_verify_status=0
+    else
+      targeted_verify_status=$?
+    fi
+    if [ "$TARGETED_RUN_STATUS" -ne 0 ] || [ "$targeted_verify_status" -ne 0 ]; then
+      echo "TARGETED MIXED CHECK FAILED — non-qualification evidence retained in $OUTDIR" >&2
+      exit 1
+    fi
+    echo "TARGETED MIXED CHECK COMPLETE — non-qualification evidence in $OUTDIR"
+    exit 0
+  fi
   target_iterations=$(iterations_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")
   target_protocol_timeout=$(protocol_timeout_for "${PROFILES[0]}" "${PROTOCOL_SIZES[0]}")
   if python3 - "$OUTDIR" "${PROFILES[0]}" "${SEEDS[0]}" "${DIRECTIONS[0]}" \
@@ -1657,6 +2075,7 @@ manifest = load_object("manifest.json")
 integrity = load_object("targeted-integrity.json")
 
 expected_target_case = {
+    "workload": "protocol",
     "profile": profile,
     "seed": seed,
     "direction": direction,
