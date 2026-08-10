@@ -10,15 +10,16 @@ The run still failed closed because three background TCP bulk streams reached
 the residual five-second tunnel-name prefix-read deadline; the shared session
 remained healthy. Prefix exchange now keeps QUIC at five seconds, uses 60
 seconds for TCP/yamux on both edge and agent, and leaves the backend dial at
-five seconds. Local verification is complete; the exact mixed-target recheck
-and then a fresh complete matrix are the remaining B4.4 sequence.
-Qualification and a production-link pilot still gate enabling QUIC for the
-hosted service. The compiled and self-hosted defaults permanently remain TCP
-with the edge QUIC listener disabled.
+five seconds. Immutable candidate `bfc94f0` passed the exact mixed-target
+recheck with all eight interactive records and six live bulk snapshots clean,
+then automatically started a fresh complete matrix. That qualification and a
+production-link pilot still gate enabling QUIC for the hosted service. The
+compiled and self-hosted defaults permanently remain TCP with the edge QUIC
+listener disabled.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-08-09
+**Last updated:** 2026-08-10
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -2038,7 +2039,7 @@ decision task, not part of A1 completion.
   verdict. Completed 2026-08-08: the focused regression, complete Go suite,
   focused and serial full race suites, vet, analyzer tests, embedded Python and
   shell syntax, and diff checks pass.
-- [ ] **B4.4i — Confirm the mixed correction and restart the full
+- [x] **B4.4i — Confirm the mixed correction and restart the full
   qualification.** On one immutable candidate, run the exact
   high-rtt-lossy/seed-101/upload mixed workload with eight warm-ups and 50
   measured requests per interactive case over QUIC then TCP. Require all four
@@ -2055,7 +2056,13 @@ decision task, not part of A1 completion.
   with `i/o deadline reached`; the edge session remained live throughout, and
   there were no raw interactive failures, route loss, OOMs, or integrity
   failures. The exact target must therefore be rerun after B4.4j before starting
-  the full matrix.
+  the full matrix. Completed 2026-08-09 on immutable candidate
+  `bfc94f03163fbfb4d83f46e166ceef5dccde12e1`: both ordered transport stages
+  passed, all eight interactive records completed with zero errors or
+  corruption, all six live bulk snapshots had zero errors or corruption, no
+  raw-failure artifact was created, and every target integrity field was zero.
+  The fail-closed chain validated that evidence and started a fresh 48-block
+  qualification from block one at 2026-08-09 15:21:18 UTC.
 - [x] **B4.4j — Correct the residual TCP prefix-setup deadline locally.** Keep
   QUIC prefix write/read setup at five seconds, use 60 seconds for TCP/yamux on
   both the edge and agent, retain an earlier public-request deadline, and keep

@@ -26,8 +26,8 @@ downstream bound: three background TCP streams reached the agent's five-second
 tunnel-name prefix-read deadline while the shared session remained alive.
 Prefix exchange now keeps QUIC at five seconds and uses 60 seconds for yamux on
 both edge and agent; backend dial remains five seconds. Hosted activation
-remains gated on the exact recheck, a fresh complete B4
-qualification and the production-link pilot; the self-hosted defaults
+remains gated on the fresh complete B4 qualification now running on immutable
+candidate `bfc94f0` and the production-link pilot; the self-hosted defaults
 permanently remain TCP with edge QUIC disabled.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
@@ -111,6 +111,12 @@ permanently remain TCP with edge QUIC disabled.
   heartbeat, route, kernel, or capacity failure. Keep QUIC prefix setup at five
   seconds, use 60 seconds for yamux prefix write/read on both peers, and retain
   the independent five-second local-backend dial bound.
+- **The prefix correction passed its exact target and started a fresh
+  qualification.** Immutable candidate `bfc94f0` completed both ordered mixed
+  stages with all eight interactive records and six live bulk snapshots clean,
+  no raw failures, and zero integrity issues. The fail-closed chain accepted
+  that target and started a new 48-block matrix from block one on 2026-08-09;
+  no prior evidence is being spliced into it.
 
 ---
 
@@ -269,13 +275,10 @@ Caveats (carry these into B4):
   hosted activation.
 
 **Pending / optional:**
-- Deploy one immutable candidate with the locally verified transport-specific
-  yamux caller and prefix-setup bounds plus the mixed-target harness, then
-  rerun the exact high-rtt-lossy/seed-101/upload frozen mixed workload over QUIC
-  then TCP. Only if it passes, restart the full B4 matrix from block one. The
-  prior 39-block evidence cannot be resumed into a verdict because its manifest
-  binds the old candidate and the analyzer requires one complete immutable
-  matrix.
+- Let the fresh 48-block B4 matrix on immutable candidate `bfc94f0` run to its
+  fail-closed analyzer verdict. Its prerequisite exact mixed target passed and
+  the matrix began from block one; the prior 39-block evidence is not being
+  resumed or spliced into this run.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation
