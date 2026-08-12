@@ -284,8 +284,9 @@ Caveats (carry these into B4):
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation
   prerequisite).
 - Buffer/prioritization experiment for the no-loss case (optional).
-- Housekeeping: a crashed `perf-edge` container + `/root/perf-edge/` remain on
-  the OSS box (104.248.61.150); remove when its SSH allows.
+- Housekeeping completed 2026-08-11: removed the exited `perf-edge` container
+  from the OSS box (104.248.61.150) and moved its 16 KiB bind-state directory
+  to `/root/.trash/perf-edge-2026-08-11` for recovery.
 
 ---
 
