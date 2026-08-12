@@ -7,5 +7,5 @@
 // `go generate ./internal/beamdapi/...`) and commit. CI runs ./check-drift.sh
 // to fail the build if the committed types fall out of sync with the spec.
 //
-//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest --config oapi-codegen.yaml openapi.json
+//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config oapi-codegen.yaml openapi.json
 package beamdapi
