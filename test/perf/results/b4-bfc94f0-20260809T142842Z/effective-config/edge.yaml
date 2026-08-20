@@ -1,0 +1,17 @@
+base_domain: perf.local
+url_shape: hyphen
+listen_https: "10.231.0.1:443"
+listen_quic: "10.231.0.1:443"
+disable_quic: false
+acme_email: perf@example.com
+acme_ca: "off"
+dns_provider: stub
+token_store: "file:/tmp/tmp.DeKOyjyh2y/tokens.json"
+data_dir: /tmp/tmp.DeKOyjyh2y/edge-data
+max_streams_per_session: 64
+max_streams_total: 128
+max_pre_auth_sessions: 32
+max_sessions_total: 8
+max_request_body_bytes: 134217728
+request_log:
+  enabled: false

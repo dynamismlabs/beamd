@@ -1,0 +1,542 @@
+{
+  "schema_version": 1,
+  "verdict": "fail",
+  "cases": 816,
+  "seeds": [
+    101,
+    202,
+    303
+  ],
+  "gates": [
+    {
+      "name": "quic clean direct throughput download 16777216",
+      "pass": true,
+      "detail": "median=0.999x; block range=0.998\u20130.999x; minimum 0.80"
+    },
+    {
+      "name": "quic clean direct throughput download 104857600",
+      "pass": true,
+      "detail": "median=0.999x; block range=0.999\u20130.999x; minimum 0.80"
+    },
+    {
+      "name": "quic lossy direct throughput download",
+      "pass": true,
+      "detail": "median=0.994x; block range=0.977\u20131.035x; minimum 0.60"
+    },
+    {
+      "name": "quic lossy direct p95 download",
+      "pass": true,
+      "detail": "median=1.020x; block range=1.020\u20131.060x; maximum 2.0"
+    },
+    {
+      "name": "quic high-rtt-lossy direct throughput download",
+      "pass": true,
+      "detail": "median=1.003x; block range=0.959\u20131.004x; minimum 0.60"
+    },
+    {
+      "name": "quic high-rtt-lossy direct p95 download",
+      "pass": true,
+      "detail": "median=1.018x; block range=0.990\u20131.022x; maximum 2.0"
+    },
+    {
+      "name": "quic lossy tail download 259072",
+      "pass": true,
+      "detail": "worst block p95=1.423x median (block median=1.421x); worst block max=1.589x median (block median=1.548x)"
+    },
+    {
+      "name": "quic lossy tail download 263168",
+      "pass": true,
+      "detail": "worst block p95=1.508x median (block median=1.505x); worst block max=1.750x median (block median=1.707x)"
+    },
+    {
+      "name": "quic lossy tail download 1048576",
+      "pass": true,
+      "detail": "worst block p95=1.387x median (block median=1.369x); worst block max=1.523x median (block median=1.470x)"
+    },
+    {
+      "name": "quic lossy solo/eight-stream download",
+      "pass": true,
+      "detail": "median=0.933x; block range=0.920\u20130.987x; minimum 0.70"
+    },
+    {
+      "name": "quic high-rtt-lossy solo/eight-stream download",
+      "pass": true,
+      "detail": "median=0.992x; block range=0.976\u20130.995x; minimum 0.70"
+    },
+    {
+      "name": "quic high-rtt-lossy tiny TTFB download",
+      "pass": true,
+      "detail": "worst block p95=2.063x median (block median=1.007x); worst block p99=2.138x median (block median=2.053x)"
+    },
+    {
+      "name": "tcp clean direct throughput download",
+      "pass": true,
+      "detail": "median=0.941x; block range=0.882\u20130.971x; minimum 0.70"
+    },
+    {
+      "name": "tcp high-rtt-clean direct throughput download",
+      "pass": true,
+      "detail": "median=0.941x; block range=0.938\u20130.985x; minimum 0.70"
+    },
+    {
+      "name": "head-to-head clean download 36",
+      "pass": true,
+      "detail": "throughput median=1.000x; block range=0.999\u20131.001x; p95 median=0.995x; block range=0.993\u20131.008x"
+    },
+    {
+      "name": "head-to-head clean download 259072",
+      "pass": false,
+      "detail": "throughput median=0.832x; block range=0.832\u20130.833x; p95 median=1.202x; block range=1.200\u20131.204x"
+    },
+    {
+      "name": "head-to-head clean download 263168",
+      "pass": false,
+      "detail": "throughput median=0.835x; block range=0.833\u20130.835x; p95 median=1.196x; block range=1.192\u20131.198x"
+    },
+    {
+      "name": "head-to-head clean download 1048576",
+      "pass": true,
+      "detail": "throughput median=1.004x; block range=1.003\u20131.007x; p95 median=0.996x; block range=0.992\u20131.007x"
+    },
+    {
+      "name": "head-to-head clean download 16777216",
+      "pass": true,
+      "detail": "throughput median=1.058x; block range=1.026\u20131.130x; p95 median=0.856x; block range=0.809\u20130.890x"
+    },
+    {
+      "name": "head-to-head clean download 104857600",
+      "pass": true,
+      "detail": "throughput median=1.178x; block range=1.142\u20131.204x; p95 median=0.799x; block range=0.795\u20130.822x"
+    },
+    {
+      "name": "A2 primary lossy download",
+      "pass": true,
+      "detail": "TCP defect median=33.491x baseline, p95=10826.1ms; QUIC cut median paired p95 by 96.7% (minimum 50%); QUIC/TCP block range=0.033\u20130.040x"
+    },
+    {
+      "name": "A2 primary high-rtt-lossy download",
+      "pass": true,
+      "detail": "TCP defect median=48.458x baseline, p95=48690.8ms; QUIC cut median paired p95 by 97.2% (minimum 50%); QUIC/TCP block range=0.026\u20130.031x"
+    },
+    {
+      "name": "A2 qualifying-profile presence download",
+      "pass": true,
+      "detail": "2 qualifying lossy profile(s); minimum 1"
+    },
+    {
+      "name": "A2 clean mixed guard download",
+      "pass": true,
+      "detail": "median=0.693x; block range=0.469\u20130.921x; maximum 1.10"
+    },
+    {
+      "name": "A2 high-rtt-clean mixed guard download",
+      "pass": true,
+      "detail": "median=0.626x; block range=0.478\u20130.769x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean download 36",
+      "pass": true,
+      "detail": "median=0.995x; block range=0.993\u20131.008x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean download 259072",
+      "pass": false,
+      "detail": "median=1.202x; block range=1.200\u20131.204x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean download 263168",
+      "pass": false,
+      "detail": "median=1.196x; block range=1.192\u20131.198x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean download 1048576",
+      "pass": true,
+      "detail": "median=0.996x; block range=0.992\u20131.007x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard clean download 16777216",
+      "pass": true,
+      "detail": "median=1.058x; block range=1.026\u20131.130x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard clean download 104857600",
+      "pass": true,
+      "detail": "median=1.178x; block range=1.142\u20131.204x; minimum 0.90"
+    },
+    {
+      "name": "solo-small guard lossy download 36",
+      "pass": true,
+      "detail": "median=0.475x; block range=0.472\u20130.616x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard lossy download 259072",
+      "pass": true,
+      "detail": "median=0.728x; block range=0.678\u20130.736x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard lossy download 263168",
+      "pass": true,
+      "detail": "median=0.673x; block range=0.636\u20130.693x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard lossy download 1048576",
+      "pass": true,
+      "detail": "median=0.694x; block range=0.629\u20130.699x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard lossy download 16777216",
+      "pass": true,
+      "detail": "median=1.522x; block range=1.509\u20131.552x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard lossy download 104857600",
+      "pass": true,
+      "detail": "median=1.497x; block range=1.497\u20131.543x; minimum 0.90"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean download 36",
+      "pass": true,
+      "detail": "median=1.001x; block range=1.000\u20131.003x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean download 259072",
+      "pass": false,
+      "detail": "median=1.137x; block range=1.135\u20131.138x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean download 263168",
+      "pass": false,
+      "detail": "median=1.128x; block range=1.128\u20131.129x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean download 1048576",
+      "pass": true,
+      "detail": "median=0.998x; block range=0.997\u20130.998x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard high-rtt-clean download 16777216",
+      "pass": true,
+      "detail": "median=1.058x; block range=1.010\u20131.062x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard high-rtt-clean download 104857600",
+      "pass": true,
+      "detail": "median=1.078x; block range=1.078\u20131.094x; minimum 0.90"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy download 36",
+      "pass": true,
+      "detail": "median=0.502x; block range=0.448\u20131.034x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy download 259072",
+      "pass": true,
+      "detail": "median=1.080x; block range=1.013\u20131.140x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy download 263168",
+      "pass": false,
+      "detail": "median=1.215x; block range=1.146\u20131.296x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy download 1048576",
+      "pass": false,
+      "detail": "median=1.194x; block range=1.166\u20131.254x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard high-rtt-lossy download 16777216",
+      "pass": false,
+      "detail": "median=0.675x; block range=0.671\u20130.694x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard high-rtt-lossy download 104857600",
+      "pass": false,
+      "detail": "median=0.681x; block range=0.655\u20130.703x; minimum 0.90"
+    },
+    {
+      "name": "QUIC timer-backoff ladder clean download",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0"
+    },
+    {
+      "name": "QUIC timer-backoff ladder lossy download",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0"
+    },
+    {
+      "name": "QUIC timer-backoff ladder high-rtt-clean download",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0"
+    },
+    {
+      "name": "QUIC timer-backoff ladder high-rtt-lossy download",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=99, 1000ms=1, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=93, 1000ms=6, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=96, 1000ms=4, 2000ms=0, 4000ms=0, 8000ms=0"
+    },
+    {
+      "name": "quic clean direct throughput upload 16777216",
+      "pass": true,
+      "detail": "median=0.902x; block range=0.902\u20130.903x; minimum 0.80"
+    },
+    {
+      "name": "quic clean direct throughput upload 104857600",
+      "pass": true,
+      "detail": "median=0.982x; block range=0.982\u20130.982x; minimum 0.80"
+    },
+    {
+      "name": "quic lossy direct throughput upload",
+      "pass": true,
+      "detail": "median=0.957x; block range=0.952\u20130.958x; minimum 0.60"
+    },
+    {
+      "name": "quic lossy direct p95 upload",
+      "pass": true,
+      "detail": "median=1.029x; block range=0.996\u20131.074x; maximum 2.0"
+    },
+    {
+      "name": "quic high-rtt-lossy direct throughput upload",
+      "pass": true,
+      "detail": "median=0.972x; block range=0.947\u20131.021x; minimum 0.60"
+    },
+    {
+      "name": "quic high-rtt-lossy direct p95 upload",
+      "pass": true,
+      "detail": "median=1.026x; block range=0.960\u20131.027x; maximum 2.0"
+    },
+    {
+      "name": "quic lossy tail upload 259072",
+      "pass": true,
+      "detail": "worst block p95=1.445x median (block median=1.437x); worst block max=1.794x median (block median=1.665x)"
+    },
+    {
+      "name": "quic lossy tail upload 263168",
+      "pass": true,
+      "detail": "worst block p95=1.442x median (block median=1.424x); worst block max=1.663x median (block median=1.553x)"
+    },
+    {
+      "name": "quic lossy tail upload 1048576",
+      "pass": true,
+      "detail": "worst block p95=1.379x median (block median=1.324x); worst block max=1.613x median (block median=1.604x)"
+    },
+    {
+      "name": "quic lossy solo/eight-stream upload",
+      "pass": true,
+      "detail": "median=0.907x; block range=0.842\u20130.914x; minimum 0.70"
+    },
+    {
+      "name": "quic high-rtt-lossy solo/eight-stream upload",
+      "pass": true,
+      "detail": "median=0.949x; block range=0.930\u20130.964x; minimum 0.70"
+    },
+    {
+      "name": "quic high-rtt-lossy tiny TTFB upload",
+      "pass": true,
+      "detail": "worst block p95=1.011x median (block median=1.003x); worst block p99=2.131x median (block median=2.055x)"
+    },
+    {
+      "name": "tcp clean direct throughput upload",
+      "pass": true,
+      "detail": "median=0.918x; block range=0.918\u20130.919x; minimum 0.70"
+    },
+    {
+      "name": "tcp high-rtt-clean direct throughput upload",
+      "pass": true,
+      "detail": "median=0.944x; block range=0.944\u20130.944x; minimum 0.70"
+    },
+    {
+      "name": "head-to-head clean upload 36",
+      "pass": true,
+      "detail": "throughput median=1.000x; block range=1.000\u20131.001x; p95 median=1.000x; block range=0.995\u20131.001x"
+    },
+    {
+      "name": "head-to-head clean upload 259072",
+      "pass": false,
+      "detail": "throughput median=0.828x; block range=0.828\u20130.829x; p95 median=1.213x; block range=1.207\u20131.217x"
+    },
+    {
+      "name": "head-to-head clean upload 263168",
+      "pass": true,
+      "detail": "throughput median=1.444x; block range=1.441\u20131.448x; p95 median=0.688x; block range=0.684\u20130.688x"
+    },
+    {
+      "name": "head-to-head clean upload 1048576",
+      "pass": true,
+      "detail": "throughput median=1.534x; block range=1.532\u20131.535x; p95 median=0.649x; block range=0.647\u20130.662x"
+    },
+    {
+      "name": "head-to-head clean upload 16777216",
+      "pass": true,
+      "detail": "throughput median=1.088x; block range=1.087\u20131.088x; p95 median=0.919x; block range=0.918\u20130.919x"
+    },
+    {
+      "name": "head-to-head clean upload 104857600",
+      "pass": true,
+      "detail": "throughput median=1.020x; block range=1.019\u20131.020x; p95 median=0.981x; block range=0.980\u20130.983x"
+    },
+    {
+      "name": "A2 primary lossy upload",
+      "pass": true,
+      "detail": "TCP defect median=27.707x baseline, p95=10068.6ms; QUIC cut median paired p95 by 95.3% (minimum 50%); QUIC/TCP block range=0.037\u20130.051x"
+    },
+    {
+      "name": "A2 primary high-rtt-lossy upload",
+      "pass": true,
+      "detail": "TCP defect median=38.622x baseline, p95=43575.1ms; QUIC cut median paired p95 by 96.7% (minimum 50%); QUIC/TCP block range=0.031\u20130.033x"
+    },
+    {
+      "name": "A2 qualifying-profile presence upload",
+      "pass": true,
+      "detail": "2 qualifying lossy profile(s); minimum 1"
+    },
+    {
+      "name": "A2 clean mixed guard upload",
+      "pass": true,
+      "detail": "median=0.418x; block range=0.401\u20130.582x; maximum 1.10"
+    },
+    {
+      "name": "A2 high-rtt-clean mixed guard upload",
+      "pass": true,
+      "detail": "median=0.644x; block range=0.521\u20130.671x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean upload 36",
+      "pass": true,
+      "detail": "median=1.000x; block range=0.995\u20131.001x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean upload 259072",
+      "pass": false,
+      "detail": "median=1.213x; block range=1.207\u20131.217x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean upload 263168",
+      "pass": true,
+      "detail": "median=0.688x; block range=0.684\u20130.688x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard clean upload 1048576",
+      "pass": true,
+      "detail": "median=0.649x; block range=0.647\u20130.662x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard clean upload 16777216",
+      "pass": true,
+      "detail": "median=1.088x; block range=1.087\u20131.088x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard clean upload 104857600",
+      "pass": true,
+      "detail": "median=1.020x; block range=1.019\u20131.020x; minimum 0.90"
+    },
+    {
+      "name": "solo-small guard lossy upload 36",
+      "pass": true,
+      "detail": "median=0.510x; block range=0.507\u20130.519x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard lossy upload 259072",
+      "pass": true,
+      "detail": "median=0.696x; block range=0.606\u20130.704x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard lossy upload 263168",
+      "pass": true,
+      "detail": "median=0.680x; block range=0.512\u20130.739x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard lossy upload 1048576",
+      "pass": true,
+      "detail": "median=0.671x; block range=0.602\u20130.745x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard lossy upload 16777216",
+      "pass": true,
+      "detail": "median=1.464x; block range=1.433\u20131.490x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard lossy upload 104857600",
+      "pass": true,
+      "detail": "median=1.510x; block range=1.486\u20131.543x; minimum 0.90"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean upload 36",
+      "pass": true,
+      "detail": "median=1.000x; block range=0.996\u20131.001x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean upload 259072",
+      "pass": false,
+      "detail": "median=1.137x; block range=1.136\u20131.137x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean upload 263168",
+      "pass": true,
+      "detail": "median=0.682x; block range=0.682\u20130.683x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-clean upload 1048576",
+      "pass": true,
+      "detail": "median=0.699x; block range=0.699\u20130.700x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard high-rtt-clean upload 16777216",
+      "pass": true,
+      "detail": "median=1.057x; block range=1.057\u20131.058x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard high-rtt-clean upload 104857600",
+      "pass": true,
+      "detail": "median=1.014x; block range=1.014\u20131.014x; minimum 0.90"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy upload 36",
+      "pass": true,
+      "detail": "median=0.501x; block range=0.444\u20130.507x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy upload 259072",
+      "pass": true,
+      "detail": "median=1.028x; block range=0.929\u20131.193x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy upload 263168",
+      "pass": false,
+      "detail": "median=1.100x; block range=1.084\u20131.217x; maximum 1.10"
+    },
+    {
+      "name": "solo-small guard high-rtt-lossy upload 1048576",
+      "pass": false,
+      "detail": "median=1.259x; block range=1.122\u20131.408x; maximum 1.10"
+    },
+    {
+      "name": "solo-large guard high-rtt-lossy upload 16777216",
+      "pass": false,
+      "detail": "median=0.677x; block range=0.650\u20130.686x; minimum 0.90"
+    },
+    {
+      "name": "solo-large guard high-rtt-lossy upload 104857600",
+      "pass": false,
+      "detail": "median=0.657x; block range=0.650\u20130.670x; minimum 0.90"
+    },
+    {
+      "name": "QUIC timer-backoff ladder clean upload",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0"
+    },
+    {
+      "name": "QUIC timer-backoff ladder lossy upload",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0"
+    },
+    {
+      "name": "QUIC timer-backoff ladder high-rtt-clean upload",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0"
+    },
+    {
+      "name": "QUIC timer-backoff ladder high-rtt-lossy upload",
+      "pass": true,
+      "detail": "seed=101: threshold=3; 500ms=98, 1000ms=2, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=96, 1000ms=3, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=98, 1000ms=2, 2000ms=0, 4000ms=0, 8000ms=0"
+    }
+  ]
+}

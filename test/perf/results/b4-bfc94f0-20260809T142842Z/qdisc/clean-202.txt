@@ -1,0 +1,49 @@
+profile=clean seed=202
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 202
+ Sent 7994542579 bytes 6408748 pkt (dropped 76, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000205
+ Sent 8373761129 bytes 6651248 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+
+after direction=download transport=tcp
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 202
+ Sent 8013866776 bytes 6696582 pkt (dropped 76, overlimits 0 requeues 0) 
+ backlog 4198b 60p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000205
+ Sent 12586864953 bytes 9654129 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 2965450b 260p requeues 0
+
+after direction=download transport=quic
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 202
+ Sent 8051924994 bytes 7194730 pkt (dropped 76, overlimits 0 requeues 0) 
+ backlog 5781b 74p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000205
+ Sent 16778392233 bytes 12558404 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 2735163b 247p requeues 0
+
+after direction=upload transport=tcp
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 202
+ Sent 12176190379 bytes 10202803 pkt (dropped 76, overlimits 0 requeues 0) 
+ backlog 2778912b 326p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000205
+ Sent 16799084508 bytes 12828229 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 3564b 54p requeues 0
+
+after direction=upload transport=quic
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 202
+ Sent 15886772847 bytes 12788559 pkt (dropped 167, overlimits 0 requeues 0) 
+ backlog 456266b 82p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000205
+ Sent 16842964852 bytes 13373898 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 4893b 61p requeues 0

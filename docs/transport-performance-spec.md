@@ -1,25 +1,21 @@
 # Beamd Transport Performance — Specification and Task Checklist
 
-**Status:** A1 shipped. G1 is GO and Part B is implemented default-off. The
-active-data liveness correction passed its exact staging recheck, and the next
-fresh matrix completed 39 of 48 blocks with 796 clean records before block 40
-exposed a distinct TCP/yamux caller-open timeout. Candidate `f973b83` corrected
-that bound, and its exact mixed-target staging run completed all eight
-interactive records over QUIC and TCP with zero request errors or corruption.
-The run still failed closed because three background TCP bulk streams reached
-the residual five-second tunnel-name prefix-read deadline; the shared session
-remained healthy. Prefix exchange now keeps QUIC at five seconds, uses 60
-seconds for TCP/yamux on both edge and agent, and leaves the backend dial at
-five seconds. Immutable candidate `bfc94f0` passed the exact mixed-target
-recheck with all eight interactive records and six live bulk snapshots clean,
-then automatically started a fresh complete matrix. That qualification and a
-production-link pilot still gate enabling QUIC for the hosted service. The
-compiled and self-hosted defaults permanently remain TCP with the edge QUIC
-listener disabled.
+**Status:** A1 shipped. G1 is GO and Part B is implemented default-off.
+Immutable candidate `bfc94f0` passed every functional and targeted staging
+recheck, then completed the fresh 48-block B4 matrix with all 816 unique cases
+present and error-free. The fail-closed analyzer nevertheless returned
+`B4 VERDICT: FAIL`: QUIC passed every direct-baseline, tail, parallel-stream,
+timer-ladder, and primary mixed-load gate, including 95.3–97.2% reductions in
+lossy under-load p95 latency, but missed solo-transfer guardrails near 256 KiB
+and for large transfers at 500 ms RTT plus 1% loss. Hosted QUIC activation is
+therefore **NO-GO**; the production-link pilot must not start and QUIC remains
+disabled in hosted deployment. The compiled and self-hosted defaults remain
+TCP with the edge QUIC listener disabled. A private congestion-control fork or
+any gate-policy change requires a separate explicit decision.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-08-10
+**Last updated:** 2026-08-20
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -2072,6 +2068,23 @@ decision task, not part of A1 completion.
   read deadline, and cancellation remains prompt. Completed 2026-08-09: the
   focused package suites, complete Go suite, internal and end-to-end race
   suites, vet, analyzer tests, shell syntax, and diff checks pass.
+- [x] **B4.4k — Complete and reconcile the fresh qualification.** Immutable
+  candidate `bfc94f03163fbfb4d83f46e166ceef5dccde12e1` ran all 48 blocks from
+  2026-08-09 15:21:19 UTC through 2026-08-18 19:12:25 UTC. The analyzer
+  validated 816 unique cases across seeds 101, 202, and 303 with every sample
+  present and error-free; raw collection retained 288 direct, 336 beamd
+  protocol, 192 mixed-load, and 144 live-bulk records. QUIC passed every
+  direct-baseline, lossy-tail, solo/eight-stream, timer-ladder, and primary A2
+  mixed-load gate. It cut paired under-load p95 by 96.7% and 97.2% for lossy
+  and high-RTT/lossy downloads and by 95.3% and 96.7% for uploads. The verdict
+  still failed 17 analyzer checks: clean and high-RTT/clean p95 guardrails near
+  256 KiB, additional high-RTT/lossy small-transfer guards, and both 16 MiB and
+  100 MiB high-RTT/lossy large-transfer throughput guards in both directions.
+  Direct fixtures reproduce the two signatures, while beamd/direct QUIC ratios
+  pass, locating the residual gap below beamd's proxy/session layer. Do not
+  weaken the gates or start B4.5. The retained evidence and activation no-go
+  are recorded in
+  `test/perf/results/decision-2026-08-18-b4-qualification.md`.
 - [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   compiled/self-hosted defaults unchanged, run the hosted production session
   in `auto`, validate both directions/WebSockets/reconnect over the real
@@ -2085,12 +2098,13 @@ decision task, not part of A1 completion.
   retain both rollback controls and the tuned TCP path.
 
 > **Implementation status:** B1–B3, the B4 qualification code/functional
-> matrix, and the non-production staging rehearsal are complete. The compiled
-> and self-hosted defaults intentionally remain TCP with the QUIC listener
-> disabled. B4.1 and B4.4–B4.6 are operational rollout gates: apply
-> production-host UDP/firewall/sysctl changes, run and retain the privileged netem
-> qualification on a conforming Linux host, complete the production-link
-> `auto` pilot, and only then activate QUIC in the hosted deployment.
+> matrix, the non-production staging rehearsal, and the complete privileged B4
+> run are complete. The performance verdict is FAIL, so B4.4 remains unchecked
+> and B4.5–B4.6 are blocked. The compiled, self-hosted, and hosted deployments
+> intentionally remain on TCP with the hosted/self-hosted QUIC listener
+> disabled. Do not prepare production UDP exposure, pilot `auto`, or activate
+> hosted QUIC without a new candidate that passes B4.4 or an explicit product
+> decision changing the gate policy.
 
 The recorded and operator-approved G1 GO satisfies the prerequisite to begin
 B1. Do not execute B4.6 until B1–B4.5, the functional and performance gates,

@@ -73,3 +73,19 @@ Protocol operations use a 20-minute deadline by default. The 16 MiB and
 transfer under 500 ms RTT and 1% loss can exceed 20 minutes. This is only a
 hang bound; the analyzer still enforces the same sample counts, performance
 gates, and zero errors/corruption.
+
+### Recorded complete verdict
+
+The fresh qualification for immutable candidate
+`bfc94f03163fbfb4d83f46e166ceef5dccde12e1` is retained under
+`b4-bfc94f0-20260809T142842Z/`. Its analyzer validated 816 unique cases with
+every sample present and error-free, then returned `B4 VERDICT: FAIL` because
+solo-transfer guardrails failed. See
+[`decision-2026-08-18-b4-qualification.md`](decision-2026-08-18-b4-qualification.md)
+for the activation no-go and diagnosis.
+
+The evidence directory is the byte-for-byte harness output copied from the
+qualification host, except `operator/`. That subdirectory contains the systemd
+wrapper and console transcript copied after completion for operator audit; it
+was not input to the analyzer. `SHA256SUMS` records the key evidence and
+operator-artifact hashes.

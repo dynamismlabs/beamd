@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "mode": "qualification",
+  "qualification": true,
+  "targeted": false,
+  "started_utc": "20260809T152119Z",
+  "completed_utc": "2026-08-18T19:12:25Z",
+  "beamd_commit": "bfc94f03163fbfb4d83f46e166ceef5dccde12e1",
+  "git_dirty": false,
+  "binary_manifest": {
+    "schema_version": 1,
+    "commit": "bfc94f03163fbfb4d83f46e166ceef5dccde12e1",
+    "dirty": false,
+    "image_tag": "b4-bfc94f0",
+    "go_version": "go version go1.26.5 linux/amd64",
+    "binaries": {
+      "beamd": "9a8b82eb42fd5310cd6aab86f46db6d5189a79151792e87940a0e5da30d9e7e5",
+      "perfclient": "1d97564e123eb7bde6555b75d53aeb5ea9aafd2c20e78c3da7983978f940550b",
+      "perfserver": "a95f289efa010fb54db2ccb9fe67af7072b51ea71fda3389caa02138044de347",
+      "directclient": "591029241ab39c27e4f5b76f987866af99a631c344187a64a61ac8a453cda943",
+      "directserver": "bffe03504f131987500ea20633f83b9ec494eedb9ccd388ca75af16d30afdf5d"
+    },
+    "assets": {
+      "b4_analyze.py": "770c807fd7fcefb40d6c605311b7109b5b70a45a1f4d71d4f111b23a52cac3cb",
+      "test/perf/b4_analyze.py": "770c807fd7fcefb40d6c605311b7109b5b70a45a1f4d71d4f111b23a52cac3cb",
+      "scripts/perf-netem.sh": "d0ff6667462bf773ec5b1803663ba7d5610fa355f68c73e3e9f0fff0e0a3e274"
+    }
+  },
+  "recorded_analyzer": "b4_analyze.py",
+  "recorded_harness": "perf-netem.sh",
+  "recorded_manifest": null,
+  "process_memory": null,
+  "targeted_integrity": null,
+  "go_version": "go version go1.26.5 linux/amd64",
+  "quic_go_version": "v0.60.0",
+  "yamux_version": "v0.1.2",
+  "kernel": "6.8.0-136-generic",
+  "os": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+  "cpu": "DO-Regular",
+  "cpu_count": 2,
+  "ram_bytes": 2063216640,
+  "resource_limits": "real-time non-blocking time  (microseconds, -R) unlimited;core file size              (blocks, -c) 0;data seg size               (kbytes, -d) unlimited;scheduling priority                 (-e) 0;file size                   (blocks, -f) unlimited;pending signals                     (-i) 7717;max locked memory           (kbytes, -l) 8192;max memory size             (kbytes, -m) unlimited;open files                          (-n) 1024;pipe size                (512 bytes, -p) 8;POSIX message queues         (bytes, -q) 819200;real-time priority                  (-r) 0;stack size                  (kbytes, -s) 8192;cpu time                   (seconds, -t) unlimited;max user processes                  (-u) 7717;virtual memory              (kbytes, -v) unlimited;file locks                          (-x) unlimited;",
+  "container_limits": "container=not-detected; cgroup_v2.cpu.max=unavailable; cgroup_v2.memory.max=unavailable; cgroup_v2.memory.swap.max=unavailable; cgroup_v2.cpuset.cpus.effective=0-1",
+  "runtime_environment": {
+    "beamd_home_isolated": true,
+    "beamd_home_inherited": false
+  },
+  "traffic_control": {
+    "binary": "/var/lib/beamd-b4/evidence/b4-bfc94f0-20260809T142842Z/traffic-control/tc",
+    "source_binary": "/opt/beamd-b4-tools/iproute2-6.8.0-bin/tc",
+    "recorded_binary": "traffic-control/tc",
+    "version": "tc utility, iproute2-6.8.0, libbpf 1.3.0",
+    "sha256": "629dc0a305c442b648a8565d03b690208e729bfe44115f120108100aea149498",
+    "deterministic_seed_supported": true
+  },
+  "interface_offload": "interface-offload.txt",
+  "effective_config": {
+    "edge": "effective-config/edge.yaml",
+    "tcp_client": "effective-config/client-tcp.yaml",
+    "quic_client": "effective-config/client-quic.yaml",
+    "gomemlimit": "1400MiB",
+    "yamux_stream_window_bytes": 4194304
+  },
+  "direct_fixture": {
+    "alpn": "beamd-perf-direct/1",
+    "tls_version": "TLS 1.3",
+    "certificate_sha256": "53999352a2b2e7bfeec5b5edcee9c86b73b99903e8161eea512814b189a458a7",
+    "certificate": "direct-fixture.crt",
+    "trust": "certificate validation disabled for direct and beamd measurement clients",
+    "long_lived_connection": true,
+    "handshake_recorded_separately": true,
+    "connection_roles": "agent namespace client dials edge namespace server",
+    "control_stream_initiator": "agent",
+    "data_stream_initiator": "edge",
+    "direction_mapping": {
+      "download": "agent client uploads to edge server",
+      "upload": "agent client downloads from edge server"
+    },
+    "quic_flow_control": {
+      "initial_stream": 4194304,
+      "max_stream": 16777216,
+      "initial_connection": 16777216,
+      "max_connection": 67108864,
+      "server_max_incoming_streams": 1,
+      "client_max_incoming_streams": 64,
+      "keepalive_period_ms": 0
+    }
+  },
+  "workload": {
+    "bulk_streams": 6,
+    "bulk_bytes": 8388608,
+    "ramp_seconds": 5,
+    "interactive_bytes": [
+      4096,
+      66560
+    ],
+    "interactive_warmups": 8,
+    "interactive_samples": 50,
+    "protocol_timeout_default": "20m",
+    "protocol_timeout_high_rtt_lossy_large": "60m",
+    "protocol_timeout_high_rtt_lossy_large_min_bytes": 16777216
+  },
+  "topology": "edge namespace/public client <-> shaped veth <-> agent namespace/backend",
+  "public_leg_shaped": false,
+  "directions_shaped": [
+    "edge-to-agent",
+    "agent-to-edge"
+  ],
+  "netem_queue_limit_packets": 1000,
+  "netem_profiles": {
+    "clean": {
+      "one_way_delay_ms": 75,
+      "loss_percent": 0,
+      "rate_mbit": 100
+    },
+    "lossy": {
+      "one_way_delay_ms": 75,
+      "loss_percent": 1,
+      "rate_mbit": 100
+    },
+    "high-rtt-clean": {
+      "one_way_delay_ms": 250,
+      "loss_percent": 0,
+      "rate_mbit": 20
+    },
+    "high-rtt-lossy": {
+      "one_way_delay_ms": 250,
+      "loss_percent": 1,
+      "rate_mbit": 20
+    }
+  },
+  "netem_seeds": [
+    101,
+    202,
+    303
+  ],
+  "seed_orders": {
+    "101": "quic,tcp",
+    "202": "tcp,quic",
+    "303": "quic,tcp"
+  },
+  "transport_orders": [
+    "quic,tcp",
+    "tcp,quic"
+  ],
+  "target_case": null,
+  "qdisc_artifacts": [
+    "clean-101.txt",
+    "clean-202.txt",
+    "clean-303.txt",
+    "high-rtt-clean-101.txt",
+    "high-rtt-clean-202.txt",
+    "high-rtt-clean-303.txt",
+    "high-rtt-lossy-101.txt",
+    "high-rtt-lossy-202.txt",
+    "high-rtt-lossy-303.txt",
+    "lossy-101.txt",
+    "lossy-202.txt",
+    "lossy-303.txt"
+  ],
+  "handshake_included": false
+}

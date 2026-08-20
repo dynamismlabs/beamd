@@ -1,0 +1,5 @@
+server: 10.231.0.1:443
+token: PERFTOKEN
+insecure_skip_verify: true
+transport: tcp
+agent_socket: /tmp/tmp.DeKOyjyh2y/agent-tcp.sock

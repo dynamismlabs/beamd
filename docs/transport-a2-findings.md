@@ -1,34 +1,15 @@
 # Transport A2 — findings, research, and Part B handoff
 
-**Date:** 2026-07-24 → 2026-08-09
-**Status:** **APPROVED / GO** — the operator approved implementing Part B
-(QUIC) behind a default-off flag. A1 shipped and Part B is implemented. The
-first full B4 run exposed a separate TCP/yamux graceful-close regression; its
-correction is confirmed on staging. The next full attempt exposed a distinct
-concurrency-eight stream-ACK timeout and a discarded-warm-up evidence gap.
-Its narrow correction passed the exact targeted staging recheck. The following
-fresh matrix cleared both product defects and completed 36 of 48 blocks with
-725 error-free records before a healthy 100 MiB direct-QUIC transfer reached
-the harness's undersized 20-minute deadline under 500 ms RTT and 1% loss. The
-profile-aware deadline recheck completed direct and beamd QUIC plus direct TCP,
-then exposed a distinct edge liveness bug: TCP head-of-line blocking delayed
-the control heartbeat while a data stream was actively transferring, and the
-edge closed it at 60 seconds. Successful authenticated stream I/O now refreshes
-session activity without allowing a merely open stalled stream to mask an idle
-session; that correction passed its exact targeted staging recheck. The next
-fresh matrix completed 39 of 48 blocks with 796 clean records before a new
-mixed-load TCP stream SYN remained blocked beyond the shared five-second caller
-bound and the adapter closed the healthy session. TCP/yamux now uses a separate
-60-second caller-visible open bound below its 75-second internal establishment
-timer, and the harness can target the exact frozen mixed workload. Its exact
-recheck completed all eight interactive records cleanly but exposed one more
-downstream bound: three background TCP streams reached the agent's five-second
-tunnel-name prefix-read deadline while the shared session remained alive.
-Prefix exchange now keeps QUIC at five seconds and uses 60 seconds for yamux on
-both edge and agent; backend dial remains five seconds. Hosted activation
-remains gated on the fresh complete B4 qualification now running on immutable
-candidate `bfc94f0` and the production-link pilot; the self-hosted defaults
-permanently remain TCP with edge QUIC disabled.
+**Date:** 2026-07-24 → 2026-08-20
+**Status:** **IMPLEMENTED DEFAULT-OFF / HOSTED ACTIVATION NO-GO.** The operator
+approved implementing Part B behind a default-off flag, and all functional and
+qualification-discovered correctness corrections passed targeted staging
+rechecks. Immutable candidate `bfc94f0` then completed all 48 B4 blocks with
+816 unique cases present and error-free. QUIC decisively passed the primary A2
+mixed-load objective, but the fail-closed analyzer returned FAIL on solo
+guardrails. Hosted and self-hosted QUIC remain disabled; the production-link
+pilot and activation must not proceed without a new passing candidate or an
+explicit decision to change the performance policy.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
 
@@ -54,6 +35,20 @@ permanently remain TCP with edge QUIC disabled.
   approved building Part B behind a default-off flag; the B4 qualification must
   prove QUIC collapses the under-load interactive tail before it is activated
   for hosted/session accounts. It does not change the self-hosted default.
+- **The complete B4 run proved the A2 benefit but blocked activation.** Across
+  lossy and high-RTT/lossy profiles, QUIC reduced paired under-load p95 by
+  95.3–97.2% in both directions. It also passed every direct-baseline,
+  lossy-tail, concurrency, and timer-ladder gate. However, it missed the
+  clean/high-RTT-clean p95 guard near 256 KiB and the 16/100 MiB throughput
+  guard under 500 ms RTT plus 1% loss. B4 therefore remains failed.
+- **The residual signatures are below beamd's proxy layer.** The direct
+  fixtures reproduce them and beamd/direct QUIC ratios pass. The pinned
+  quic-go v0.60.0 path uses New Reno with no public congestion-control selector;
+  Linux TCP's mature CUBIC path wins the long high-RTT/loss case. Separately,
+  yamux begins each stream with a 256 KiB window even when configured to grow
+  to the 4 MiB maximum, producing the threshold-shaped TCP comparison. A
+  private transport fork would be material, does not by itself address the
+  clean startup case, and requires an explicit decision.
 - **Prior art confirms the direction:** OpenZiti (which powers zrok) hit the same
   wall and built its own UDP transport (westworld3 / dilithium / "Transwarp").
   beamd uses off-the-shelf `quic-go` instead of rolling its own.
@@ -275,10 +270,13 @@ Caveats (carry these into B4):
   hosted activation.
 
 **Pending / optional:**
-- Let the fresh 48-block B4 matrix on immutable candidate `bfc94f0` run to its
-  fail-closed analyzer verdict. Its prerequisite exact mixed target passed and
-  the matrix began from block one; the prior 39-block evidence is not being
-  resumed or spliced into this run.
+- Decide whether to prototype and maintain a private quic-go congestion-control
+  fork, wait for an upstream selectable controller, or consciously revise the
+  product gate. Do not weaken the recorded analyzer or activate hosted QUIC by
+  default as an incidental implementation change.
+- If a new candidate is produced, rerun the complete B4 qualification from
+  block one. Only a passing fresh verdict can unblock the production-link
+  `auto` pilot under the current policy.
 - Push the local commits (A1 was pushed as `f901bb5`; the perf/spec commits are
   local only — `74579b3`, `d68eb74`, `f9731f9`, `9627e2e`, `76c4b17`).
 - Remote-edge G1 confirmation (optional additional rigor; not an implementation
@@ -292,9 +290,10 @@ Caveats (carry these into B4):
 
 ## 7. Part B execution handoff
 
-Implementation is approved. The compiled/self-hosted edge default remains
-QUIC-off permanently. The hosted deployment must also remain QUIC-off until
-the B4 qualification and production-link pilot pass.
+Implementation is complete. The compiled/self-hosted edge default remains
+QUIC-off permanently. The hosted deployment also remains QUIC-off because the
+complete B4 qualification failed; the production-link pilot is blocked under
+the current policy.
 
 Follow `docs/transport-performance-spec.md` §16 **Part B, Changes 1–4**, in order:
 

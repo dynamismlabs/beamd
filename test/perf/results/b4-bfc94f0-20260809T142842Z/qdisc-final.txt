@@ -1,0 +1,8 @@
+## edge/bpe236789
+qdisc netem 801e: root refcnt 3 limit 1000 delay 250ms loss 1% rate 20Mbit seed 303
+ Sent 93368096295 bytes 84843948 pkt (dropped 287341, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+## agent/bpa236789
+qdisc netem 801f: root refcnt 3 limit 1000 delay 250ms loss 1% rate 20Mbit seed 1000306
+ Sent 95069866209 bytes 85158501 pkt (dropped 295762, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0

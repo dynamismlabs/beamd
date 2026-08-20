@@ -1,0 +1,49 @@
+profile=clean seed=101
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 101
+ Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000104
+ Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+
+after direction=download transport=quic
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 101
+ Sent 34727989 bytes 453169 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 6646b 87p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000104
+ Sent 4102274782 bytes 2843678 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 3021364b 291p requeues 0
+
+after direction=download transport=tcp
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 101
+ Sent 54288175 bytes 744540 pkt (dropped 0, overlimits 0 requeues 0) 
+ backlog 4264b 61p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000104
+ Sent 8309612126 bytes 5844090 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 3016200b 256p requeues 0
+
+after direction=upload transport=quic
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 101
+ Sent 3869128362 bytes 3400805 pkt (dropped 76, overlimits 0 requeues 0) 
+ backlog 647829b 84p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000104
+ Sent 8355551867 bytes 6378482 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 5752b 72p requeues 0
+
+after direction=upload transport=tcp
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 101
+ Sent 7990621211 bytes 6405808 pkt (dropped 76, overlimits 0 requeues 0) 
+ backlog 2484186b 283p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms rate 100Mbit seed 1000104
+ Sent 8373601663 bytes 6648310 pkt (dropped 84, overlimits 0 requeues 0) 
+ backlog 3994b 60p requeues 0

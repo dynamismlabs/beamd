@@ -1,0 +1,109 @@
+Validated 816 unique cases across 3 seeds; all samples are present and error-free.
+[PASS] quic clean direct throughput download 16777216: median=0.999x; block range=0.998–0.999x; minimum 0.80
+[PASS] quic clean direct throughput download 104857600: median=0.999x; block range=0.999–0.999x; minimum 0.80
+[PASS] quic lossy direct throughput download: median=0.994x; block range=0.977–1.035x; minimum 0.60
+[PASS] quic lossy direct p95 download: median=1.020x; block range=1.020–1.060x; maximum 2.0
+[PASS] quic high-rtt-lossy direct throughput download: median=1.003x; block range=0.959–1.004x; minimum 0.60
+[PASS] quic high-rtt-lossy direct p95 download: median=1.018x; block range=0.990–1.022x; maximum 2.0
+[PASS] quic lossy tail download 259072: worst block p95=1.423x median (block median=1.421x); worst block max=1.589x median (block median=1.548x)
+[PASS] quic lossy tail download 263168: worst block p95=1.508x median (block median=1.505x); worst block max=1.750x median (block median=1.707x)
+[PASS] quic lossy tail download 1048576: worst block p95=1.387x median (block median=1.369x); worst block max=1.523x median (block median=1.470x)
+[PASS] quic lossy solo/eight-stream download: median=0.933x; block range=0.920–0.987x; minimum 0.70
+[PASS] quic high-rtt-lossy solo/eight-stream download: median=0.992x; block range=0.976–0.995x; minimum 0.70
+[PASS] quic high-rtt-lossy tiny TTFB download: worst block p95=2.063x median (block median=1.007x); worst block p99=2.138x median (block median=2.053x)
+[PASS] tcp clean direct throughput download: median=0.941x; block range=0.882–0.971x; minimum 0.70
+[PASS] tcp high-rtt-clean direct throughput download: median=0.941x; block range=0.938–0.985x; minimum 0.70
+[PASS] head-to-head clean download 36: throughput median=1.000x; block range=0.999–1.001x; p95 median=0.995x; block range=0.993–1.008x
+[FAIL] head-to-head clean download 259072: throughput median=0.832x; block range=0.832–0.833x; p95 median=1.202x; block range=1.200–1.204x
+[FAIL] head-to-head clean download 263168: throughput median=0.835x; block range=0.833–0.835x; p95 median=1.196x; block range=1.192–1.198x
+[PASS] head-to-head clean download 1048576: throughput median=1.004x; block range=1.003–1.007x; p95 median=0.996x; block range=0.992–1.007x
+[PASS] head-to-head clean download 16777216: throughput median=1.058x; block range=1.026–1.130x; p95 median=0.856x; block range=0.809–0.890x
+[PASS] head-to-head clean download 104857600: throughput median=1.178x; block range=1.142–1.204x; p95 median=0.799x; block range=0.795–0.822x
+[PASS] A2 primary lossy download: TCP defect median=33.491x baseline, p95=10826.1ms; QUIC cut median paired p95 by 96.7% (minimum 50%); QUIC/TCP block range=0.033–0.040x
+[PASS] A2 primary high-rtt-lossy download: TCP defect median=48.458x baseline, p95=48690.8ms; QUIC cut median paired p95 by 97.2% (minimum 50%); QUIC/TCP block range=0.026–0.031x
+[PASS] A2 qualifying-profile presence download: 2 qualifying lossy profile(s); minimum 1
+[PASS] A2 clean mixed guard download: median=0.693x; block range=0.469–0.921x; maximum 1.10
+[PASS] A2 high-rtt-clean mixed guard download: median=0.626x; block range=0.478–0.769x; maximum 1.10
+[PASS] solo-small guard clean download 36: median=0.995x; block range=0.993–1.008x; maximum 1.10
+[FAIL] solo-small guard clean download 259072: median=1.202x; block range=1.200–1.204x; maximum 1.10
+[FAIL] solo-small guard clean download 263168: median=1.196x; block range=1.192–1.198x; maximum 1.10
+[PASS] solo-small guard clean download 1048576: median=0.996x; block range=0.992–1.007x; maximum 1.10
+[PASS] solo-large guard clean download 16777216: median=1.058x; block range=1.026–1.130x; minimum 0.90
+[PASS] solo-large guard clean download 104857600: median=1.178x; block range=1.142–1.204x; minimum 0.90
+[PASS] solo-small guard lossy download 36: median=0.475x; block range=0.472–0.616x; maximum 1.10
+[PASS] solo-small guard lossy download 259072: median=0.728x; block range=0.678–0.736x; maximum 1.10
+[PASS] solo-small guard lossy download 263168: median=0.673x; block range=0.636–0.693x; maximum 1.10
+[PASS] solo-small guard lossy download 1048576: median=0.694x; block range=0.629–0.699x; maximum 1.10
+[PASS] solo-large guard lossy download 16777216: median=1.522x; block range=1.509–1.552x; minimum 0.90
+[PASS] solo-large guard lossy download 104857600: median=1.497x; block range=1.497–1.543x; minimum 0.90
+[PASS] solo-small guard high-rtt-clean download 36: median=1.001x; block range=1.000–1.003x; maximum 1.10
+[FAIL] solo-small guard high-rtt-clean download 259072: median=1.137x; block range=1.135–1.138x; maximum 1.10
+[FAIL] solo-small guard high-rtt-clean download 263168: median=1.128x; block range=1.128–1.129x; maximum 1.10
+[PASS] solo-small guard high-rtt-clean download 1048576: median=0.998x; block range=0.997–0.998x; maximum 1.10
+[PASS] solo-large guard high-rtt-clean download 16777216: median=1.058x; block range=1.010–1.062x; minimum 0.90
+[PASS] solo-large guard high-rtt-clean download 104857600: median=1.078x; block range=1.078–1.094x; minimum 0.90
+[PASS] solo-small guard high-rtt-lossy download 36: median=0.502x; block range=0.448–1.034x; maximum 1.10
+[PASS] solo-small guard high-rtt-lossy download 259072: median=1.080x; block range=1.013–1.140x; maximum 1.10
+[FAIL] solo-small guard high-rtt-lossy download 263168: median=1.215x; block range=1.146–1.296x; maximum 1.10
+[FAIL] solo-small guard high-rtt-lossy download 1048576: median=1.194x; block range=1.166–1.254x; maximum 1.10
+[FAIL] solo-large guard high-rtt-lossy download 16777216: median=0.675x; block range=0.671–0.694x; minimum 0.90
+[FAIL] solo-large guard high-rtt-lossy download 104857600: median=0.681x; block range=0.655–0.703x; minimum 0.90
+[PASS] QUIC timer-backoff ladder clean download: seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0
+[PASS] QUIC timer-backoff ladder lossy download: seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0
+[PASS] QUIC timer-backoff ladder high-rtt-clean download: seed=101: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0
+[PASS] QUIC timer-backoff ladder high-rtt-lossy download: seed=101: threshold=3; 500ms=99, 1000ms=1, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=93, 1000ms=6, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=96, 1000ms=4, 2000ms=0, 4000ms=0, 8000ms=0
+[PASS] quic clean direct throughput upload 16777216: median=0.902x; block range=0.902–0.903x; minimum 0.80
+[PASS] quic clean direct throughput upload 104857600: median=0.982x; block range=0.982–0.982x; minimum 0.80
+[PASS] quic lossy direct throughput upload: median=0.957x; block range=0.952–0.958x; minimum 0.60
+[PASS] quic lossy direct p95 upload: median=1.029x; block range=0.996–1.074x; maximum 2.0
+[PASS] quic high-rtt-lossy direct throughput upload: median=0.972x; block range=0.947–1.021x; minimum 0.60
+[PASS] quic high-rtt-lossy direct p95 upload: median=1.026x; block range=0.960–1.027x; maximum 2.0
+[PASS] quic lossy tail upload 259072: worst block p95=1.445x median (block median=1.437x); worst block max=1.794x median (block median=1.665x)
+[PASS] quic lossy tail upload 263168: worst block p95=1.442x median (block median=1.424x); worst block max=1.663x median (block median=1.553x)
+[PASS] quic lossy tail upload 1048576: worst block p95=1.379x median (block median=1.324x); worst block max=1.613x median (block median=1.604x)
+[PASS] quic lossy solo/eight-stream upload: median=0.907x; block range=0.842–0.914x; minimum 0.70
+[PASS] quic high-rtt-lossy solo/eight-stream upload: median=0.949x; block range=0.930–0.964x; minimum 0.70
+[PASS] quic high-rtt-lossy tiny TTFB upload: worst block p95=1.011x median (block median=1.003x); worst block p99=2.131x median (block median=2.055x)
+[PASS] tcp clean direct throughput upload: median=0.918x; block range=0.918–0.919x; minimum 0.70
+[PASS] tcp high-rtt-clean direct throughput upload: median=0.944x; block range=0.944–0.944x; minimum 0.70
+[PASS] head-to-head clean upload 36: throughput median=1.000x; block range=1.000–1.001x; p95 median=1.000x; block range=0.995–1.001x
+[FAIL] head-to-head clean upload 259072: throughput median=0.828x; block range=0.828–0.829x; p95 median=1.213x; block range=1.207–1.217x
+[PASS] head-to-head clean upload 263168: throughput median=1.444x; block range=1.441–1.448x; p95 median=0.688x; block range=0.684–0.688x
+[PASS] head-to-head clean upload 1048576: throughput median=1.534x; block range=1.532–1.535x; p95 median=0.649x; block range=0.647–0.662x
+[PASS] head-to-head clean upload 16777216: throughput median=1.088x; block range=1.087–1.088x; p95 median=0.919x; block range=0.918–0.919x
+[PASS] head-to-head clean upload 104857600: throughput median=1.020x; block range=1.019–1.020x; p95 median=0.981x; block range=0.980–0.983x
+[PASS] A2 primary lossy upload: TCP defect median=27.707x baseline, p95=10068.6ms; QUIC cut median paired p95 by 95.3% (minimum 50%); QUIC/TCP block range=0.037–0.051x
+[PASS] A2 primary high-rtt-lossy upload: TCP defect median=38.622x baseline, p95=43575.1ms; QUIC cut median paired p95 by 96.7% (minimum 50%); QUIC/TCP block range=0.031–0.033x
+[PASS] A2 qualifying-profile presence upload: 2 qualifying lossy profile(s); minimum 1
+[PASS] A2 clean mixed guard upload: median=0.418x; block range=0.401–0.582x; maximum 1.10
+[PASS] A2 high-rtt-clean mixed guard upload: median=0.644x; block range=0.521–0.671x; maximum 1.10
+[PASS] solo-small guard clean upload 36: median=1.000x; block range=0.995–1.001x; maximum 1.10
+[FAIL] solo-small guard clean upload 259072: median=1.213x; block range=1.207–1.217x; maximum 1.10
+[PASS] solo-small guard clean upload 263168: median=0.688x; block range=0.684–0.688x; maximum 1.10
+[PASS] solo-small guard clean upload 1048576: median=0.649x; block range=0.647–0.662x; maximum 1.10
+[PASS] solo-large guard clean upload 16777216: median=1.088x; block range=1.087–1.088x; minimum 0.90
+[PASS] solo-large guard clean upload 104857600: median=1.020x; block range=1.019–1.020x; minimum 0.90
+[PASS] solo-small guard lossy upload 36: median=0.510x; block range=0.507–0.519x; maximum 1.10
+[PASS] solo-small guard lossy upload 259072: median=0.696x; block range=0.606–0.704x; maximum 1.10
+[PASS] solo-small guard lossy upload 263168: median=0.680x; block range=0.512–0.739x; maximum 1.10
+[PASS] solo-small guard lossy upload 1048576: median=0.671x; block range=0.602–0.745x; maximum 1.10
+[PASS] solo-large guard lossy upload 16777216: median=1.464x; block range=1.433–1.490x; minimum 0.90
+[PASS] solo-large guard lossy upload 104857600: median=1.510x; block range=1.486–1.543x; minimum 0.90
+[PASS] solo-small guard high-rtt-clean upload 36: median=1.000x; block range=0.996–1.001x; maximum 1.10
+[FAIL] solo-small guard high-rtt-clean upload 259072: median=1.137x; block range=1.136–1.137x; maximum 1.10
+[PASS] solo-small guard high-rtt-clean upload 263168: median=0.682x; block range=0.682–0.683x; maximum 1.10
+[PASS] solo-small guard high-rtt-clean upload 1048576: median=0.699x; block range=0.699–0.700x; maximum 1.10
+[PASS] solo-large guard high-rtt-clean upload 16777216: median=1.057x; block range=1.057–1.058x; minimum 0.90
+[PASS] solo-large guard high-rtt-clean upload 104857600: median=1.014x; block range=1.014–1.014x; minimum 0.90
+[PASS] solo-small guard high-rtt-lossy upload 36: median=0.501x; block range=0.444–0.507x; maximum 1.10
+[PASS] solo-small guard high-rtt-lossy upload 259072: median=1.028x; block range=0.929–1.193x; maximum 1.10
+[FAIL] solo-small guard high-rtt-lossy upload 263168: median=1.100x; block range=1.084–1.217x; maximum 1.10
+[FAIL] solo-small guard high-rtt-lossy upload 1048576: median=1.259x; block range=1.122–1.408x; maximum 1.10
+[FAIL] solo-large guard high-rtt-lossy upload 16777216: median=0.677x; block range=0.650–0.686x; minimum 0.90
+[FAIL] solo-large guard high-rtt-lossy upload 104857600: median=0.657x; block range=0.650–0.670x; minimum 0.90
+[PASS] QUIC timer-backoff ladder clean upload: seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0
+[PASS] QUIC timer-backoff ladder lossy upload: seed=101: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=0, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0
+[PASS] QUIC timer-backoff ladder high-rtt-clean upload: seed=101: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=50, 1000ms=0, 2000ms=0, 4000ms=0, 8000ms=0
+[PASS] QUIC timer-backoff ladder high-rtt-lossy upload: seed=101: threshold=3; 500ms=98, 1000ms=2, 2000ms=0, 4000ms=0, 8000ms=0; seed=202: threshold=3; 500ms=96, 1000ms=3, 2000ms=0, 4000ms=0, 8000ms=0; seed=303: threshold=3; 500ms=98, 1000ms=2, 2000ms=0, 4000ms=0, 8000ms=0
+
+B4 VERDICT: FAIL

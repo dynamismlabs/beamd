@@ -1,0 +1,49 @@
+profile=lossy seed=202
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 202
+ Sent 31539046932 bytes 26230280 pkt (dropped 43894, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 1000205
+ Sent 32472519921 bytes 26771947 pkt (dropped 43701, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+
+after direction=download transport=tcp
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 202
+ Sent 31614282481 bytes 27346375 pkt (dropped 55149, overlimits 0 requeues 0) 
+ backlog 798b 9p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 1000205
+ Sent 36198915101 bytes 29236653 pkt (dropped 57831, overlimits 0 requeues 0) 
+ backlog 21196b 7p requeues 0
+
+after direction=download transport=quic
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 202
+ Sent 31671116708 bytes 28095025 pkt (dropped 62567, overlimits 0 requeues 0) 
+ backlog 487b 6p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 1000205
+ Sent 39796033020 bytes 31736317 pkt (dropped 68078, overlimits 0 requeues 0) 
+ backlog 0b 0p requeues 0
+
+after direction=upload transport=tcp
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 202
+ Sent 35366506301 bytes 30541045 pkt (dropped 76688, overlimits 0 requeues 0) 
+ backlog 16720b 7p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 1000205
+ Sent 39871622704 bytes 32858182 pkt (dropped 79469, overlimits 0 requeues 0) 
+ backlog 198b 3p requeues 0
+
+after direction=upload transport=quic
+edge-to-agent:
+qdisc netem 801e: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 202
+ Sent 38954523330 bytes 33042891 pkt (dropped 87235, overlimits 0 requeues 0) 
+ backlog 35519b 12p requeues 0
+agent-to-edge:
+qdisc netem 801f: root refcnt 3 limit 1000 delay 75ms loss 1% rate 100Mbit seed 1000205
+ Sent 39932504256 bytes 33620536 pkt (dropped 87112, overlimits 0 requeues 0) 
+ backlog 480b 6p requeues 0
