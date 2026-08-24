@@ -1,15 +1,17 @@
 # Transport A2 — findings, research, and Part B handoff
 
-**Date:** 2026-07-24 → 2026-08-20
-**Status:** **IMPLEMENTED DEFAULT-OFF / HOSTED ACTIVATION NO-GO.** The operator
-approved implementing Part B behind a default-off flag, and all functional and
-qualification-discovered correctness corrections passed targeted staging
-rechecks. Immutable candidate `bfc94f0` then completed all 48 B4 blocks with
-816 unique cases present and error-free. QUIC decisively passed the primary A2
-mixed-load objective, but the fail-closed analyzer returned FAIL on solo
-guardrails. Hosted and self-hosted QUIC remain disabled; the production-link
-pilot and activation must not proceed without a new passing candidate or an
-explicit decision to change the performance policy.
+**Date:** 2026-07-24 → 2026-08-23
+**Status:** **IMPLEMENTED DEFAULT-OFF / CONTROLLED HOSTED `auto` ROLLOUT
+AUTHORIZED.** The operator approved implementing Part B behind a default-off
+flag, and all functional and qualification-discovered correctness corrections
+passed targeted staging rechecks. Immutable candidate `bfc94f0` then completed
+all 48 B4 blocks with 816 unique cases present and error-free. QUIC decisively
+passed the primary A2 mixed-load objective, but the fail-closed analyzer
+returned FAIL on solo guardrails. On 2026-08-23 the operator explicitly changed
+the activation policy to accept those two known performance limitations for a
+reversible hosted `auto` rollout. The historical B4 verdict remains FAIL;
+compiled and self-hosted defaults remain QUIC-off. See
+`test/perf/results/decision-2026-08-23-hosted-auto-rollout.md`.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.
 
@@ -291,9 +293,11 @@ Caveats (carry these into B4):
 ## 7. Part B execution handoff
 
 Implementation is complete. The compiled/self-hosted edge default remains
-QUIC-off permanently. The hosted deployment also remains QUIC-off because the
-complete B4 qualification failed; the production-link pilot is blocked under
-the current policy.
+QUIC-off permanently. The complete B4 qualification failed its solo-transfer
+guardrails. The explicit 2026-08-23 product-policy decision accepts those
+known limitations for a controlled hosted `auto` rollout, so the
+production-link pilot is no longer blocked. The historical analyzer verdict
+and evidence remain unchanged.
 
 Follow `docs/transport-performance-spec.md` §16 **Part B, Changes 1–4**, in order:
 

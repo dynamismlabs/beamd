@@ -3,7 +3,7 @@
 # Multi-stage build for beamd. The final image ships only the
 # static binary + CA roots — small surface, easy to inspect.
 
-FROM golang:1.25.12-alpine AS build
+FROM golang:1.25.13-alpine AS build
 WORKDIR /src
 
 # Build deps first (cache-friendly).

@@ -96,7 +96,7 @@ docker pull ghcr.io/dynamismlabs/beamd:latest
 # Prebuilt binaries: https://github.com/dynamismlabs/beamd/releases
 ```
 
-Or build from source (needs Go 1.25.12+ or a newer supported Go release):
+Or build from source (needs Go 1.25.13+ or a newer patched Go release):
 
 ```
 git clone https://github.com/dynamismlabs/beamd && cd beamd

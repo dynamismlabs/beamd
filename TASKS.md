@@ -47,8 +47,11 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
   Prefix setup now remains five seconds on QUIC and is 60 seconds on yamux at
   both peers; backend dial remains five seconds. Immutable candidate `bfc94f0`
   passed the exact targeted staging gate with all interactive and live bulk
-  evidence clean, and its fail-closed chain started a fresh 48-block matrix
-  from block one. That matrix is now the active gate.
+  evidence clean. Its fresh 48-block matrix completed all 816 cases with zero
+  errors or corruption and decisively passed the primary mixed-load objective,
+  but failed solo-transfer guardrails. The 2026-08-23 explicit product-policy
+  decision accepts those known limitations for a controlled hosted `auto`
+  rollout without rewriting the historical FAIL verdict.
   Permanent product-aware
   defaults keep self-hosted/token on TCP with edge QUIC disabled, while
   hosted/session resolves to `auto` and the hosted edge enables QUIC only after

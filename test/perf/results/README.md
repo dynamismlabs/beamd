@@ -84,6 +84,12 @@ solo-transfer guardrails failed. See
 [`decision-2026-08-18-b4-qualification.md`](decision-2026-08-18-b4-qualification.md)
 for the activation no-go and diagnosis.
 
+On 2026-08-23 the operator made the separate product-policy decision to accept
+the two recorded solo-transfer limitations for a controlled hosted `auto`
+rollout. That decision does not alter the retained analyzer output or claim a
+passing B4 verdict. See
+[`decision-2026-08-23-hosted-auto-rollout.md`](decision-2026-08-23-hosted-auto-rollout.md).
+
 The evidence directory is the byte-for-byte harness output copied from the
 qualification host, except `operator/`. That subdirectory contains the systemd
 wrapper and console transcript copied after completion for operator audit; it

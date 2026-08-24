@@ -76,6 +76,11 @@ anything. Do not bypass that ordering for a local release.
 
 From a clean working tree on `main`, with tests green (`make test`):
 
+Use the patched toolchain pinned by `go.mod` (or a newer patched Go release),
+and treat `govulncheck ./...` as a hard release gate. In particular, do not
+build this release with Go 1.25.12 or Go 1.26.3; their standard libraries have
+reachable advisories fixed in Go 1.25.13 and Go 1.26.6 respectively.
+
 ```
 # 1. (first time only) log in to npm
 npm login

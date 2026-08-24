@@ -438,7 +438,7 @@ npm i -g @beamd/cli      # installs `beamd`; or `npx @beamd/cli <cmd>` ad-hoc
 
 Or grab a prebuilt binary from the
 [releases page](https://github.com/dynamismlabs/beamd/releases), or build
-from source (needs Go 1.25.12+ or a newer supported Go release):
+from source (needs Go 1.25.13+ or a newer patched Go release):
 
 ```
 git clone https://github.com/dynamismlabs/beamd && cd beamd
@@ -624,8 +624,8 @@ sessions are dropped immediately; they can't reconnect.
 Until v0.1.0 is tagged + image published, build on the server:
 
 ```
-# Install Git, then install Go 1.25.12+ from https://go.dev/doc/install.
-# quic-go v0.60.0 requires Go 1.25; this repository pins the patched 1.25.12
+# Install Git, then install Go 1.25.13+ from https://go.dev/doc/install.
+# quic-go v0.60.0 requires Go 1.25; this repository pins the patched 1.25.13
 # minimum and also builds with newer supported Go releases.
 sudo apt update && sudo apt install -y git
 go version

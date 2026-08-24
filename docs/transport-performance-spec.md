@@ -7,15 +7,17 @@ present and error-free. The fail-closed analyzer nevertheless returned
 `B4 VERDICT: FAIL`: QUIC passed every direct-baseline, tail, parallel-stream,
 timer-ladder, and primary mixed-load gate, including 95.3–97.2% reductions in
 lossy under-load p95 latency, but missed solo-transfer guardrails near 256 KiB
-and for large transfers at 500 ms RTT plus 1% loss. Hosted QUIC activation is
-therefore **NO-GO**; the production-link pilot must not start and QUIC remains
-disabled in hosted deployment. The compiled and self-hosted defaults remain
-TCP with the edge QUIC listener disabled. A private congestion-control fork or
-any gate-policy change requires a separate explicit decision.
+and for large transfers at 500 ms RTT plus 1% loss. On 2026-08-23 the operator
+explicitly changed the activation policy and authorized a controlled hosted
+`auto` rollout that accepts those two known performance limitations while
+preserving TCP fallback and both rollback controls. This policy decision does
+not convert the historical B4 result to PASS or change compiled/self-hosted
+defaults. See
+`test/perf/results/decision-2026-08-23-hosted-auto-rollout.md`.
 
 **Owner:** Dynamism
 
-**Last updated:** 2026-08-20
+**Last updated:** 2026-08-23
 
 **Scope:** `beamd` edge, Go client/agent, shared transport code, packaging, deployment, tests, and observability
 
@@ -443,7 +445,7 @@ second session-close record.
 ## 7. QUIC transport
 
 Add a direct dependency on `github.com/quic-go/quic-go` pinned to `v0.60.0`.
-That release requires Go 1.25. This repository pins Go 1.25.12 as the minimum
+That release requires Go 1.25. This repository pins Go 1.25.13 as the minimum
 patched toolchain and also supports newer maintained Go releases.
 
 This is raw QUIC carrying beamd's existing streams. Do not add `http3`.
@@ -2100,16 +2102,18 @@ decision task, not part of A1 completion.
 > **Implementation status:** B1–B3, the B4 qualification code/functional
 > matrix, the non-production staging rehearsal, and the complete privileged B4
 > run are complete. The performance verdict is FAIL, so B4.4 remains unchecked
-> and B4.5–B4.6 are blocked. The compiled, self-hosted, and hosted deployments
-> intentionally remain on TCP with the hosted/self-hosted QUIC listener
-> disabled. Do not prepare production UDP exposure, pilot `auto`, or activate
-> hosted QUIC without a new candidate that passes B4.4 or an explicit product
-> decision changing the gate policy.
+> and is not reclassified. The explicit 2026-08-23 product-policy decision
+> accepts its two known solo-transfer limitations and unblocks B4.5–B4.6 for a
+> controlled hosted `auto` rollout. The compiled and self-hosted defaults remain
+> TCP with the edge QUIC listener disabled; both hosted rollback controls remain
+> mandatory.
 
 The recorded and operator-approved G1 GO satisfies the prerequisite to begin
-B1. Do not execute B4.6 until B1–B4.5, the functional and performance gates,
-the product-default matrix, and the rollback rehearsal all pass. After B4.6,
-complete the final hosted production validation and Definition of Done.
+B1. Under the original gate policy, do not execute B4.6 until B1–B4.5 and every
+performance gate passes. The explicit 2026-08-23 policy decision supersedes
+only that performance-gate prerequisite for this controlled hosted rollout;
+the functional matrix, product-default matrix, rollback rehearsal, production
+validation, and all other Definition of Done requirements remain mandatory.
 
 ## 17. Production host requirements
 
