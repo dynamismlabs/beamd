@@ -81,10 +81,13 @@ for server in "${servers[@]}"; do
     args=(check --server "$server" --transport "$transport" --json)
     [[ -z "$scope" ]] || args+=(--scope "$scope")
 
+    stderr_file="$(mktemp "${TMPDIR:-/tmp}/beamd-transport-probe.XXXXXX")"
     set +e
-    result="$($beamd_bin "${args[@]}" 2>&1)"
+    result="$("$beamd_bin" "${args[@]}" 2>"$stderr_file")"
     exit_code=$?
     set -e
+    probe_stderr="$(<"$stderr_file")"
+    rm -f "$stderr_file"
     (( exit_code == 0 )) || failed=1
 
     if ! printf '%s\n' "$result" | jq -ce \
@@ -97,12 +100,16 @@ for server in "${servers[@]}"; do
         requestedTransport: $requestedTransport,
         probeServer: $probeServer,
         exitCode: $exitCode
-      }' >> "$output"; then
+      }' >> "$output" 2>/dev/null; then
+      error="$result"
+      if [[ -n "$probe_stderr" ]]; then
+        error="${probe_stderr}${result:+$'\n'}${result}"
+      fi
       jq -nc \
         --arg checkedAt "$checked_at" \
         --arg requestedTransport "$transport" \
         --arg probeServer "$server" \
-        --arg error "$result" \
+        --arg error "$error" \
         --argjson exitCode "$exit_code" \
         '{
           ok: false,
