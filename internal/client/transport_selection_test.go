@@ -892,9 +892,21 @@ func TestTransportDiagnostics(t *testing.T) {
 }
 
 func TestReconnectUpdatesDiagnosticsAndRetainsTCP(t *testing.T) {
+	closeFirst := make(chan struct{})
+	var closeFirstOnce sync.Once
+	closeFirstSession := func() {
+		closeFirstOnce.Do(func() { close(closeFirst) })
+	}
+	t.Cleanup(closeFirstSession)
+
 	var round atomic.Int32
 	fe := newFakeEdge(t, func(_ tunnel.Stream, sess tunnel.Session, _ *bufio.Reader, _ proto.Hello) {
 		if round.Add(1) == 1 {
+			// Do not close until Connect has consumed hello_ok and installed the
+			// first session. Returning immediately races the buffered hello reply
+			// against the deferred session close and makes this reconnect test
+			// intermittently fail during its initial handshake.
+			<-closeFirst
 			return
 		}
 		<-sess.Done()
@@ -904,6 +916,7 @@ func TestReconnectUpdatesDiagnosticsAndRetainsTCP(t *testing.T) {
 		ReconnectInitial: 10 * time.Millisecond,
 		ReconnectMax:     20 * time.Millisecond,
 	})
+	closeFirstSession()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
