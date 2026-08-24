@@ -80,6 +80,17 @@ explicitly: their bearer token is intentionally indistinguishable from an OSS
 token at client startup, so product tier must not be inferred from the token or
 hostname.
 
+**Transport telemetry.** Every routed request event includes the actual
+`tcp|quic` session kind. Hosted ingestion stores it as nullable
+`request_event.transport` (historical and `no_route` rows remain null), and the
+dashboard groups request/byte share, completion rate, TTFB, and large-response
+throughput by transport. Existing `/metrics` transport session/error counters
+remain the fast operational view. For a same-machine availability/handshake
+comparison that is not biased by `auto` fallback cohorts, schedule
+`scripts/transport-probe.sh` from an external client with both hosted accounts;
+it appends rotating NDJSON to `~/.beamd/transport-probes.ndjson` without opening
+or disrupting a tunnel.
+
 ---
 
 ## Open design decisions (revisit before launch)

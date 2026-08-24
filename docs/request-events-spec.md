@@ -86,6 +86,7 @@ type (`internal/beamdapi`), and the hand-written sink struct (`internal/reqlog`)
 | `request_id`   | string  | yes | Edge-minted **uuidv7**, **per-emit** — each request *and* each heartbeat window gets its own. The idempotency key (dedupe via `onConflictDoNothing`); maps to the DB `id` PK. |
 | `connection_id`| string  | no  | Edge-minted; **shared across a long connection's heartbeat events** so they correlate. Absent for one-shot requests. |
 | `slug`         | string  | no  | From `route.session.slug` when there's a route; **empty on `no_route`** (no session). **Billing attribution is slug-first** (alias-aware `claimed_slug → org`; present on every routed request, no host parse). `host` is the URL **identity** + the org key only for the rare `no_route` enrichment (§5.2). |
+| `transport`    | enum    | no  | Tunnel transport that served the request: `tcp \| quic`. Omitted only when no route/session exists; historical rows from older edges remain null. |
 | `host`         | string  | yes | Port-stripped `Host` (`edge.go:643`). The URL **identity** (links to the `tunnel` registry, per-URL grouping); org key **only** for `no_route` enrichment (§5.2) — routed traffic attributes slug-first. |
 | `method`       | string  | yes | `r.Method`. |
 | `path`         | string  | no  | `r.URL.EscapedPath()` — the **percent-encoded** path, NOT the decoded `r.URL.Path`: keeps `%00` / control bytes encoded so a raw control byte never reaches Postgres `text` (`ops/incident-reqlog-nul-wedge.md`). **Query string stripped** (`EscapedPath` omits it; secrets leak). Analytics tier (`capture.path`, §4.6). Optional edge redaction of token-shaped segments (JWT / long hex/base64url / UUID / email → `«redacted»`) — paths carry secrets too. |
@@ -123,20 +124,21 @@ type RequestEvent struct {
 	RequestID    string `json:"request_id"`               // edge-minted uuidv7, per-emit → DB id (PK)
 	ConnectionID string `json:"connection_id,omitempty"`  // shared across a connection's heartbeats
 	Slug         string `json:"slug,omitempty"`           // optional: empty on no_route
-	Host        string  `json:"host"`
-	Method      string  `json:"method"`
-	Path        string  `json:"path,omitempty"`   // optional: omitted when capture.path off
-	Status      int     `json:"status"`
-	Outcome     string  `json:"outcome"`
-	BytesIn     int64   `json:"bytes_in"`
-	BytesOut    int64   `json:"bytes_out"`
-	TTFBMs      *int64  `json:"ttfb_ms,omitempty"`
-	IsWebSocket bool    `json:"is_websocket"`
-	ClientIP    string  `json:"client_ip,omitempty"`
-	UserAgent   string  `json:"user_agent,omitempty"`
-	Referer     string  `json:"referer,omitempty"`
-	StartedAt   string  `json:"started_at"`
-	EndedAt     string  `json:"ended_at"`
+	Transport    string `json:"transport,omitempty"`      // optional: empty on no_route
+	Host         string `json:"host"`
+	Method       string `json:"method"`
+	Path         string `json:"path,omitempty"` // optional: omitted when capture.path off
+	Status       int    `json:"status"`
+	Outcome      string `json:"outcome"`
+	BytesIn      int64  `json:"bytes_in"`
+	BytesOut     int64  `json:"bytes_out"`
+	TTFBMs       *int64 `json:"ttfb_ms,omitempty"`
+	IsWebSocket  bool   `json:"is_websocket"`
+	ClientIP     string `json:"client_ip,omitempty"`
+	UserAgent    string `json:"user_agent,omitempty"`
+	Referer      string `json:"referer,omitempty"`
+	StartedAt    string `json:"started_at"`
+	EndedAt      string `json:"ended_at"`
 }
 
 // Sink receives completed request events. Record must be non-blocking and

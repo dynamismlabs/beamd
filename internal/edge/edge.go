@@ -1591,10 +1591,12 @@ func (e *Edge) handler(w http.ResponseWriter, r *http.Request) {
 	e.mu.RUnlock()
 
 	slug := ""
+	transport := ""
 	if route != nil {
 		slug = route.session.slug
+		transport = string(route.session.kind)
 	}
-	meta := e.metaFor(host, slug, r.Method, requestTarget(r), r.RemoteAddr, r.UserAgent(), r.Referer(), start)
+	meta := e.metaFor(host, slug, transport, r.Method, requestTarget(r), r.RemoteAddr, r.UserAgent(), r.Referer(), start)
 	declaredBodyTooLarge := e.cfg.MaxRequestBodyBytes > 0 &&
 		r.ContentLength > e.cfg.MaxRequestBodyBytes
 

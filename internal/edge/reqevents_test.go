@@ -56,6 +56,26 @@ func (c *capSink) events() []reqlog.RequestEvent {
 	return append([]reqlog.RequestEvent(nil), c.ev...)
 }
 
+func TestEmitRequestIncludesTransport(t *testing.T) {
+	sink := &capSink{}
+	e := &Edge{reqSink: sink}
+	e.emitRequest(reqMeta{
+		host:      "api-acme.beamd.run",
+		slug:      "acme",
+		transport: "tcp",
+		method:    "GET",
+		started:   time.Now(),
+	}, 200, reqlog.OutcomeOK, 10, 20, time.Now())
+
+	events := sink.events()
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if got := events[0].Transport; got != "tcp" {
+		t.Fatalf("transport = %q, want tcp", got)
+	}
+}
+
 type blockingFinalSink struct {
 	finalStarted chan struct{}
 	releaseFinal chan struct{}
@@ -77,7 +97,7 @@ func (s *blockingFinalSink) Record(e reqlog.RequestEvent) {
 func TestWSHeartbeatEmitsPerWindow(t *testing.T) {
 	sink := &capSink{}
 	e := &Edge{reqSink: sink, reqHeartbeat: 30 * time.Millisecond}
-	meta := reqMeta{host: "ws-acme.beamd.run", slug: "acme", method: "GET", started: time.Now()}
+	meta := reqMeta{host: "ws-acme.beamd.run", slug: "acme", transport: "quic", method: "GET", started: time.Now()}
 
 	client, server := net.Pipe()
 	wrapped := e.startWSHeartbeat(meta, server)
@@ -105,6 +125,9 @@ func TestWSHeartbeatEmitsPerWindow(t *testing.T) {
 	var inProgress, final int
 	var totalIn int64
 	for _, ev := range evs {
+		if ev.Transport != "quic" {
+			t.Errorf("transport = %q, want quic", ev.Transport)
+		}
 		if ev.ConnectionID != connID {
 			t.Errorf("connection_id differs across windows: %q vs %q", ev.ConnectionID, connID)
 		}
@@ -141,7 +164,7 @@ func TestWSHeartbeatCloseCallbackWaitsForFinalEvent(t *testing.T) {
 	}
 	callbackDone := make(chan struct{})
 	e := &Edge{reqSink: sink, reqHeartbeat: time.Hour}
-	meta := reqMeta{host: "ws-acme.beamd.run", slug: "acme", method: "GET", started: time.Now()}
+	meta := reqMeta{host: "ws-acme.beamd.run", slug: "acme", transport: "tcp", method: "GET", started: time.Now()}
 
 	client, server := net.Pipe()
 	wrapped := e.startWSHeartbeat(meta, server, func() { close(callbackDone) })

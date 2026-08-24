@@ -54,6 +54,24 @@ func (e RequestEventOutcome) Valid() bool {
 	}
 }
 
+// Defines values for RequestEventTransport.
+const (
+	Quic RequestEventTransport = "quic"
+	Tcp  RequestEventTransport = "tcp"
+)
+
+// Valid indicates whether the value is a known member of the RequestEventTransport enum.
+func (e RequestEventTransport) Valid() bool {
+	switch e {
+	case Quic:
+		return true
+	case Tcp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ResolveHostResponseCertMode.
 const (
 	ResolveHostResponseCertModeDelegated ResolveHostResponseCertMode = "delegated"
@@ -166,6 +184,7 @@ type DeviceTokenResponse struct {
 // RequestAccepted defines model for RequestAccepted.
 type RequestAccepted struct {
 	Accepted int  `json:"accepted"`
+	Dropped  *int `json:"dropped,omitempty"`
 	Ok       bool `json:"ok"`
 }
 
@@ -176,27 +195,31 @@ type RequestBatch struct {
 
 // RequestEvent defines model for RequestEvent.
 type RequestEvent struct {
-	BytesIn      int                 `json:"bytes_in"`
-	BytesOut     int                 `json:"bytes_out"`
-	ClientIp     *string             `json:"client_ip,omitempty"`
-	ConnectionId *string             `json:"connection_id,omitempty"`
-	EndedAt      string              `json:"ended_at"`
-	Host         string              `json:"host"`
-	IsWebsocket  bool                `json:"is_websocket"`
-	Method       string              `json:"method"`
-	Outcome      RequestEventOutcome `json:"outcome"`
-	Path         *string             `json:"path,omitempty"`
-	Referer      *string             `json:"referer,omitempty"`
-	RequestId    string              `json:"request_id"`
-	Slug         *string             `json:"slug,omitempty"`
-	StartedAt    string              `json:"started_at"`
-	Status       int                 `json:"status"`
-	TtfbMs       *int                `json:"ttfb_ms,omitempty"`
-	UserAgent    *string             `json:"user_agent,omitempty"`
+	BytesIn      int                    `json:"bytes_in"`
+	BytesOut     int                    `json:"bytes_out"`
+	ClientIp     *string                `json:"client_ip,omitempty"`
+	ConnectionId *string                `json:"connection_id,omitempty"`
+	EndedAt      string                 `json:"ended_at"`
+	Host         string                 `json:"host"`
+	IsWebsocket  bool                   `json:"is_websocket"`
+	Method       string                 `json:"method"`
+	Outcome      RequestEventOutcome    `json:"outcome"`
+	Path         *string                `json:"path,omitempty"`
+	Referer      *string                `json:"referer,omitempty"`
+	RequestId    string                 `json:"request_id"`
+	Slug         *string                `json:"slug,omitempty"`
+	StartedAt    string                 `json:"started_at"`
+	Status       int                    `json:"status"`
+	Transport    *RequestEventTransport `json:"transport,omitempty"`
+	TtfbMs       *int                   `json:"ttfb_ms,omitempty"`
+	UserAgent    *string                `json:"user_agent,omitempty"`
 }
 
 // RequestEventOutcome defines model for RequestEvent.Outcome.
 type RequestEventOutcome string
+
+// RequestEventTransport defines model for RequestEvent.Transport.
+type RequestEventTransport string
 
 // ResolveHostResponse defines model for ResolveHostResponse.
 type ResolveHostResponse struct {

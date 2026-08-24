@@ -18,15 +18,15 @@ func (e *Edge) SetReqSink(s reqlog.Sink) { e.reqSink = s }
 // reqMeta is the per-request metadata captured before proxying. Analytics fields
 // are already gated by the capture config (empty when not captured).
 type reqMeta struct {
-	host, slug, method, path     string
-	clientIP, userAgent, referer string
-	started                      time.Time
+	host, slug, transport, method, path string
+	clientIP, userAgent, referer        string
+	started                             time.Time
 }
 
 // metaFor builds reqMeta from a request, applying the edge's capture + IP
 // minimization config (billing fields always populated; analytics fields gated).
-func (e *Edge) metaFor(host, slug, method, path, remoteAddr, ua, ref string, started time.Time) reqMeta {
-	m := reqMeta{host: host, slug: slug, method: method, started: started}
+func (e *Edge) metaFor(host, slug, transport, method, path, remoteAddr, ua, ref string, started time.Time) reqMeta {
+	m := reqMeta{host: host, slug: slug, transport: transport, method: method, started: started}
 	if e.capPath {
 		m.path = path
 	}
@@ -54,6 +54,7 @@ func (e *Edge) emitRequest(m reqMeta, status int, outcome string, bytesIn, bytes
 	ev := reqlog.RequestEvent{
 		RequestID: reqlog.NewID(),
 		Slug:      m.slug,
+		Transport: m.transport,
 		Host:      m.host,
 		Method:    m.method,
 		Path:      m.path,
@@ -135,6 +136,7 @@ func (e *Edge) startWSHeartbeat(m reqMeta, raw net.Conn, callbacks ...func()) ne
 				RequestID:    reqlog.NewID(),
 				ConnectionID: connID,
 				Slug:         m.slug,
+				Transport:    m.transport,
 				Host:         m.host,
 				Method:       m.method,
 				Path:         m.path,

@@ -21,6 +21,7 @@ type RequestEvent struct {
 	RequestID    string `json:"request_id"`              // edge-minted uuidv7 → the control plane's id PK
 	ConnectionID string `json:"connection_id,omitempty"` // shared across a connection's heartbeats
 	Slug         string `json:"slug,omitempty"`          // empty on no_route (no session)
+	Transport    string `json:"transport,omitempty"`     // tcp or quic; empty when no route/session exists
 	Host         string `json:"host"`
 	Method       string `json:"method"`
 	Path         string `json:"path,omitempty"` // omitted when capture.path is off
