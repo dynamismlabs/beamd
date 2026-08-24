@@ -54,8 +54,9 @@ The first cluster (real ACME issuance + cert persistence) blocked "real MVP" sta
   rollout without rewriting the historical FAIL verdict.
   Permanent product-aware
   defaults keep self-hosted/token on TCP with edge QUIC disabled, while
-  hosted/session resolves to `auto` and the hosted edge enables QUIC only after
-  B4 qualification and the production-link pilot. The single canonical
+  hosted/session resolves to `auto`. The explicit exception, production-link
+  pilot, and hosted activation completed on immutable release `5214883`; both
+  rollback controls remain permanent. The single canonical
   specification and executable checklist is
   [`docs/transport-performance-spec.md`](docs/transport-performance-spec.md).
   Work its Section 16 top to bottom; do not duplicate or independently track

@@ -67,7 +67,8 @@ brief in [`web-app-handoff.md`](web-app-handoff.md).
 
 **Transport policy.** Hosted and self-hosted use the same binary. The compiled
 edge default remains `disable_quic: true`; after the transport qualification
-and production-link pilot pass, every hosted edge deployment explicitly sets
+and production-link pilot pass (or an explicit documented product-policy
+exception), every hosted edge deployment explicitly sets
 `BEAMD_DISABLE_QUIC=false`. A hosted device-code login is persisted locally as
 `kind: session`, so its omitted client transport resolves to `auto` (QUIC
 preferred with tuned-TCP fallback). Pasted-token/API-key, legacy missing-kind,

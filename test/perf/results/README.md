@@ -86,8 +86,9 @@ for the activation no-go and diagnosis.
 
 On 2026-08-23 the operator made the separate product-policy decision to accept
 the two recorded solo-transfer limitations for a controlled hosted `auto`
-rollout. That decision does not alter the retained analyzer output or claim a
-passing B4 verdict. See
+rollout. The rollout subsequently completed on immutable release `5214883`.
+That decision and deployment do not alter the retained analyzer output or claim
+a passing B4 verdict. See
 [`decision-2026-08-23-hosted-auto-rollout.md`](decision-2026-08-23-hosted-auto-rollout.md).
 
 The evidence directory is the byte-for-byte harness output copied from the

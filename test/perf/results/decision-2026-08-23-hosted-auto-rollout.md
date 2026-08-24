@@ -56,6 +56,60 @@ transfer would be faster there.
   WebSocket, reconnect, listener health, or sustained resource checks fail.
   An `auto` client must then recover over TCP without a configuration change.
 
+## Rollout result
+
+**Complete on 2026-08-23.** Release
+`52148835169de58aea705ed61ebcb6aff6fc4647` was fast-forwarded to remote
+`main`, built with patched Go 1.25.13, and deployed to both hosted edges. The
+Linux artifact SHA-256 was
+`81f343ca6db97a41ff3c694aa811899981a41cd31db86bdce78ffdc3f6ae1b70`.
+The prior edge binaries remain recoverable as `90acefa` on staging and
+`f901bb5` on production.
+
+Release verification passed the complete Go suite, vet, the serial broad race
+suite, focused race stress, `govulncheck` with zero reachable vulnerabilities,
+OpenAPI drift, four-platform npm build/package smoke, and all seven independent
+GitHub Actions jobs. A race-test handshake-ordering flake found by the first CI
+run was synchronized in `5214883`; 100 focused repetitions and the rerun passed.
+
+Both native systemd hosts now:
+
+- serve `5214883` on TCP 443 and UDP 443;
+- persist `net.core.rmem_max=7340032` and `net.core.wmem_max=7340032`;
+- run the 4 MiB tuned yamux fallback and `GOMEMLIMIT=1400MiB`;
+- use an isolated transport environment overlay with
+  `BEAMD_DISABLE_QUIC=false`; and
+- retain the prior binary plus a one-file `BEAMD_DISABLE_QUIC=true` rollback.
+
+Staging passed forced TCP, forced QUIC, hosted `auto => quic`, HTTP/1.1 and
+HTTP/2, forwarded headers, five-event SSE, byte-exact 16 MiB download and
+upload, WebSocket echo, edge restart/reconnect/route replay, and a full global
+rollback. With UDP disabled, the unchanged `auto` agent selected TCP and the
+existing HTTP/WebSocket tunnel remained healthy. The separate local
+`BEAMD_TRANSPORT=tcp` override selected configured and active TCP; staging was
+then restored to `auto => quic`. Edge RSS was approximately 17 MiB after the
+exercise, with no capacity or stream-open errors.
+
+Production passed forced TCP, forced QUIC, hosted `auto => quic`, the same
+real-link HTTP/SSE/16 MiB/WebSocket matrix, HTTP/2, and route registration from
+the operator's Mac. Its two pre-existing detached routes were restored under
+the matching agent. `flow-local` returned HTTP 200; `flow-dev` remained HTTP
+502 because no process was listening on its pre-existing local port 42241, a
+backend condition also present in pre-deployment logs rather than a transport
+failure.
+
+From 2026-08-24 01:54:50 UTC through 02:05:00 UTC, 21/21 samples reported both
+public health endpoints healthy on `5214883` and both hosted agents healthy
+with `configuredTransport=auto` and `transport=quic`. The encrypted SSH key
+cache expired after deployment, so the final production journal/RSS snapshot
+could not be collected in that window; staging supplied the host-level
+resource/log snapshot, while production public health, authenticated transport,
+full transfer/WebSocket, and agent diagnostics remained continuously green.
+
+The operator's global CLI is installed from the matching offline-tested
+`0.0.8-dev.5214883` Darwin package. This did not publish or tag a public npm
+release.
+
 ## Follow-up
 
 Track upstream selectable/pluggable congestion control in quic-go. Re-run the

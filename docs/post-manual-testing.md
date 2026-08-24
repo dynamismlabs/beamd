@@ -103,10 +103,13 @@ Do not set it to `/root` or a developer HOME for unattended runs; a systemd
 unit may omit HOME entirely.
 
 Do not activate QUIC in the hosted deployment unless its complete
-`test/perf/results/b4-*` evidence passes and the production-link `auto` pilot
-and both rollback controls were rehearsed. A smoke-mode harness run is never
-qualification evidence. The compiled and self-hosted defaults remain TCP with
-edge QUIC disabled regardless of that hosted decision.
+`test/perf/results/b4-*` evidence passes, or an explicit product-policy decision
+accepts the recorded failures, and the production-link `auto` pilot plus both
+rollback controls are completed. A smoke-mode harness run is never
+qualification evidence. The controlled 2026-08-23 exception and rollout are
+recorded in `test/perf/results/decision-2026-08-23-hosted-auto-rollout.md`.
+The compiled and self-hosted defaults remain TCP with edge QUIC disabled
+regardless of that hosted decision.
 
 ---
 

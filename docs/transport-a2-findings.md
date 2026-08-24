@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-24 → 2026-08-23
 **Status:** **IMPLEMENTED DEFAULT-OFF / CONTROLLED HOSTED `auto` ROLLOUT
-AUTHORIZED.** The operator approved implementing Part B behind a default-off
+COMPLETE.** The operator approved implementing Part B behind a default-off
 flag, and all functional and qualification-discovered correctness corrections
 passed targeted staging rechecks. Immutable candidate `bfc94f0` then completed
 all 48 B4 blocks with 816 unique cases present and error-free. QUIC decisively
@@ -10,7 +10,9 @@ passed the primary A2 mixed-load objective, but the fail-closed analyzer
 returned FAIL on solo guardrails. On 2026-08-23 the operator explicitly changed
 the activation policy to accept those two known performance limitations for a
 reversible hosted `auto` rollout. The historical B4 verdict remains FAIL;
-compiled and self-hosted defaults remain QUIC-off. See
+compiled and self-hosted defaults remain QUIC-off. Immutable release `5214883`
+completed the staging and production rollout on 2026-08-23; both hosted agents
+are healthy in `auto` on QUIC, with TCP and both rollback controls retained. See
 `test/perf/results/decision-2026-08-23-hosted-auto-rollout.md`.
 **Audience:** whoever executes Part B (see `docs/transport-performance-spec.md`
 §16 Changes 1–4). Read this first; it is the *why* behind the corrected spec.

@@ -12,7 +12,9 @@ explicitly changed the activation policy and authorized a controlled hosted
 `auto` rollout that accepts those two known performance limitations while
 preserving TCP fallback and both rollback controls. This policy decision does
 not convert the historical B4 result to PASS or change compiled/self-hosted
-defaults. See
+defaults. The controlled hosted rollout completed on 2026-08-23 with immutable
+release `5214883`: staging and production both serve TCP+QUIC, and their hosted
+session agents are healthy in `auto` on QUIC. See
 `test/perf/results/decision-2026-08-23-hosted-auto-rollout.md`.
 
 **Owner:** Dynamism
@@ -1919,9 +1921,13 @@ decision task, not part of A1 completion.
 
 ### Part B, Change 4 — deployment, qualification, and hosted activation
 
-- [ ] **B4.1 — Prepare production networking.** Publish UDP 443, update
+- [x] **B4.1 — Prepare production networking.** Publish UDP 443, update
   Docker/firewall configuration, persist required UDP sysctls, and document
-  memory and macOS socket-buffer guidance.
+  memory and macOS socket-buffer guidance. Completed 2026-08-23 for the native
+  systemd staging and production hosts: both publish TCP+UDP 443, persist the
+  7 MiB UDP ceilings, run with `GOMEMLIMIT=1400MiB`, and retain the tuned 4 MiB
+  yamux path. The repository Dockerfile/compose path already exposes both
+  protocols but was not the deployment mechanism on these hosts.
 - [x] **B4.2 — Build the qualification harness.** Implement Section 15.3 and
   its fail-closed validation, frozen mixed-load workload, direct baselines,
   counterbalanced transport order, and complete metadata under
@@ -2083,30 +2089,39 @@ decision task, not part of A1 completion.
   256 KiB, additional high-RTT/lossy small-transfer guards, and both 16 MiB and
   100 MiB high-RTT/lossy large-transfer throughput guards in both directions.
   Direct fixtures reproduce the two signatures, while beamd/direct QUIC ratios
-  pass, locating the residual gap below beamd's proxy/session layer. Do not
-  weaken the gates or start B4.5. The retained evidence and activation no-go
-  are recorded in
+  pass, locating the residual gap below beamd's proxy/session layer. The
+  retained evidence and original activation no-go are recorded in
   `test/perf/results/decision-2026-08-18-b4-qualification.md`.
-- [ ] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
+- [x] **B4.5 — Pilot in `auto`.** Enable the edge QUIC listener, keep the
   compiled/self-hosted defaults unchanged, run the hosted production session
   in `auto`, validate both directions/WebSockets/reconnect over the real
-  production link, and observe metrics and memory.
-- [ ] **B4.6 — Activate the permanent hosted policy after the pilot.**
+  production link, and observe metrics and memory. Completed 2026-08-23 on
+  immutable release `5214883`: forced TCP/QUIC, hosted `auto => quic`, HTTP/1.1
+  and HTTP/2, forwarded headers, SSE, exact 16 MiB upload/download integrity,
+  WebSockets, route replay, public health, and the public/agent observation
+  window passed. Staging additionally passed edge restart recovery, global
+  `auto => tcp` fallback, the agent-local TCP override, and host-level
+  memory/log checks before returning to QUIC. The unavailable final production
+  RSS/journal snapshot is retained as evidence debt in the rollout record.
+- [x] **B4.6 — Activate the permanent hosted policy after the pilot.**
   Explicitly set `disable_quic: false` in the hosted edge deployment; the
   tested `kind: session => auto` resolver is already implemented. Confirm
   hosted sessions and managed paid configs select QUIC, while fresh
   self-hosted/token, missing-kind, and ordinary standalone clients still
   select TCP and a default self-hosted edge does not bind UDP. Permanently
-  retain both rollback controls and the tuned TCP path.
+  retain both rollback controls and the tuned TCP path. Completed 2026-08-23:
+  both hosted edge deployments explicitly set `BEAMD_DISABLE_QUIC=false` in a
+  transport-specific environment overlay, while the compiled and self-hosted
+  defaults and their existing resolution tests remain unchanged.
 
 > **Implementation status:** B1–B3, the B4 qualification code/functional
 > matrix, the non-production staging rehearsal, and the complete privileged B4
 > run are complete. The performance verdict is FAIL, so B4.4 remains unchecked
 > and is not reclassified. The explicit 2026-08-23 product-policy decision
-> accepts its two known solo-transfer limitations and unblocks B4.5–B4.6 for a
-> controlled hosted `auto` rollout. The compiled and self-hosted defaults remain
-> TCP with the edge QUIC listener disabled; both hosted rollback controls remain
-> mandatory.
+> accepts its two known solo-transfer limitations; the controlled B4.5 pilot
+> and B4.6 hosted activation completed on immutable release `5214883`. The
+> compiled and self-hosted defaults remain TCP with the edge QUIC listener
+> disabled; both hosted rollback controls remain mandatory.
 
 The recorded and operator-approved G1 GO satisfies the prerequisite to begin
 B1. Under the original gate policy, do not execute B4.6 until B1–B4.5 and every
@@ -2256,9 +2271,9 @@ even if G1 concludes that Part B is unnecessary.
 - [x] neither `internal/client` nor `internal/edge` imports yamux or quic-go
   directly;
 - [x] the npm shim remains a launcher and contains no transport code;
-- [ ] hosted/session accounts select QUIC through `auto` in production while
+- [x] hosted/session accounts select QUIC through `auto` in production while
   self-hosted/token, missing-kind, and standalone clients still default to TCP;
-- [ ] the hosted edge explicitly enables UDP 443 while the compiled/default
+- [x] the hosted edge explicitly enables UDP 443 while the compiled/default
   self-hosted edge leaves QUIC disabled;
 - [x] both the edge-wide and agent-local rollback controls are rehearsed;
 - [x] TCP/yamux fallback has a verified 4 MiB default window;
@@ -2268,7 +2283,7 @@ even if G1 concludes that Part B is unnecessary.
   observable;
 - [x] `beamd check` can force either transport;
 - [x] `beamd status` reports the active transport;
-- [ ] Docker and host configuration expose/tune UDP;
+- [x] Docker and host configuration expose/tune UDP;
 - [ ] unit, race, vet, e2e, and netem qualification pass;
 - [ ] QUIC stays within every regression budget and materially beats tuned
   yamux on every qualifying lossy profile/direction that reproduces A2;
