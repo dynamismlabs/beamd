@@ -11,7 +11,10 @@ import (
 )
 
 func TestRoundTripHello(t *testing.T) {
-	in := Hello{Type: TypeHello, Token: "abc", ClientVersion: "0.1", ProtoVersion: ProtoVersion}
+	in := Hello{
+		Type: TypeHello, Token: "abc", ClientVersion: "0.1",
+		MaxStreams: 128, ProtoVersion: ProtoVersion,
+	}
 	var buf bytes.Buffer
 	if err := Write(&buf, &in); err != nil {
 		t.Fatalf("write: %v", err)

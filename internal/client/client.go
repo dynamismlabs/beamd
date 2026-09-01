@@ -48,7 +48,7 @@ const (
 	candidateCleanupTimeout  = time.Second
 	quicReprobeInterval      = 10 * time.Minute
 	backendDialTimeout       = 5 * time.Second
-	maxStreamHandlers        = 64
+	maxStreamHandlers        = tunnel.AgentMaxStreams
 )
 
 // Options tune client behavior. Zero values fall back to sensible
@@ -665,7 +665,11 @@ func (c *Client) negotiateCandidate(
 	}
 
 	if err := proto.Write(control, &proto.Hello{
-		Type: proto.TypeHello, Token: c.token, Scope: c.opts.Scope, ProtoVersion: proto.ProtoVersion,
+		Type:         proto.TypeHello,
+		Token:        c.token,
+		Scope:        c.opts.Scope,
+		MaxStreams:   maxStreamHandlers,
+		ProtoVersion: proto.ProtoVersion,
 	}); err != nil {
 		failure := classifyAvailabilityFailure(ctx, fmt.Errorf("send hello: %w", err))
 		return nil, proto.HelloOK{}, failCandidate(candidate, failure)

@@ -61,8 +61,8 @@ func TestYamuxConfigPartBHardening(t *testing.T) {
 	if cfg.MaxStreamWindowSize != DefaultStreamWindow {
 		t.Errorf("MaxStreamWindowSize = %d, want %d", cfg.MaxStreamWindowSize, DefaultStreamWindow)
 	}
-	if cfg.AcceptBacklog != 64 {
-		t.Errorf("AcceptBacklog = %d, want 64", cfg.AcceptBacklog)
+	if cfg.AcceptBacklog != AgentMaxStreams {
+		t.Errorf("AcceptBacklog = %d, want %d", cfg.AcceptBacklog, AgentMaxStreams)
 	}
 	if cfg.EnableKeepAlive {
 		t.Error("EnableKeepAlive = true, want false")

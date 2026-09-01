@@ -524,10 +524,13 @@ func TestTransportMatrix_ConcurrentRequests(t *testing.T) {
 }
 
 func TestTransportMatrix_StreamCapacityAndRecovery(t *testing.T) {
-	t.Run("per-session 65th", func(t *testing.T) {
-		holdPort, allStarted, release, closeRelease := startControlledHoldingBackend(t, 64)
+	t.Run("per-session 129th", func(t *testing.T) {
+		holdPort, allStarted, release, closeRelease := startControlledHoldingBackend(t, 128)
 		probePort := startDummyApp(t, "probe")
-		_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
+		_, edgeAddr := startEdgeCfg(t, map[string]string{"T1": "turing"}, func(cfg *config.Server) {
+			cfg.MaxStreamsPerSession = 128
+			cfg.MaxStreamsTotal = 256
+		})
 		c := connectClient(t, edgeAddr, "T1")
 		assertSelectedE2ETransport(t, c)
 		if _, err := c.Register("hold", holdPort); err != nil {
@@ -542,67 +545,80 @@ func TestTransportMatrix_StreamCapacityAndRecovery(t *testing.T) {
 		holdClient := publicHTTPSClient(edgeAddr, holdHost)
 		probeClient := publicHTTPSClient(edgeAddr, probeHost)
 		checkResponse(t, probeClient, "https://"+probeHost+"/probe", "probe: GET /probe\n")
-		results := launchHeldRequests(holdClient, "https://"+holdHost+"/hold", 64)
+		waitForStreamGaugeZero(t, edgeAddr)
+		results := launchHeldRequests(holdClient, "https://"+holdHost+"/hold", 128)
 		select {
 		case <-allStarted:
 		case <-time.After(5 * time.Second):
-			t.Fatal("64 per-session streams did not become active")
+			t.Fatal("128 per-session streams did not become active")
 		}
 
 		expectImmediateCapacityResponse(t, probeClient, "https://"+probeHost+"/probe")
 		release <- struct{}{}
 		waitForSuccessfulProbe(t, probeClient, "https://"+probeHost+"/probe")
 		closeRelease()
-		awaitHeldResults(t, results, 64)
+		awaitHeldResults(t, results, 128)
 		waitForStreamGaugeZero(t, edgeAddr)
 	})
 
-	t.Run("global 129th", func(t *testing.T) {
-		holdPortA, allStartedA, releaseA, closeReleaseA := startControlledHoldingBackend(t, 64)
-		holdPortB, allStartedB, _, closeReleaseB := startControlledHoldingBackend(t, 64)
+	t.Run("global 257th", func(t *testing.T) {
+		type holder struct {
+			name         string
+			port         int
+			allStarted   <-chan struct{}
+			release      chan struct{}
+			closeRelease func()
+			results      <-chan error
+		}
+		holders := make([]holder, 4)
+		for i, name := range []string{"holda", "holdb", "holdc", "holdd"} {
+			port, allStarted, release, closeRelease := startControlledHoldingBackend(t, 64)
+			holders[i] = holder{
+				name: name, port: port, allStarted: allStarted,
+				release: release, closeRelease: closeRelease,
+			}
+		}
 		probePort := startDummyApp(t, "probe")
-		_, edgeAddr := startEdge(t, map[string]string{"T1": "turing"})
-		c1 := connectClient(t, edgeAddr, "T1")
-		c2 := connectClient(t, edgeAddr, "T1")
-		c3 := connectClient(t, edgeAddr, "T1")
-		for _, registration := range []struct {
-			client *client.Client
-			name   string
-			port   int
-		}{
-			{c1, "holda", holdPortA},
-			{c2, "holdb", holdPortB},
-			{c3, "probe", probePort},
-		} {
-			if _, err := registration.client.Register(registration.name, registration.port); err != nil {
+		_, edgeAddr := startEdgeCfg(t, map[string]string{"T1": "turing"}, func(cfg *config.Server) {
+			cfg.MaxStreamsPerSession = 128
+			cfg.MaxStreamsTotal = 256
+		})
+		for i := range holders {
+			c := connectClient(t, edgeAddr, "T1")
+			if _, err := c.Register(holders[i].name, holders[i].port); err != nil {
 				t.Fatal(err)
 			}
 		}
+		probeAgent := connectClient(t, edgeAddr, "T1")
+		if _, err := probeAgent.Register("probe", probePort); err != nil {
+			t.Fatal(err)
+		}
 
-		hostA := "holda.turing." + testBaseDomain
-		hostB := "holdb.turing." + testBaseDomain
 		probeHost := "probe.turing." + testBaseDomain
-		clientA := publicHTTPSClient(edgeAddr, hostA)
-		clientB := publicHTTPSClient(edgeAddr, hostB)
 		probeClient := publicHTTPSClient(edgeAddr, probeHost)
 		checkResponse(t, probeClient, "https://"+probeHost+"/probe", "probe: GET /probe\n")
-		resultsA := launchHeldRequests(clientA, "https://"+hostA+"/hold", 64)
-		resultsB := launchHeldRequests(clientB, "https://"+hostB+"/hold", 64)
-		for label, started := range map[string]<-chan struct{}{"A": allStartedA, "B": allStartedB} {
+		waitForStreamGaugeZero(t, edgeAddr)
+		// Four sessions at 64 streams each isolate the global 256-stream
+		// boundary from the separately tested 128-stream session boundary.
+		for i := range holders {
+			host := holders[i].name + ".turing." + testBaseDomain
+			holders[i].results = launchHeldRequests(
+				publicHTTPSClient(edgeAddr, host), "https://"+host+"/hold", 64,
+			)
 			select {
-			case <-started:
+			case <-holders[i].allStarted:
 			case <-time.After(5 * time.Second):
-				t.Fatalf("64 streams on session %s did not become active", label)
+				t.Fatalf("64 streams on session %s did not become active", holders[i].name)
 			}
 		}
 
 		expectImmediateCapacityResponse(t, probeClient, "https://"+probeHost+"/probe")
-		releaseA <- struct{}{}
+		holders[0].release <- struct{}{}
 		waitForSuccessfulProbe(t, probeClient, "https://"+probeHost+"/probe")
-		closeReleaseA()
-		closeReleaseB()
-		awaitHeldResults(t, resultsA, 64)
-		awaitHeldResults(t, resultsB, 64)
+		for _, h := range holders {
+			h.closeRelease()
+			awaitHeldResults(t, h.results, 64)
+		}
 		waitForStreamGaugeZero(t, edgeAddr)
 	})
 }

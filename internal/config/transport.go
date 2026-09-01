@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+
+	"github.com/dynamismlabs/beamd/internal/tunnel"
 )
 
 const (
@@ -12,8 +14,8 @@ const (
 
 	TransportEnvVar = "BEAMD_TRANSPORT"
 
-	AgentMaxStreams            int64 = 64
-	MaxAgentYamuxExposureBytes int64 = 1 << 30
+	AgentMaxStreams            int64 = tunnel.AgentMaxStreams
+	MaxAgentYamuxExposureBytes int64 = 2 << 30
 )
 
 // ResolveTransport returns the effective client transport without mutating the
@@ -58,7 +60,7 @@ func ResolveClientTransport(client *Client) (string, error) {
 }
 
 // ValidateAgentYamuxWindow validates the resolved process-wide yamux window
-// against both its per-stream bounds and the agent's fixed 64-stream handler
+// against both its per-stream bounds and the agent's fixed stream-handler
 // ceiling. The product is receive-flow-control exposure, not preallocated
 // resident memory.
 func ValidateAgentYamuxWindow(windowBytes int64) error {

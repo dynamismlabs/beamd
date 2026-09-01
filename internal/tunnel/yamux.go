@@ -16,7 +16,7 @@ import (
 
 const (
 	DefaultStreamWindow = 4 << 20
-	yamuxStreamLimit    = 64
+	yamuxStreamLimit    = AgentMaxStreams
 	// A local yamux stream SYN shares the TCP ordering domain with all bulk
 	// data. Under the frozen high-RTT/loss mixed workload it can legitimately
 	// remain blocked beyond the QUIC open bound. Keep this below yamux's own

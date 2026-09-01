@@ -354,8 +354,8 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `listen_https` | yes | Public ingress + ALPN-demuxed client control. `:443` in prod, `:8443` in dev |
 | `listen_quic` | defaults to the HTTPS host/port | QUIC tunnel UDP listener; ignored completely while QUIC is disabled |
 | `disable_quic` | defaults to true | Permanent compiled/self-hosted default and edge-wide QUIC kill switch. The hosted deployment explicitly sets false after its rollout gates pass. Disabled mode does not bind UDP or read QUIC keys |
-| `max_streams_per_session` | defaults to 64 | Concurrent data-stream ceiling per authenticated session |
-| `max_streams_total` | defaults to 128 | Edge-wide concurrent data-stream ceiling |
+| `max_streams_per_session` | defaults to 64; maximum 128 | Concurrent data-stream ceiling per authenticated session; older agents remain negotiated at 64 |
+| `max_streams_total` | defaults to 128; maximum 256 | Edge-wide concurrent data-stream ceiling |
 | `max_pre_auth_sessions` | defaults to 32 | Tunnel sessions allowed to authenticate concurrently |
 | `max_sessions_total` | defaults to 8 | Authenticated tunnel-session ceiling |
 | `acme_email` | yes | Contact address registered with Let's Encrypt |
@@ -369,11 +369,11 @@ Every field in `beamd.yaml` can be overridden by the matching
 | `max_request_body_bytes` | defaults to 32 MiB (`33554432`) | Per-request public body cap; oversized requests get HTTP 413. Set `-1` to disable |
 | `preview_embed` | defaults to false | Strip `X-Frame-Options` + CSP `frame-ancestors` from tunnel responses so previews embed cross-origin in an iframe |
 
-The yamux receive window and stream ceilings share a 512 MiB exposure budget.
-The compatible maximums are 4 MiB × 128 streams (defaults), 8 MiB × 64, or
-16 MiB × 32; a mismatched configuration fails startup rather than silently
-exceeding the budget. These are concurrency/memory limits, not a bandwidth
-throttle.
+The edge yamux receive window and stream ceilings share a 1 GiB maximum
+exposure budget. The defaults use 4 MiB × 128 streams (512 MiB); compatible
+maximums are 4 MiB × 256, 8 MiB × 128, or 16 MiB × 64. A mismatched
+configuration fails startup rather than silently exceeding the budget. These
+are concurrency/memory limits, not a bandwidth throttle.
 
 ## DNS providers
 

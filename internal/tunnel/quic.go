@@ -43,7 +43,7 @@ func commonQUICConfig() *quic.Config {
 
 func ClientQUICConfig() *quic.Config {
 	cfg := commonQUICConfig()
-	cfg.MaxIncomingStreams = 64
+	cfg.MaxIncomingStreams = AgentMaxStreams
 	return cfg
 }
 

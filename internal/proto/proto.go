@@ -44,7 +44,10 @@ type Hello struct {
 	Token         string `json:"token"`
 	Scope         string `json:"scope,omitempty"` // requested org/scope; "" = the credential's default
 	ClientVersion string `json:"client_version,omitempty"`
-	ProtoVersion  int    `json:"proto_version"`
+	// MaxStreams advertises the agent's per-session handler capacity. Older
+	// agents omit it; edges must keep those sessions at the legacy ceiling.
+	MaxStreams   int `json:"max_streams,omitempty"`
+	ProtoVersion int `json:"proto_version"`
 }
 
 type HelloOK struct {

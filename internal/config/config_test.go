@@ -234,9 +234,9 @@ func TestServerFinalizeRuntime_CapacityBounds(t *testing.T) {
 		field  string
 	}{
 		{"per-session-negative", func(s *Server) { s.MaxStreamsPerSession = -1 }, "max_streams_per_session"},
-		{"per-session-high", func(s *Server) { s.MaxStreamsPerSession = 65 }, "max_streams_per_session"},
+		{"per-session-high", func(s *Server) { s.MaxStreamsPerSession = 129 }, "max_streams_per_session"},
 		{"total-below-session", func(s *Server) { s.MaxStreamsTotal = 63 }, "max_streams_total"},
-		{"total-high", func(s *Server) { s.MaxStreamsTotal = 129 }, "max_streams_total"},
+		{"total-high", func(s *Server) { s.MaxStreamsTotal = 257 }, "max_streams_total"},
 		{"preauth-negative", func(s *Server) { s.MaxPreAuthSessions = -1 }, "max_pre_auth_sessions"},
 		{"preauth-high", func(s *Server) { s.MaxPreAuthSessions = 129 }, "max_pre_auth_sessions"},
 		{"sessions-negative", func(s *Server) { s.MaxSessionsTotal = -1 }, "max_sessions_total"},
@@ -259,9 +259,9 @@ func TestServerFinalizeRuntime_WindowProductsAndIdempotence(t *testing.T) {
 	cfg := defaultServer()
 	cfg.ListenHTTPS = ":8443"
 	cfg.YamuxStreamWindowBytes = 8 << 20
-	cfg.MaxStreamsTotal = 64
+	cfg.MaxStreamsTotal = 128
 	if err := cfg.FinalizeRuntime(); err != nil {
-		t.Fatalf("8 MiB * 64 should pass: %v", err)
+		t.Fatalf("8 MiB * 128 should pass: %v", err)
 	}
 	if err := cfg.FinalizeRuntime(); err != nil {
 		t.Fatalf("second FinalizeRuntime call should be idempotent: %v", err)
@@ -270,13 +270,13 @@ func TestServerFinalizeRuntime_WindowProductsAndIdempotence(t *testing.T) {
 		t.Errorf("derived ListenQUIC = %q, want :8443", cfg.ListenQUIC)
 	}
 
-	cfg.MaxStreamsTotal = 65
+	cfg.MaxStreamsTotal = 129
 	err := cfg.FinalizeRuntime()
 	if err == nil ||
 		!strings.Contains(err.Error(), YamuxWindowEnvVar) ||
-		!strings.Contains(err.Error(), "max_streams_total=65") ||
-		!strings.Contains(err.Error(), "536870912") {
-		t.Fatalf("product error = %v, want both effective values and 512 MiB maximum", err)
+		!strings.Contains(err.Error(), "max_streams_total=129") ||
+		!strings.Contains(err.Error(), "1073741824") {
+		t.Fatalf("product error = %v, want both effective values and 1 GiB maximum", err)
 	}
 
 	cfg = defaultServer()

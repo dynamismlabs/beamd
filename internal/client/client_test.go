@@ -138,7 +138,10 @@ func dialFake(t *testing.T, fe *fakeEdge, opts Options) *Client {
 
 // A register that the edge accepts returns the URL and populates identity.
 func TestClient_RegisterSuccess(t *testing.T) {
-	fe := newFakeEdge(t, func(ctrl tunnel.Stream, _ tunnel.Session, br *bufio.Reader, _ proto.Hello) {
+	fe := newFakeEdge(t, func(ctrl tunnel.Stream, _ tunnel.Session, br *bufio.Reader, hello proto.Hello) {
+		if hello.MaxStreams != maxStreamHandlers {
+			t.Errorf("hello max_streams = %d, want %d", hello.MaxStreams, maxStreamHandlers)
+		}
 		for {
 			typ, line, err := proto.Read(br)
 			if err != nil {

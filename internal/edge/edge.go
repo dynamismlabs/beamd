@@ -317,6 +317,22 @@ func safeChannelCapacity(value int) int {
 	return value
 }
 
+const legacyAgentMaxStreams = 64
+
+// effectiveSessionStreamCapacity keeps old agents at the capacity their
+// transport and handler pool can actually accept. A client may advertise less
+// than the edge allows, but it can never use the handshake to raise the edge's
+// configured ceiling.
+func effectiveSessionStreamCapacity(configured, advertised int) int {
+	if advertised <= 0 {
+		advertised = legacyAgentMaxStreams
+	}
+	if advertised < configured {
+		return advertised
+	}
+	return configured
+}
+
 // hostKnownForCert reports whether the edge should obtain a real cert for this
 // SNI: the apex (always the operator's own) or a hostname with a live route.
 // An unregistered host has nothing to serve, so refusing issuance for it costs
@@ -1053,6 +1069,7 @@ func (e *Edge) handleTunnelSession(transport tunnel.Session) {
 		_ = transport.CloseWithError(tunnel.CloseProtocol, "write hello_ok failed")
 		return
 	}
+	streamCapacity := effectiveSessionStreamCapacity(e.cfg.MaxStreamsPerSession, hello.MaxStreams)
 	sess := &Session{
 		transport:    transport,
 		kind:         transport.Kind(),
@@ -1061,7 +1078,7 @@ func (e *Edge) handleTunnelSession(transport tunnel.Session) {
 		id:           reqlog.NewID(),
 		remote:       transport.RemoteAddr().String(),
 		handshake:    time.Since(handshakeStarted),
-		streamSlots:  make(chan struct{}, e.cfg.MaxStreamsPerSession),
+		streamSlots:  make(chan struct{}, streamCapacity),
 		writeGate:    make(chan struct{}, 1),
 		names:        make(map[string]struct{}),
 		hosts:        make(map[string][]string),
@@ -1088,6 +1105,7 @@ func (e *Edge) handleTunnelSession(transport tunnel.Session) {
 		"slug", slug,
 		"remote_addr", sess.remote,
 		"handshake_ms", sess.handshake.Milliseconds(),
+		"stream_capacity", streamCapacity,
 		"active_streams", sess.activeStreams.Load(),
 		"close_reason", "",
 		"error_category", "",

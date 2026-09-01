@@ -1,6 +1,7 @@
 # Production stream-capacity finding
 
-Status: open follow-up from the 2026-09-01 hosted production incident.
+Status: 128-per-session / 256-global rollout selected; bounded waiting remains
+a separate follow-up from the 2026-09-01 hosted production incident.
 
 ## What happened
 
@@ -48,28 +49,24 @@ to finish.
 
 ## Primary capacity change
 
-Treat raising the per-session ceiling as the primary near-term fix. Raising it
-from 64 toward the already-supported global ceiling of 128 does **not** increase
-the edge's maximum total concurrent streams or the existing global yamux
-receive-window exposure. It changes isolation and fairness: one busy session
-can consume more of the 128 slots, leaving fewer for other sessions.
+The selected hosted target is 128 concurrent streams per current agent session
+and 256 across the edge. That covers the largest observed 116-arrival burst
+without making a single session unbounded. At the default 4-MiB yamux receive
+window, the global flow-control exposure rises from 512 MiB to 1 GiB. The
+production 4-GiB host had approximately 3.5 GiB available during the incident,
+so this is a measured increase with room, not a claim that capacity is free.
 
-A production change should therefore:
+The rollout is backward compatible. Current agents advertise a 128-stream
+handler ceiling in the optional `hello.max_streams` field. The edge uses the
+smaller of its configured ceiling and the advertised value. Older agents omit
+the field and remain limited to 64, preventing an upgraded edge from sending
+them more concurrent streams than they can accept. An edge log records the
+negotiated `stream_capacity` when each session opens.
 
-1. make a per-session value above 64 valid and test 96 and 128;
-2. initially retain the global 128 ceiling;
-3. exercise mixed-session fairness as well as the `flow-trey` burst shape;
-4. record capacity rejections, queue time, active streams, RSS, and request
-   latency during the test;
-5. choose whether to reserve capacity per session/tier so one tenant cannot
-   monopolize the edge.
-
-Do not infer that raising the **global** limit above 128 is equally low risk.
-At the default 4-MiB yamux receive window, 128 global streams represent a
-512-MiB bounded exposure. A global limit of 256 would raise that bound to 1 GiB.
-The production host has room, but that change needs large-body and mixed-load
-qualification rather than relying on the low RSS of this small-response
-incident.
+Qualification must still cover the `flow-trey` burst shape, large request and
+response bodies, mixed-session fairness, capacity rejections, active streams,
+RSS, and request latency. A future per-session or per-tier reservation may be
+needed so one tenant cannot monopolize the 256 global slots.
 
 ## Bounded waiting is secondary resilience, not the capacity fix
 
@@ -93,4 +90,3 @@ The expected sequence is: raise the justified per-session capacity, add bounded
 waiting to absorb brief fan-out bursts, then use telemetry and stress tests to
 decide whether the global ceiling or application request fan-out also needs to
 change.
-

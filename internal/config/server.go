@@ -99,12 +99,12 @@ const (
 	DefaultMaxPreAuthSessions   = 32
 	DefaultMaxSessionsTotal     = 8
 
-	MaxStreamsPerSession = 64
-	MaxStreamsTotal      = 128
+	MaxStreamsPerSession = 128
+	MaxStreamsTotal      = 256
 	MaxPreAuthSessions   = 128
 	MaxSessionsTotal     = 8
 
-	MaxYamuxWindowExposureBytes  int64 = 512 << 20
+	MaxYamuxWindowExposureBytes  int64 = 1 << 30
 	MaxQUICConnectionWindowBytes int64 = 64 << 20
 	MaxQUICWindowExposureBytes   int64 = 512 << 20
 )

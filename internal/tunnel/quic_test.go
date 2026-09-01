@@ -188,8 +188,8 @@ func TestQUICConfigContract(t *testing.T) {
 			t.Errorf("%s config does not match contract: %+v", name, cfg)
 		}
 	}
-	if client.MaxIncomingStreams != 64 {
-		t.Errorf("client MaxIncomingStreams = %d, want 64", client.MaxIncomingStreams)
+	if client.MaxIncomingStreams != AgentMaxStreams {
+		t.Errorf("client MaxIncomingStreams = %d, want %d", client.MaxIncomingStreams, AgentMaxStreams)
 	}
 	if server.MaxIncomingStreams != 1 {
 		t.Errorf("server MaxIncomingStreams = %d, want 1", server.MaxIncomingStreams)

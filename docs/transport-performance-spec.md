@@ -468,8 +468,8 @@ This is raw QUIC carrying beamd's existing streams. Do not add `http3`.
 - Datagrams: disabled
 
 Do not add an application protocol version merely because the transport
-changed. The existing NDJSON messages are unchanged, so `ProtoVersion`
-remains `1`.
+changed. The backward-compatible optional `hello.max_streams` field does not
+require a flag day, so `ProtoVersion` remains `1`.
 
 ### 7.2 QUIC configuration
 
@@ -496,7 +496,7 @@ Role-specific values:
 | Endpoint | `MaxIncomingStreams` | Reason |
 | --- | ---: | --- |
 | Edge | `1` | Concurrent credit for the agent's one control stream; defense in depth, not a lifetime stream count |
-| Agent | `64` | The edge opens at most 64 concurrent data streams |
+| Agent | `128` | A current edge opens at most 128 concurrent data streams |
 
 Use `OpenStreamSync` in the QUIC adapter. The adapter derives a five-second
 context with `context.WithTimeoutCause(ctx, 5*time.Second, ErrOpenTimeout)`.
@@ -734,7 +734,7 @@ the fallback interval.
 
 In yamux v0.1.2, `AcceptBacklog` sizes both the incoming accept queue and the
 local in-flight-SYN semaphore. It is not an active-stream or memory limit.
-Keep `max_streams_per_session <= AcceptBacklog`; both ship as 64.
+Keep `max_streams_per_session <= AcceptBacklog`; both ship as 128.
 
 yamux does not offer a context-aware open operation. Its 75-second
 `StreamOpenTimeout` starts only after a local SYN slot is acquired and closes
@@ -744,7 +744,7 @@ bound the `OpenStream` call itself. The adapter must therefore:
 1. Derive an adapter-owned 60-second timeout. This is intentionally distinct
    from QUIC's five-second bound in Section 7.2 and below yamux's 75-second
    stream-establishment timer.
-2. Acquire an adapter-local 64-slot gate using that context. If acquisition is
+2. Acquire an adapter-local 128-slot gate using that context. If acquisition is
    canceled, return the correct caller or adapter timeout without touching the
    session.
 3. Run `yamux.OpenStream` behind a result channel with capacity one.
@@ -851,7 +851,7 @@ control   tunnel.Stream
 
 `acceptStreamsLoop` and `handleStream` must accept `tunnel.Stream`.
 
-Add a 64-slot handler semaphore. If a misconfigured or malicious edge exceeds
+Add a 128-slot handler semaphore. If a misconfigured or malicious edge exceeds
 the limit, abort the extra stream and increment a fixed-label metric/log
 counter. Under the shipped configuration this should never happen.
 
@@ -987,7 +987,7 @@ window-by-active-stream budget false during cancellation churn.
 Treat the configured values as conservative receive-flow-control exposure,
 not preallocated resident memory:
 
-- `4 MiB * 128 = 512 MiB` bounds edge yamux data-stream window exposure only
+- `4 MiB * 256 = 1 GiB` is the maximum edge yamux data-stream window exposure
   while the global leases remain held.
 - A QUIC connection can auto-tune its aggregate receive window up to 64 MiB;
   eight authenticated sessions therefore expose at most 512 MiB of QUIC
@@ -998,16 +998,16 @@ not preallocated resident memory:
   TLS/TCP/UDP buffers, HTTP buffers, goroutine stacks, traffic/request-log
   queues, certificate state, and library bookkeeping are additional memory.
 
-The 512 MiB yamux and 512 MiB QUIC figures are separate ceilings and may
+The 1 GiB yamux and 512 MiB QUIC figures are separate ceilings and may
 coexist; neither is a total-process-memory promise. Holding leases through
 `Stream.Done`, bounding raw handshakes, pre-auth and authenticated sessions,
 and running with the production `GOMEMLIMIT` are all required parts of the
 resource bound.
 
 On the agent, validate the resolved
-`BEAMD_YAMUX_STREAM_WINDOW_BYTES * 64 <= 1073741824` (1 GiB). This allows the
+`BEAMD_YAMUX_STREAM_WINDOW_BYTES * 128 <= 2147483648` (2 GiB). This allows the
 documented 16 MiB emergency maximum but makes its worst-case exposure
-explicit. Default agent exposure is 256 MiB.
+explicit. Default agent exposure is 512 MiB.
 
 ### 10.4 Protocol version enforcement
 
@@ -1111,8 +1111,8 @@ rollback works. A present-empty or invalid environment override is fatal.
 | --- | --- |
 | `listen_quic` | Same host and numeric port as `listen_https` |
 | `disable_quic` | `true` permanently as the compiled/self-hosted default |
-| `max_streams_per_session` | `64` |
-| `max_streams_total` | `128` |
+| `max_streams_per_session` | `64` (hosted production explicitly uses `128`) |
+| `max_streams_total` | `128` (hosted production explicitly uses `256`) |
 | `max_pre_auth_sessions` | `32` |
 | `max_sessions_total` | `8` |
 
@@ -1120,15 +1120,15 @@ Validation after all overrides:
 
 - When QUIC is enabled, its address must parse as a UDP listen address. Disabled
   mode skips this QUIC-only validation as required by Section 7.3.
-- per-session streams must be between `1` and `64`, matching the agent handler
+- per-session streams must be between `1` and `128`, matching the current agent handler
   cap and QUIC incoming-stream credit.
 - global streams must be greater than or equal to per-session streams and no
-  greater than `128`.
+  greater than `256`.
 - pre-authentication sessions must be between `1` and `128`.
 - authenticated sessions must be between `1` and `8`.
 - the resolved `BEAMD_YAMUX_STREAM_WINDOW_BYTES` value multiplied by
   `max_streams_total` must not exceed
-  `536870912` (512 MiB) unless a future explicit unsafe override is added.
+  `1073741824` (1 GiB) unless a future explicit unsafe override is added.
 - the fixed 64 MiB maximum QUIC connection window multiplied by
   `max_sessions_total` must not exceed 512 MiB.
 - `disable_quic: true` is both the permanent compiled/self-hosted default and
@@ -1151,15 +1151,15 @@ BEAMD_MAX_SESSIONS_TOTAL
 Boolean and integer parse failures must fail startup; do not silently keep a
 default. Environment changes take effect after an edge restart.
 
-The yamux window and stream-total settings are coupled by the 512 MiB exposure
+The yamux window and stream-total settings are coupled by the 1 GiB exposure
 limit. Produce an error that names both effective values and the permitted
 maximum. Common compatible ceilings are:
 
 | Yamux window | Maximum `max_streams_total` | Maximum `max_streams_per_session` with the other constraints |
 | ---: | ---: | ---: |
-| 4 MiB (default) | 128 | 64 |
-| 8 MiB | 64 | 64 |
-| 16 MiB | 32 | 32 |
+| 4 MiB (default window) | 256 | 128 |
+| 8 MiB | 128 | 128 |
+| 16 MiB | 64 | 64 |
 
 An operator increasing the window to 16 MiB must lower both stream settings;
 the setting remains tunable, but startup must not silently exceed the memory
@@ -1433,7 +1433,7 @@ Part B must implement:
   `kind: token` for pasted-token/self-hosted accounts without requiring a
   redundant persisted transport value, and re-login preserves an existing
   explicit transport pin;
-- `max_streams_total=128` is accepted and `129` is rejected;
+- `max_streams_total=256` is accepted and `257` is rejected;
 - QUIC and yamux adapters satisfy the same session contract;
 - QUIC `Close`, `CloseWrite`, `Abort`, deadlines, and addresses;
 - `CloseWrite -> Abort` escalation, `Abort` before/racing `Close`, `Abort`
