@@ -1,7 +1,8 @@
 # Production stream-capacity finding
 
-Status: 128-per-session / 256-global rollout selected; bounded waiting remains
-a separate follow-up from the 2026-09-01 hosted production incident.
+Status: 128-per-session / 256-global hosted edge rollout deployed on 2026-09-01
+with `v0.0.9` / `1b70557`; bounded waiting remains a separate follow-up from
+the incident.
 
 ## What happened
 
@@ -67,6 +68,16 @@ Qualification must still cover the `flow-trey` burst shape, large request and
 response bodies, mixed-session fairness, capacity rejections, active streams,
 RSS, and request latency. A future per-session or per-tier reservation may be
 needed so one tenant cannot monopolize the 256 global slots.
+
+The hosted staging and production services set the larger values in the
+removable systemd drop-in
+`/etc/systemd/system/beamd.service.d/capacity.conf`. The compiled/self-hosted
+defaults remain 64 per session and 128 global. Rollback is to remove or restore
+that drop-in, run `systemctl daemon-reload`, and restart `beamd`.
+
+The edge upgrade alone does not raise an existing old agent above 64. Upgrade
+the agent to `@beamd/cli@0.0.9` or newer and reload it; its next session-open
+log must show `stream_capacity=128`.
 
 ## Bounded waiting is secondary resilience, not the capacity fix
 
