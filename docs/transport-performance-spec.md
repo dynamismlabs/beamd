@@ -2188,6 +2188,13 @@ Alert or investigate when:
 - QUIC stream-open errors persist for more than five minutes;
 - reconnects repeat without a stable session.
 
+The 2026-09-01 hosted incident triggered the capacity-rejection condition under
+normal `flow-trey` traffic while the edge host was mostly idle. See
+[`production-stream-capacity.md`](production-stream-capacity.md) for the
+evidence and follow-up: increase the per-session ceiling within the existing
+global bound as the primary fix, and use bounded waiting only as secondary
+burst resilience.
+
 Docker must publish both protocols:
 
 ```yaml
